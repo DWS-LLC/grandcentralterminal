@@ -23,6 +23,9 @@ and everything reattaches, scrollback replayed.
     `⌘W` close, `⌘R` rename (the `✻`-style named panes in the titlebar)
   - `⌘C` copies the selection (or sends `^C` when nothing is selected),
     `⌘V` pastes
+  - dead keys, accents, and IME composition work: keys route through the
+    text input system, preedit renders inline at the cursor, commit lands
+    as typed input, and composition keys (⌫, ^H) only affect the preedit
 - Titlebars track the shell's cwd (`local – Terminal – /path`) and honor
   program-set titles + OSC 7 (covers ssh panes).
 - Daemon (`gctd`) persists pane layout to
@@ -87,8 +90,6 @@ arrive via `resize_callback` and go to the daemon as `TIOCSWINSZ`. See
 
 ## Known limits (v0.1)
 
-- No IME composition (dead keys/accents are limited); everything else types
-  fine through ghostty's key encoder.
 - The daemon's scrollback ring is memory-only: `gctd stop` loses history
   (same as killing a tmux server).
 - Remote/ssh panes are not wired into the UI yet — the daemon supports a

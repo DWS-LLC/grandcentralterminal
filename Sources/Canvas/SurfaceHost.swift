@@ -133,6 +133,16 @@ final class SurfaceHost: @unchecked Sendable {
         return ghostty_surface_has_selection(s)
     }
 
+    // Cursor point for anchoring the IME composition window: surface points,
+    // top-left origin (points, not pixels — ghostty divides out content scale).
+    func imePoint() -> (x: Double, y: Double, width: Double, height: Double)? {
+        assert(Thread.isMainThread)
+        guard let s = surfaceIfOpen() else { return nil }
+        var x: Double = 0, y: Double = 0, w: Double = 0, h: Double = 0
+        ghostty_surface_ime_point(s, &x, &y, &w, &h)
+        return (x, y, w, h)
+    }
+
     // Copy the current selection to the pasteboard; returns the text.
     func copySelection() -> String? {
         assert(Thread.isMainThread)
