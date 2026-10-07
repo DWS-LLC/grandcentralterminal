@@ -113,3 +113,43 @@ arrive via `resize_callback` and go to the daemon as `TIOCSWINSZ`. See
 | drag empty space | pan |
 | drag titlebar | move pane |
 | drag edges/corners | resize pane |
+
+## Configuration
+
+`~/.config/gct/config.toml` — created with defaults on first launch; every key
+is optional and malformed values fall back to their defaults. Takes effect on
+relaunch.
+
+```toml
+# Light/dark mode: "light", "dark", or "system" (follow macOS).
+appearance = "system"
+
+[background]
+# Canvas background per mode. Hex like "#1a1b26", or "ghostty" to reuse the
+# background color from your ghostty config.
+dark = "#000000"
+light = "#ffffff"
+
+[titlebar]
+# Pane titlebar colors. Hex like "#2b2b2b", or "default" for the usual grey.
+background = "default"
+text = "default"
+# Title text font: family name (e.g. "SF Mono") and size in points.
+font = "default"
+font-size = 12
+
+[keybinds]
+# App shortcuts. Modifiers cmd, ctrl, alt, shift joined with "+"; the last
+# part is the key, e.g. new-pane = "cmd+shift+t".
+new-pane = "cmd+t"
+close-pane = "cmd+w"
+rename-pane = "cmd+r"
+switcher = "cmd+k"
+fit-all = "cmd+0"
+copy = "cmd+c"
+paste = "cmd+v"
+```
+
+Terminal colors (inside panes) are ghostty's domain and come from your ghostty
+config as usual; the `background.dark`/`light` value `"ghostty"` makes the
+canvas follow whatever background your ghostty config resolves to.

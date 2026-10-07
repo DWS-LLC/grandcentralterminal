@@ -71,6 +71,19 @@ final class CanvasView: NSView {
         conn?.start()
     }
 
+    // Recompute the theme from config + ghostty and apply it everywhere.
+    func applyTheme() {
+        GCTTheme.refresh(ghosttyBackground: ghosttyApp?.background)
+        window?.backgroundColor = GCTTheme.current.canvasBackground
+        for pane in panes.values { pane.applyChrome() }
+    }
+
+    // appearance = "system": light/dark follows macOS, so re-resolve on change.
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        applyTheme()
+    }
+
     override var acceptsFirstResponder: Bool { true }
 
     // Manual routing: the world layer transform means AppKit hit-testing
@@ -248,19 +261,12 @@ final class CanvasView: NSView {
     // MARK: Keyboard
 
     override func keyDown(with event: NSEvent) {
-        // App shortcuts first.
-        if event.modifierFlags.contains(.command),
-           let c = event.charactersIgnoringModifiers {
-            switch c {
-            case "t": newPane(); return
-            case "w": if let id = focusedID { closePane(id) }; return
-            case "r": if let id = focusedID { renamePane(id) }; return
-            case "k": toggleSwitcher(); return
-            case "0": fitAll(); return
-            case "v": pasteIntoFocused(); return
-            case "c": copyFromFocused(); return
-            default: break
-            }
+        // App shortcuts first, from the config's keybinds.
+        if let action = GCTAction.allCases.first(where: {
+            GCTConfig.current.keybinds[$0]?.matches(event) ?? false
+        }) {
+            perform(action)
+            return
         }
 
         guard let host = focusedHost else {
@@ -269,6 +275,18 @@ final class CanvasView: NSView {
         }
 
         handleKey(event, to: host)
+    }
+
+    private func perform(_ action: GCTAction) {
+        switch action {
+        case .newPane: newPane()
+        case .closePane: if let id = focusedID { closePane(id) }
+        case .renamePane: if let id = focusedID { renamePane(id) }
+        case .switcher: toggleSwitcher()
+        case .fitAll: fitAll()
+        case .copy: copyFromFocused()
+        case .paste: pasteIntoFocused()
+        }
     }
 
     override func flagsChanged(with event: NSEvent) {

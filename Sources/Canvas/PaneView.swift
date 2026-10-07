@@ -99,22 +99,23 @@ final class PaneView: NSView {
         CATransaction.commit()
     }
 
-    private func applyChrome() {
-        let border = isFocused ? 0.28 : 0.19
+    // Colors + font come from GCTTheme; re-run on focus and theme changes.
+    func applyChrome() {
+        let t = GCTTheme.current
         layer?.borderWidth = 1
-        layer?.borderColor = NSColor(white: border, alpha: 1).cgColor
+        layer?.borderColor = (isFocused ? t.borderFocused : t.borderUnfocused).cgColor
         layer?.shadowOpacity = 0.55
         layer?.shadowRadius = 12
         layer?.shadowOffset = CGSize(width: 0, height: -6)
         layer?.shadowColor = NSColor.black.cgColor
 
         titlebar.layer?.backgroundColor =
-            NSColor(white: isFocused ? 0.26 : 0.23, alpha: 1).cgColor
+            (isFocused ? t.titlebarBackgroundFocused : t.titlebarBackgroundUnfocused).cgColor
 
         titleLabel.string = titleText
         titleLabel.foregroundColor =
-            NSColor(white: isFocused ? 0.88 : 0.66, alpha: 1).cgColor
-        titleLabel.font = NSFont.monospacedSystemFont(ofSize: 12, weight: .medium)
+            (isFocused ? t.titlebarTextFocused : t.titlebarTextUnfocused).cgColor
+        titleLabel.font = t.titleFont
     }
 
     private var titleText: String {

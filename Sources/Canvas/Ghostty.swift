@@ -21,6 +21,9 @@ final class GhosttyApp: @unchecked Sendable {
     private weak var delegate: (any GhosttyAppDelegate)?
     private(set) var app: UnsafeMutableRawPointer?
     private var config: UnsafeMutableRawPointer?
+    // Resolved `background` from the finalized config (theme included), for
+    // the canvas background's "ghostty" passthrough. Nil if unset.
+    private(set) var background: NSColor?
 
     init(delegate: any GhosttyAppDelegate) {
         self.delegate = delegate
@@ -33,6 +36,16 @@ final class GhosttyApp: @unchecked Sendable {
         ghostty_config_load_default_files(cfg)
         ghostty_config_finalize(cfg)
         config = UnsafeMutableRawPointer(cfg)
+
+        var color = ghostty_config_color_s()
+        let bgKey = "background"
+        if ghostty_config_get(cfg, &color, bgKey, UInt(bgKey.utf8.count)) {
+            background = NSColor(
+                red: CGFloat(color.r) / 255,
+                green: CGFloat(color.g) / 255,
+                blue: CGFloat(color.b) / 255,
+                alpha: 1)
+        }
 
         var runtime = ghostty_runtime_config_s()
         runtime.userdata = Unmanaged.passUnretained(self).toOpaque()

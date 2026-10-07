@@ -17,18 +17,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         let screen = NSScreen.main?.frame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
 
+        // Config first; created with defaults if it doesn't exist yet.
+        GCTConfig.current = GCTConfig.load()
+
         let win = CanvasWindow(
             contentRect: screen,
             styleMask: [.borderless, .resizable, .miniaturizable],
             backing: .buffered,
             defer: false)
         win.title = "Grand Central Terminal"
-        win.backgroundColor = NSColor(white: 0.03, alpha: 1)
+        win.backgroundColor = .black  // replaced by the theme below
         win.isOpaque = true
         win.level = .normal
         win.collectionBehavior = [.fullScreenNone]
         win.isReleasedWhenClosed = false
-        win.makeKeyAndOrderFront(nil)
         window = win
 
         let view = CanvasView(frame: NSRect(origin: .zero, size: screen.size))
@@ -39,6 +41,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Daemon first (or reuse the running one), then connect.
         CanvasView.ensureDaemon()
         view.setup()
+
+        // Theme last: the "ghostty" canvas background needs ghostty's
+        // resolved config. Applied before the window is shown.
+        view.applyTheme()
+        win.makeKeyAndOrderFront(nil)
 
         NSApp.activate(ignoringOtherApps: true)
     }
