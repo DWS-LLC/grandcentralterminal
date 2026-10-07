@@ -12,6 +12,9 @@ final class SurfaceHost: @unchecked Sendable {
     var connSend: ((PaneID, Data) -> Void)?
 
     private var surfaceStore: UnsafeMutableRawPointer?
+    // Content scale the surface was last configured with; divides pixel
+    // metrics back into points.
+    private(set) var scale: Double
     private let lock = NSLock()
     // Serial queue contract: ghostty_surface_write_output must be
     // serialized per surface. All feeds go through here.
@@ -21,6 +24,7 @@ final class SurfaceHost: @unchecked Sendable {
          delegate: any GhosttyAppDelegate) {
         self.paneID = paneID
         self.delegate = delegate
+        self.scale = scale
 
         var cfg = ghostty_surface_config_new()
         cfg.platform_tag = GHOSTTY_PLATFORM_MACOS
@@ -75,6 +79,7 @@ final class SurfaceHost: @unchecked Sendable {
 
     func setScale(_ scale: Double) {
         assert(Thread.isMainThread)
+        self.scale = scale
         guard let s = surfaceIfOpen() else { return }
         ghostty_surface_set_content_scale(s, scale, scale)
     }
@@ -83,6 +88,21 @@ final class SurfaceHost: @unchecked Sendable {
         assert(Thread.isMainThread)
         guard let s = surfaceIfOpen() else { return }
         ghostty_surface_set_size(s, px, py)
+    }
+
+    // Current grid + cell metrics. Cell pixels are at the surface's
+    // content scale; divide by `scale` for points. Nil while closed or
+    // before the font metrics exist.
+    func surfaceMetrics() -> (cols: UInt16, rows: UInt16,
+                              cellWidth: Double, cellHeight: Double)? {
+        assert(Thread.isMainThread)
+        guard let s = surfaceIfOpen() else { return nil }
+        let size = ghostty_surface_size(s)
+        guard size.cell_width_px > 0, size.cell_height_px > 0, scale > 0 else {
+            return nil
+        }
+        return (size.columns, size.rows,
+                Double(size.cell_width_px) / scale, Double(size.cell_height_px) / scale)
     }
 
     func setFocus(_ focused: Bool) {

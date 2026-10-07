@@ -169,6 +169,32 @@ struct GCTKeybind {
     }
 }
 
+// Which side of the focused pane cmd+t opens on.
+enum GCTNewWindowDirection: String {
+    case above, below, left, right
+}
+
+// Size of new panes: follows the focused pane, or a fixed terminal grid.
+enum GCTNewWindowDim: Equatable {
+    case follows
+    case fixed(cols: Int, rows: Int)
+
+    // "follows", or "cols,rows" ("80,30", bare or quoted). Anything
+    // malformed falls back to follows.
+    static func parse(_ raw: String) -> GCTNewWindowDim {
+        let v = raw.trimmingCharacters(in: .whitespaces).lowercased()
+        if v == "follows" || v == "default" { return .follows }
+        let parts = v.split(separator: ",").map {
+            $0.trimmingCharacters(in: .whitespaces)
+        }
+        guard parts.count == 2, let cols = Int(parts[0]), let rows = Int(parts[1]),
+              (1...1000).contains(cols), (1...1000).contains(rows) else {
+            return .follows
+        }
+        return .fixed(cols: cols, rows: rows)
+    }
+}
+
 enum GCTAction: String, CaseIterable {
     case newPane = "new-pane"
     case closePane = "close-pane"
@@ -193,6 +219,16 @@ struct GCTConfig {
     var titlebarFont: String?
     var titlebarFontSize: CGFloat = 12
     var keybinds: [GCTAction: GCTKeybind] = GCTConfig.defaultKeybinds
+    // Panes are kept from overlapping: creation, moves, and resizes all
+    // resolve collisions.
+    var allowWindowOverlap = false
+    // Which side of the focused pane cmd+t opens on.
+    var newWindowDirection = GCTNewWindowDirection.right
+    // Size of new panes: focused pane's size, or a fixed cols x rows grid
+    // (80x24 when the canvas is empty).
+    var newWindowDim = GCTNewWindowDim.follows
+    // Animate the camera to center a pane created with cmd+t.
+    var moveFocusOnNewWindow = true
 
     static let path: String = (NSHomeDirectory() as NSString)
         .appendingPathComponent(".config/gct/config.toml")
@@ -218,6 +254,20 @@ struct GCTConfig {
 
         if let a = root["appearance"], let mode = GCTAppearance(rawValue: a.lowercased()) {
             cfg.appearance = mode
+        }
+
+        if let v = root["allow-window-overlap"] {
+            cfg.allowWindowOverlap = v.lowercased() == "true"
+        }
+        if let v = root["new-window-open-direction"],
+           let d = GCTNewWindowDirection(rawValue: v.lowercased()) {
+            cfg.newWindowDirection = d
+        }
+        if let v = root["new-window-dim"] {
+            cfg.newWindowDim = GCTNewWindowDim.parse(v)
+        }
+        if let v = root["move-focus-on-new-window"] {
+            cfg.moveFocusOnNewWindow = v.lowercased() == "true"
         }
 
         let bg = t["background"] ?? [:]
@@ -269,6 +319,18 @@ struct GCTConfig {
 
     # Light/dark mode: "light", "dark", or "system" (follow macOS).
     appearance = "system"
+
+    # Window placement. Panes are kept from overlapping unless you allow
+    # it: new panes, moves, and resizes all resolve collisions.
+    allow-window-overlap = false
+    # Side of the focused pane that cmd+t opens on.
+    new-window-open-direction = "right"  # above | below | left | right
+    # New pane size: "follows" copies the focused pane, or fix a terminal
+    # grid as "cols,rows" (e.g. "80,30"). With no panes on the canvas, a
+    # standard 80x24 terminal opens.
+    new-window-dim = "follows"
+    # Animate the camera to center a pane created with cmd+t (like cmd+k).
+    move-focus-on-new-window = true
 
     [background]
     # Canvas background per mode. Hex like "#1a1b26", or "ghostty" to reuse

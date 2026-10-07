@@ -11,14 +11,22 @@ extension CanvasView: CanvasConnDelegate {
         if panes.isEmpty && !firstRunHandled {
             // Empty canvas: seed one pane at the origin.
             firstRunHandled = true
-            conn?.createPane(CreatePane(rect: Rect(x: 0, y: 0, w: 900, h: 560)))
+            let r = newPaneRect()
+            conn?.createPane(CreatePane(
+                rect: Rect(x: r.minX, y: r.minY, w: r.width, h: r.height)))
         } else if !panes.isEmpty {
+            if !GCTConfig.current.allowWindowOverlap {
+                untangleLoadedPanes()
+            }
             fitAll()
         }
     }
 
     func connPaneCreated(_ meta: PaneMeta) {
         makePaneView(meta)
+        if GCTConfig.current.moveFocusOnNewWindow {
+            zoomToPane(meta.id)
+        }
     }
 
     func connPaneMeta(_ meta: PaneMeta) {

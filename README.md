@@ -19,8 +19,13 @@ and everything reattaches, scrollback replayed.
   - drag the titlebar to move, edges/corners to resize (live PTY reflow)
   - click to focus; `⌘K` opens a type-to-filter switcher and animates the
     camera to the chosen pane
-  - `⌘T` new pane (inherits the focused pane's cwd, cascades 40pt),
-    `⌘W` close, `⌘R` rename (the `✻`-style named panes in the titlebar)
+  - `⌘T` new pane (opens beside the focused pane — direction and size are
+    configurable — and animates the camera to center it; inherits the
+    focused pane's cwd), `⌘W` close, `⌘R` rename (the `✻`-style named panes
+    in the titlebar)
+  - panes never overlap unless you allow it: creation, titlebar drags, and
+    edge/corner resizes all resolve collisions; layouts saved while overlap
+    was allowed are untangled on load
   - `⌘C` copies the selection (or sends `^C` when nothing is selected),
     `⌘V` pastes
   - dead keys, accents, and IME composition work: keys route through the
@@ -118,11 +123,25 @@ arrive via `resize_callback` and go to the daemon as `TIOCSWINSZ`. See
 
 `~/.config/gct/config.toml` — created with defaults on first launch; every key
 is optional and malformed values fall back to their defaults. Takes effect on
-relaunch.
+relaunch. Root-level keys (like `appearance` and the placement keys below)
+must appear before the first `[table]` header — after one, they belong to
+that table.
 
 ```toml
 # Light/dark mode: "light", "dark", or "system" (follow macOS).
 appearance = "system"
+
+# Window placement. Panes are kept from overlapping unless you allow it:
+# new panes, moves, and resizes all resolve collisions.
+allow-window-overlap = false
+# Side of the focused pane that cmd+t opens on.
+new-window-open-direction = "right"  # above | below | left | right
+# New pane size: "follows" copies the focused pane, or fix a terminal grid
+# as "cols,rows" (e.g. "80,30"). With no panes on the canvas, a standard
+# 80x24 terminal opens.
+new-window-dim = "follows"
+# Animate the camera to center a pane created with cmd+t (like cmd+k).
+move-focus-on-new-window = true
 
 [background]
 # Canvas background per mode. Hex like "#1a1b26", or "ghostty" to reuse the

@@ -13,6 +13,14 @@ final class CanvasView: NSView {
     var zOrder = [PaneID]()
     private(set) var focusedID: PaneID?
 
+    // Points per terminal cell, measured from any open surface (all panes
+    // share the ghostty app config, so one measurement serves every
+    // cols/rows <-> frame conversion). Nil until a surface exists.
+    private var cellSize: CGSize?
+    // A grid-sized pane created on an empty canvas got a provisional frame
+    // (nothing to measure yet); corrected once its surface reports metrics.
+    private var pendingGridFixup: (cols: Int, rows: Int)?
+
     var conn: CanvasConn?
     private(set) var ghosttyApp: GhosttyApp?
 
@@ -188,10 +196,16 @@ final class CanvasView: NSView {
         case .move(let id, let grabDelta):
             guard let pane = panes[id] else { return }
             let world = worldPoint(event)
-            pane.setRect(NSRect(x: world.x - grabDelta.x, y: world.y - grabDelta.y,
-                                width: pane.frame.width,
-                                height: pane.frame.height),
-                         notifySurface: false)
+            var rect = NSRect(x: world.x - grabDelta.x, y: world.y - grabDelta.y,
+                              width: pane.frame.width,
+                              height: pane.frame.height)
+            if !GCTConfig.current.allowWindowOverlap {
+                rect = Overlap.resolve(rect,
+                                       obstacles: panes.values
+                                           .filter { $0.id != id }
+                                           .map(\.frame))
+            }
+            pane.setRect(rect, notifySurface: false)
         case .resize(let id, let zone, let rect0):
             guard let pane = panes[id] else { return }
             let world = worldPoint(event)
@@ -207,6 +221,17 @@ final class CanvasView: NSView {
                 rect.size.height = rect0.maxY - rect.origin.y
             }
             if zone.resizesN { rect.size.height = max(minH, world.y - rect0.minY) }
+            if !GCTConfig.current.allowWindowOverlap {
+                rect = Overlap.clampResize(rect, original: rect0,
+                                           edges: Overlap.Edges(
+                                               w: zone.resizesW,
+                                               e: zone.resizesE,
+                                               s: zone.resizesS,
+                                               n: zone.resizesN),
+                                           obstacles: panes.values
+                                               .filter { $0.id != id }
+                                               .map(\.frame))
+            }
             pane.setRect(rect, notifySurface: true)
         case .surfaceClick, .none:
             break
@@ -573,16 +598,72 @@ final class CanvasView: NSView {
 
     func newPane() {
         let cwd = focusedID.flatMap { panes[$0]?.meta.cwd }
-        if let id = focusedID, let pane = panes[id] {
-            let r = pane.frame
-            conn?.createPane(CreatePane(
-                rect: Rect(x: r.minX + 40, y: r.minY + 40,
-                           w: r.width, h: r.height),
-                cwd: cwd))
-        } else {
-            conn?.createPane(CreatePane(
-                rect: Rect(x: 0, y: 0, w: 900, h: 560), cwd: cwd))
+        let r = newPaneRect()
+        conn?.createPane(CreatePane(
+            rect: Rect(x: r.minX, y: r.minY, w: r.width, h: r.height),
+            cwd: cwd))
+    }
+
+    // cmd+t placement: flush against the focused pane on the configured
+    // side, sized per config (focused pane's size, a fixed grid, or a
+    // standard 80x24 terminal when nothing is focused). With overlap
+    // disallowed the rect is pushed clear of every other pane.
+    func newPaneRect() -> NSRect {
+        let cfg = GCTConfig.current
+        let focused = focusedID.flatMap { panes[$0] }
+
+        // Provisional until replaced below; also the virgin-canvas
+        // fallback (no surface yet to measure cells from — the grid fixup
+        // corrects it once one exists).
+        var size = NSSize(width: 900, height: 560)
+        var grid: (cols: Int, rows: Int)?
+        switch cfg.newWindowDim {
+        case .fixed(let cols, let rows):
+            grid = (cols, rows)
+        case .follows:
+            if let f = focused?.frame {
+                size = f.size
+            } else {
+                grid = (80, 24)  // standard terminal size
+            }
         }
+        if let grid, let measured = frameForGrid(grid.cols, grid.rows) {
+            size = measured
+        } else if let grid {
+            pendingGridFixup = grid
+        }
+
+        let origin: CGPoint
+        if let f = focused?.frame {
+            switch cfg.newWindowDirection {
+            case .right: origin = CGPoint(x: f.maxX, y: f.minY)
+            case .left:  origin = CGPoint(x: f.minX - size.width, y: f.minY)
+            case .above: origin = CGPoint(x: f.minX, y: f.maxY)
+            case .below: origin = CGPoint(x: f.minX, y: f.minY - size.height)
+            }
+        } else {
+            origin = .zero
+        }
+
+        var rect = NSRect(origin: origin, size: size)
+        if !cfg.allowWindowOverlap {
+            let (axis, dir): (Overlap.Axis, Int) = switch cfg.newWindowDirection {
+            case .right: (.horizontal, 1)
+            case .left:  (.horizontal, -1)
+            case .above: (.vertical, 1)
+            case .below: (.vertical, -1)
+            }
+            rect = Overlap.resolve(rect, direction: dir, axis: axis,
+                                   obstacles: panes.values.map(\.frame))
+        }
+        return rect
+    }
+
+    // Frame size for a cols x rows grid, from measured cell metrics.
+    private func frameForGrid(_ cols: Int, _ rows: Int) -> NSSize? {
+        guard let cell = cellSize else { return nil }
+        return NSSize(width: CGFloat(cols) * cell.width,
+                      height: CGFloat(rows) * cell.height + PaneView.titleBarHeight)
     }
 
     func closePane(_ id: PaneID) {
@@ -630,6 +711,8 @@ final class CanvasView: NSView {
             self?.conn?.sendInput(id, data)
         }
         pane.install(host: host)
+        refreshCellMetrics(host)
+        applyPendingGridFixup(pane)
         panes[meta.id] = pane
         zOrder.append(meta.id)
         worldView.addSubview(pane)
@@ -642,6 +725,54 @@ final class CanvasView: NSView {
         // One layout pass later, push the real pixel size.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
             self?.panes[meta.id]?.syncSurfaceSize()
+        }
+    }
+
+    // All panes share the ghostty app config, so any open surface yields
+    // the same cell metrics; keep the latest measurement.
+    private func refreshCellMetrics(_ host: SurfaceHost) {
+        guard let m = host.surfaceMetrics() else { return }
+        cellSize = CGSize(width: m.cellWidth, height: m.cellHeight)
+    }
+
+    // A grid-sized pane created on an empty canvas got a provisional
+    // frame (no surface existed to measure cell size). Its surface now
+    // exists: correct the frame and persist the fixed rect.
+    private func applyPendingGridFixup(_ pane: PaneView) {
+        guard let grid = pendingGridFixup, let cell = cellSize else { return }
+        pendingGridFixup = nil
+        let target = NSSize(width: CGFloat(grid.cols) * cell.width,
+                            height: CGFloat(grid.rows) * cell.height
+                                + PaneView.titleBarHeight)
+        guard abs(pane.frame.width - target.width) > 0.5
+                || abs(pane.frame.height - target.height) > 0.5 else { return }
+        let rect = NSRect(origin: pane.frame.origin, size: target)
+        pane.setRect(rect, notifySurface: false)
+        conn?.movePane(MovePane(id: pane.id,
+                                rect: Rect(x: rect.minX, y: rect.minY,
+                                           w: rect.width, h: rect.height)))
+    }
+
+    // Loaded layouts can overlap (saved while overlap was allowed): push
+    // each pane out of the ones before it, oldest first, and persist the
+    // corrections. Overlap stays allowed: untouched.
+    func untangleLoadedPanes() {
+        var settled = [NSRect]()
+        for id in zOrder {
+            guard let pane = panes[id] else { continue }
+            var rect = pane.frame
+            if !settled.isEmpty {
+                let before = rect
+                rect = Overlap.resolve(rect, obstacles: settled)
+                if rect != before {
+                    pane.setRect(rect, notifySurface: false)
+                    conn?.movePane(MovePane(
+                        id: id,
+                        rect: Rect(x: rect.minX, y: rect.minY,
+                                   w: rect.width, h: rect.height)))
+                }
+            }
+            settled.append(rect)
         }
     }
 
