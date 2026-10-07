@@ -24,9 +24,10 @@ and everything reattaches, scrollback replayed.
     cwd), `⌘W` close, `⌘R` rename (the `✻`-style named panes in the
     titlebar). `⌘⇧H/J/K/L` opens a new pane on that fixed side with the
     same size/focus/camera rules
-  - panes never overlap unless you allow it: creation, titlebar drags, and
-    edge/corner resizes all resolve collisions; layouts saved while overlap
-    was allowed are untangled on load
+  - panes never overlap unless you allow it: creation, titlebar drags,
+    edge/corner resizes, and keyboard grow/shrink all resolve collisions
+    (keyboard grow shoves blocking panes out of the way along that axis,
+    chained); layouts saved while overlap was allowed are untangled on load
   - `⌘C` copies the selection (or sends `^C` when nothing is selected),
     `⌘V` pastes
   - dead keys, accents, and IME composition work: keys route through the
@@ -113,6 +114,8 @@ arrive via `resize_callback` and go to the daemon as `TIOCSWINSZ`. See
 | `⌘W` | close focused pane |
 | `⌘R` | rename focused pane |
 | `⌘H/J/K/L` | move focus left/down/up/right |
+| `⌘⌃H/J/K/L` | grow focused pane toward left/down/up/right (shoves blockers) |
+| `⌘⌃⇧H/J/K/L` | shrink focused pane from that edge |
 | `⌘P` | pane switcher (type to filter, ⏎ to jump) |
 | `⌘0` | fit all panes |
 | scroll | zoom canvas (toward cursor) |
@@ -142,6 +145,11 @@ new-window-open-direction = "right"  # above | below | left | right
 # as "cols,rows" (e.g. "80,30"). With no panes on the canvas, a standard
 # 80x24 terminal opens. Directional open-new-window-* uses this same size.
 new-window-dim = "follows"
+# Keyboard resize step (grow-window-*/shrink-window-*): one terminal cell
+# per press when measurable, else resize-step-points. resize-step-cells
+# scales the cell step (e.g. 2 = two cells per press).
+resize-step-cells = 1
+resize-step-points = 40
 # Animate the camera to center a pane created with cmd+t or an
 # open-new-window-* bind (when its focus move fires).
 move-focus-on-new-window = true
@@ -183,6 +191,16 @@ open-new-window-above = "cmd+shift+k"
 open-new-window-below = "cmd+shift+j"
 open-new-window-left = "cmd+shift+h"
 open-new-window-right = "cmd+shift+l"
+# Directional resize: grow moves that edge outward (shoving blockers when
+# overlap is disallowed), shrink pulls it back. Opposite edge stays put.
+grow-window-above = "cmd+ctrl+k"
+grow-window-below = "cmd+ctrl+j"
+grow-window-left = "cmd+ctrl+h"
+grow-window-right = "cmd+ctrl+l"
+shrink-window-above = "cmd+ctrl+shift+k"
+shrink-window-below = "cmd+ctrl+shift+j"
+shrink-window-left = "cmd+ctrl+shift+h"
+shrink-window-right = "cmd+ctrl+shift+l"
 switcher = "cmd+p"
 fit-all = "cmd+0"
 copy = "cmd+c"

@@ -16,7 +16,8 @@ final class CanvasView: NSView {
     // Points per terminal cell, measured from any open surface (all panes
     // share the ghostty app config, so one measurement serves every
     // cols/rows <-> frame conversion). Nil until a surface exists.
-    private var cellSize: CGSize?
+    // Internal for keyboard-resize step; refreshCellMetrics keeps it fresh.
+    var cellSize: CGSize?
     // A grid-sized pane created on an empty canvas got a provisional frame
     // (nothing to measure yet); corrected once its surface reports metrics.
     private var pendingGridFixup: (cols: Int, rows: Int)?
@@ -318,6 +319,14 @@ final class CanvasView: NSView {
         case .openNewBelow: newPane(direction: .below)
         case .openNewLeft: newPane(direction: .left)
         case .openNewRight: newPane(direction: .right)
+        case .growAbove: resizeFocused(edge: .above, grow: true)
+        case .growBelow: resizeFocused(edge: .below, grow: true)
+        case .growLeft: resizeFocused(edge: .left, grow: true)
+        case .growRight: resizeFocused(edge: .right, grow: true)
+        case .shrinkAbove: resizeFocused(edge: .above, grow: false)
+        case .shrinkBelow: resizeFocused(edge: .below, grow: false)
+        case .shrinkLeft: resizeFocused(edge: .left, grow: false)
+        case .shrinkRight: resizeFocused(edge: .right, grow: false)
         case .switcher: toggleSwitcher()
         case .fitAll: fitAll()
         case .copy: copyFromFocused()
@@ -795,6 +804,80 @@ final class CanvasView: NSView {
             }
             settled.append(rect)
         }
+    }
+    // MARK: Keyboard resize
+
+    // Directional resize (grow/shrink-window-*): moves ONE edge of the
+    // focused pane by one step (cell when measurable, else
+    // resize-step-points), opposite edge anchored. Grow shoves blockers
+    // out of the way along that axis (chained) when overlap is
+    // disallowed; shrink never moves others. Minimum 160x120, same as
+    // mouse resize. Persists every touched pane via movePane; the
+    // focused pane's PTY reflows via setRect(notifySurface:).
+    func resizeFocused(edge: GCTNewWindowDirection, grow: Bool) {
+        guard let id = focusedID, let pane = panes[id] else { return }
+        let cfg = GCTConfig.current
+        let f = pane.frame
+        let step: CGFloat = {
+            if let cell = cellSize, cell.width > 0, cell.height > 0 {
+                let base = edge == .left || edge == .right
+                    ? cell.width : cell.height
+                return base * CGFloat(cfg.resizeStepCells)
+            }
+            return cfg.resizeStepPoints
+        }()
+        let minW: CGFloat = 160, minH: CGFloat = 120
+        var rect = f
+        switch (edge, grow) {
+        case (.right, true): rect.size.width = f.width + step
+        case (.right, false): rect.size.width = max(minW, f.width - step)
+        case (.left, true):
+            rect.origin.x = f.minX - step
+            rect.size.width = f.width + step
+        case (.left, false):
+            let w = max(minW, f.width - step)
+            rect.origin.x = f.maxX - w
+            rect.size.width = w
+        case (.above, true): rect.size.height = f.height + step
+        case (.above, false): rect.size.height = max(minH, f.height - step)
+        case (.below, true):
+            rect.origin.y = f.minY - step
+            rect.size.height = f.height + step
+        case (.below, false):
+            let h = max(minH, f.height - step)
+            rect.origin.y = f.maxY - h
+            rect.size.height = h
+        }
+        guard rect != f else { return }
+        let others = panes.values.filter { $0.id != id }
+        if grow, !cfg.allowWindowOverlap {
+            let (axis, sign): (Overlap.Axis, Int) = switch edge {
+            case .right: (.horizontal, 1)
+            case .left: (.horizontal, -1)
+            case .above: (.vertical, 1)
+            case .below: (.vertical, -1)
+            }
+            let frames = others.map(\.frame)
+            let pushed = Overlap.pushForResize(rect, obstacles: frames,
+                                               axis: axis, sign: sign)
+            for (pane, frame) in zip(others, pushed) where frame != pane.frame {
+                pane.setRect(frame, notifySurface: false)
+                conn?.movePane(MovePane(id: pane.id, rect: Rect(
+                    x: frame.minX, y: frame.minY, w: frame.width,
+                    h: frame.height)))
+            }
+        } else if !cfg.allowWindowOverlap {
+            rect = Overlap.clampResize(
+                rect, original: f,
+                edges: Overlap.Edges(
+                    w: edge == .left, e: edge == .right,
+                    s: edge == .below, n: edge == .above),
+                obstacles: others.map(\.frame))
+            guard rect != f else { return }
+        }
+        pane.setRect(rect, notifySurface: true)
+        conn?.movePane(MovePane(id: id, rect: Rect(
+            x: rect.minX, y: rect.minY, w: rect.width, h: rect.height)))
     }
 
     // MARK: Camera actions

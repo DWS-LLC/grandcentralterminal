@@ -218,6 +218,14 @@ enum GCTAction: String, CaseIterable {
     case openNewBelow = "open-new-window-below"
     case openNewLeft = "open-new-window-left"
     case openNewRight = "open-new-window-right"
+    case growAbove = "grow-window-above"
+    case growBelow = "grow-window-below"
+    case growLeft = "grow-window-left"
+    case growRight = "grow-window-right"
+    case shrinkAbove = "shrink-window-above"
+    case shrinkBelow = "shrink-window-below"
+    case shrinkLeft = "shrink-window-left"
+    case shrinkRight = "shrink-window-right"
     case switcher = "switcher"
     case fitAll = "fit-all"
     case copy = "copy"
@@ -246,6 +254,11 @@ struct GCTConfig {
     // Size of new panes: focused pane's size, or a fixed cols x rows grid
     // (80x24 when the canvas is empty).
     var newWindowDim = GCTNewWindowDim.follows
+    // Keyboard resize step: one cell when measurable (col width / row
+    // height), else resize-step-points. resize-step-cells scales the cell
+    // step (e.g. 2 = two cells per press).
+    var resizeStepCells = 1
+    var resizeStepPoints: CGFloat = 40
     // Animate the camera to center a pane created with cmd+t.
     var moveFocusOnNewWindow = true
     // Directional focus moves (cmd+h/j/k/l): center the newly focused
@@ -289,6 +302,13 @@ struct GCTConfig {
         }
         if let v = root["new-window-dim"] {
             cfg.newWindowDim = GCTNewWindowDim.parse(v)
+        }
+        if let v = root["resize-step-cells"], let n = Int(v), (1...16).contains(n) {
+            cfg.resizeStepCells = n
+        }
+        if let v = root["resize-step-points"], let n = Double(v),
+           (1.0...1000.0).contains(n) {
+            cfg.resizeStepPoints = CGFloat(n)
         }
         if let v = root["move-focus-on-new-window"] {
             cfg.moveFocusOnNewWindow = v.lowercased() == "true"
@@ -344,6 +364,14 @@ struct GCTConfig {
             .openNewBelow: GCTKeybind("cmd+shift+j")!,
             .openNewLeft: GCTKeybind("cmd+shift+h")!,
             .openNewRight: GCTKeybind("cmd+shift+l")!,
+            .growAbove: GCTKeybind("cmd+ctrl+k")!,
+            .growBelow: GCTKeybind("cmd+ctrl+j")!,
+            .growLeft: GCTKeybind("cmd+ctrl+h")!,
+            .growRight: GCTKeybind("cmd+ctrl+l")!,
+            .shrinkAbove: GCTKeybind("cmd+ctrl+shift+k")!,
+            .shrinkBelow: GCTKeybind("cmd+ctrl+shift+j")!,
+            .shrinkLeft: GCTKeybind("cmd+ctrl+shift+h")!,
+            .shrinkRight: GCTKeybind("cmd+ctrl+shift+l")!,
             // new-window dims reuse move-focus-on-new-window (center) and
             // camera-follows/fits-focus-move (center/fit like focus moves).
             .switcher: GCTKeybind("cmd+p")!,
@@ -370,6 +398,11 @@ struct GCTConfig {
     # standard 80x24 terminal opens. Directional open-new-window-* uses
     # this same size rule.
     new-window-dim = "follows"
+    # Keyboard resize step (grow-window-*/shrink-window-*): one terminal
+    # cell per press when measurable, else resize-step-points. Cells per
+    # press: resize-step-cells = 2 moves two cells.
+    resize-step-cells = 1
+    resize-step-points = 40
     # Animate the camera to center a pane created with cmd+t or an
     # open-new-window-* bind (when its focus move fires).
     move-focus-on-new-window = true
@@ -412,6 +445,17 @@ struct GCTConfig {
     open-new-window-below = "cmd+shift+j"
     open-new-window-left = "cmd+shift+h"
     open-new-window-right = "cmd+shift+l"
+    # Directional resize: grow moves that edge outward, shrink pulls it
+    # back. Opposite edge stays put; with overlap disallowed, growing
+    # shoves blocking panes (and chains) out of the way along that axis.
+    grow-window-above = "cmd+ctrl+k"
+    grow-window-below = "cmd+ctrl+j"
+    grow-window-left = "cmd+ctrl+h"
+    grow-window-right = "cmd+ctrl+l"
+    shrink-window-above = "cmd+ctrl+shift+k"
+    shrink-window-below = "cmd+ctrl+shift+j"
+    shrink-window-left = "cmd+ctrl+shift+h"
+    shrink-window-right = "cmd+ctrl+shift+l"
     switcher = "cmd+p"
     fit-all = "cmd+0"
     copy = "cmd+c"

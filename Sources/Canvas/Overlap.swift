@@ -104,4 +104,75 @@ enum Overlap {
         }
         return rect
     }
+    // Shove-resize: `candidate` is the focused pane's grown rect (fixed);
+    // blockers are pushed out of the way along ONE axis in `sign`
+    // direction (+1 = east/north, -1 = west/south). Direct blockers land
+    // flush past the candidate's edge; panes they collide with chain
+    // along in the same direction. Every move is strictly monotonic
+    // along the push axis (a cleared pane only moves further away), so
+    // this terminates; the cap is a best-effort backstop. Sizes never
+    // change, only origins.
+    static func pushForResize(_ candidate: CGRect, obstacles: [CGRect],
+                              axis: Axis, sign: Int) -> [CGRect] {
+        var frames = obstacles
+        var moved = Set<Int>()
+        let cap = (frames.count + 1) * (frames.count + 1) + 1
+        for _ in 0..<cap {
+            // Direct blockers first: flush past the candidate's edge.
+            if let i = frames.firstIndex(where: { overlaps($0, candidate) }) {
+                switch (axis, sign > 0) {
+                case (.horizontal, true): frames[i].origin.x = candidate.maxX
+                case (.horizontal, false):
+                    frames[i].origin.x = candidate.minX - frames[i].width
+                case (.vertical, true): frames[i].origin.y = candidate.maxY
+                case (.vertical, false):
+                    frames[i].origin.y = candidate.minY - frames[i].height
+                }
+                moved.insert(i)
+                continue
+            }
+            // Chains: an overlap involving a moved pane pushes the
+            // further-along pane past its neighbor, same direction.
+            var pair: (Int, Int)?
+            for a in frames.indices {
+                for b in frames.indices where b > a {
+                    if overlaps(frames[a], frames[b]),
+                       moved.contains(a) || moved.contains(b) {
+                        pair = (a, b)
+                        break
+                    }
+                }
+                if pair != nil { break }
+            }
+            guard let (a, b) = pair else { return frames }
+            let moveA: Bool = switch (axis, sign > 0) {
+            case (.horizontal, true): frames[a].minX > frames[b].minX
+            case (.horizontal, false): frames[a].minX < frames[b].minX
+            case (.vertical, true): frames[a].minY > frames[b].minY
+            case (.vertical, false): frames[a].minY < frames[b].minY
+            }
+            if moveA {
+                switch (axis, sign > 0) {
+                case (.horizontal, true): frames[a].origin.x = frames[b].maxX
+                case (.horizontal, false):
+                    frames[a].origin.x = frames[b].minX - frames[a].width
+                case (.vertical, true): frames[a].origin.y = frames[b].maxY
+                case (.vertical, false):
+                    frames[a].origin.y = frames[b].minY - frames[a].height
+                }
+                moved.insert(a)
+            } else {
+                switch (axis, sign > 0) {
+                case (.horizontal, true): frames[b].origin.x = frames[a].maxX
+                case (.horizontal, false):
+                    frames[b].origin.x = frames[a].minX - frames[b].width
+                case (.vertical, true): frames[b].origin.y = frames[a].maxY
+                case (.vertical, false):
+                    frames[b].origin.y = frames[a].minY - frames[b].height
+                }
+                moved.insert(b)
+            }
+        }
+        return frames
+    }
 }
