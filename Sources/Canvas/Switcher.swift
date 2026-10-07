@@ -1,4 +1,4 @@
-// ⌘K pane switcher: type-to-filter, arrows/enter, jump with camera zoom.
+// ⌘P pane switcher: type-to-filter, arrows/enter, jump with camera zoom.
 
 import AppKit
 import Common

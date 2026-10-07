@@ -15,14 +15,15 @@ and everything reattaches, scrollback replayed.
 
 - Infinite canvas: drag empty space to pan, scroll to zoom (0.03–1.0×,
   native-size text stays crisp), `⌘0` fits all panes.
-- Panes are real terminals (your `$SHELL`, ghostty rendering):
   - drag the titlebar to move, edges/corners to resize (live PTY reflow)
-  - click to focus; `⌘K` opens a type-to-filter switcher and animates the
-    camera to the chosen pane
+  - click to focus; `⌘H/J/K/L` moves focus to the nearest pane in that
+    direction (camera centers + zooms to fit it — both configurable);
+    `⌘P` opens a type-to-filter switcher and jumps the camera the same way
   - `⌘T` new pane (opens beside the focused pane — direction and size are
-    configurable — and animates the camera to center it; inherits the
-    focused pane's cwd), `⌘W` close, `⌘R` rename (the `✻`-style named panes
-    in the titlebar)
+    configurable — and focuses + centers it; inherits the focused pane's
+    cwd), `⌘W` close, `⌘R` rename (the `✻`-style named panes in the
+    titlebar). `⌘⇧H/J/K/L` opens a new pane on that fixed side with the
+    same size/focus/camera rules
   - panes never overlap unless you allow it: creation, titlebar drags, and
     edge/corner resizes all resolve collisions; layouts saved while overlap
     was allowed are untangled on load
@@ -111,7 +112,8 @@ arrive via `resize_callback` and go to the daemon as `TIOCSWINSZ`. See
 | `⌘T` | new pane |
 | `⌘W` | close focused pane |
 | `⌘R` | rename focused pane |
-| `⌘K` | pane switcher (type to filter, ⏎ to jump) |
+| `⌘H/J/K/L` | move focus left/down/up/right |
+| `⌘P` | pane switcher (type to filter, ⏎ to jump) |
 | `⌘0` | fit all panes |
 | scroll | zoom canvas (toward cursor) |
 | shift+scroll | scroll the terminal under the cursor |
@@ -138,14 +140,21 @@ allow-window-overlap = false
 new-window-open-direction = "right"  # above | below | left | right
 # New pane size: "follows" copies the focused pane, or fix a terminal grid
 # as "cols,rows" (e.g. "80,30"). With no panes on the canvas, a standard
-# 80x24 terminal opens.
+# 80x24 terminal opens. Directional open-new-window-* uses this same size.
 new-window-dim = "follows"
-# Animate the camera to center a pane created with cmd+t (like cmd+k).
+# Animate the camera to center a pane created with cmd+t or an
+# open-new-window-* bind (when its focus move fires).
 move-focus-on-new-window = true
+# Directional focus moves (cmd+h/j/k/l): center the newly focused pane,
+# and/or zoom to fit it. Independent; both default true (fit implies
+# centered, so both true just zooms to fit).
+camera-follows-focus-move = true
+camera-fits-focus-move = true
 
-[background]
-# Canvas background per mode. Hex like "#1a1b26", or "ghostty" to reuse the
-# background color from your ghostty config.
+# Canvas background per mode. Hex like "#1a1b26" (alpha 1), or with alpha
+# like "#1a1b2680" / "#1234" — alpha < 1 makes the canvas transparent,
+# showing the desktop behind it. "ghostty" reuses the background color
+# from your ghostty config.
 dark = "#000000"
 light = "#ffffff"
 
@@ -163,7 +172,18 @@ font-size = 12
 new-pane = "cmd+t"
 close-pane = "cmd+w"
 rename-pane = "cmd+r"
-switcher = "cmd+k"
+move-focus-above = "cmd+k"
+move-focus-below = "cmd+j"
+move-focus-left = "cmd+h"
+move-focus-right = "cmd+l"
+# Directional new panes. Side is fixed by the action; size follows
+# new-window-dim; focus/camera follow move-focus-on-new-window and the
+# camera-follows/fits-focus-move flags.
+open-new-window-above = "cmd+shift+k"
+open-new-window-below = "cmd+shift+j"
+open-new-window-left = "cmd+shift+h"
+open-new-window-right = "cmd+shift+l"
+switcher = "cmd+p"
 fit-all = "cmd+0"
 copy = "cmd+c"
 paste = "cmd+v"

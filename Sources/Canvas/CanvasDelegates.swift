@@ -24,8 +24,15 @@ extension CanvasView: CanvasConnDelegate {
 
     func connPaneCreated(_ meta: PaneMeta) {
         makePaneView(meta)
-        if GCTConfig.current.moveFocusOnNewWindow {
+        // makePaneView focuses the new pane; camera follows only when the
+        // new-window focus move fires, honoring the same flags as
+        // directional moves (fit wins when both are set).
+        guard GCTConfig.current.moveFocusOnNewWindow else { return }
+        let cfg = GCTConfig.current
+        if cfg.cameraFitsFocusMove {
             zoomToPane(meta.id)
+        } else if cfg.cameraFollowsFocusMove {
+            centerOnPane(meta.id)
         }
     }
 

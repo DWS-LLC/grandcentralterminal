@@ -27,7 +27,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             defer: false)
         win.title = "Grand Central Terminal"
         win.backgroundColor = .black  // replaced by the theme below
-        win.isOpaque = true
+        win.isOpaque = false  // applyTheme sets true when background is opaque
         win.level = .normal
         win.collectionBehavior = [.fullScreenNone]
         win.isReleasedWhenClosed = false

@@ -112,16 +112,25 @@ enum TOML {
 // MARK: - Color helpers
 
 extension NSColor {
-    // "#rgb" / "#rrggbb" (leading # optional); nil unless valid hex.
+    // "#rgb" / "#rrggbb" / "#rgba" / "#rrggbbaa" (leading # optional);
+    // nil unless valid hex. Alpha 1 unless the 4/8-digit form gives one.
     convenience init?(gctHex hex: String) {
         var s = hex.hasPrefix("#") ? String(hex.dropFirst()) : hex
-        if s.count == 3 { s = s.map { "\($0)\($0)" }.joined() }
-        guard s.count == 6, let v = UInt32(s, radix: 16) else { return nil }
-        self.init(
-            red: CGFloat((v >> 16) & 0xFF) / 255,
-            green: CGFloat((v >> 8) & 0xFF) / 255,
-            blue: CGFloat(v & 0xFF) / 255,
-            alpha: 1)
+        if s.count == 3 || s.count == 4 { s = s.map { "\($0)\($0)" }.joined() }
+        guard s.count == 6 || s.count == 8, let v = UInt32(s, radix: 16) else { return nil }
+        if s.count == 6 {
+            self.init(
+                red: CGFloat((v >> 16) & 0xFF) / 255,
+                green: CGFloat((v >> 8) & 0xFF) / 255,
+                blue: CGFloat(v & 0xFF) / 255,
+                alpha: 1)
+        } else {
+            self.init(
+                red: CGFloat((v >> 24) & 0xFF) / 255,
+                green: CGFloat((v >> 16) & 0xFF) / 255,
+                blue: CGFloat((v >> 8) & 0xFF) / 255,
+                alpha: CGFloat(v & 0xFF) / 255)
+        }
     }
 
     // Rec. 601 luminance in 0...1, sRGB components.
@@ -199,6 +208,16 @@ enum GCTAction: String, CaseIterable {
     case newPane = "new-pane"
     case closePane = "close-pane"
     case renamePane = "rename-pane"
+    // Declared before switcher so the cmd+h/j/k/l defaults win key ties
+    // against a stale config that still pins switcher to cmd+k.
+    case moveFocusAbove = "move-focus-above"
+    case moveFocusBelow = "move-focus-below"
+    case moveFocusLeft = "move-focus-left"
+    case moveFocusRight = "move-focus-right"
+    case openNewAbove = "open-new-window-above"
+    case openNewBelow = "open-new-window-below"
+    case openNewLeft = "open-new-window-left"
+    case openNewRight = "open-new-window-right"
     case switcher = "switcher"
     case fitAll = "fit-all"
     case copy = "copy"
@@ -229,6 +248,11 @@ struct GCTConfig {
     var newWindowDim = GCTNewWindowDim.follows
     // Animate the camera to center a pane created with cmd+t.
     var moveFocusOnNewWindow = true
+    // Directional focus moves (cmd+h/j/k/l): center the newly focused
+    // pane, and/or zoom to fit it. Independent; both default true (fit
+    // implies centered, so both true just zooms to fit).
+    var cameraFollowsFocusMove = true
+    var cameraFitsFocusMove = true
 
     static let path: String = (NSHomeDirectory() as NSString)
         .appendingPathComponent(".config/gct/config.toml")
@@ -269,6 +293,12 @@ struct GCTConfig {
         if let v = root["move-focus-on-new-window"] {
             cfg.moveFocusOnNewWindow = v.lowercased() == "true"
         }
+        if let v = root["camera-follows-focus-move"] {
+            cfg.cameraFollowsFocusMove = v.lowercased() == "true"
+        }
+        if let v = root["camera-fits-focus-move"] {
+            cfg.cameraFitsFocusMove = v.lowercased() == "true"
+        }
 
         let bg = t["background"] ?? [:]
         cfg.backgroundDark = colorSpec(bg["dark"])
@@ -306,7 +336,17 @@ struct GCTConfig {
             .newPane: GCTKeybind("cmd+t")!,
             .closePane: GCTKeybind("cmd+w")!,
             .renamePane: GCTKeybind("cmd+r")!,
-            .switcher: GCTKeybind("cmd+k")!,
+            .moveFocusAbove: GCTKeybind("cmd+k")!,
+            .moveFocusBelow: GCTKeybind("cmd+j")!,
+            .moveFocusLeft: GCTKeybind("cmd+h")!,
+            .moveFocusRight: GCTKeybind("cmd+l")!,
+            .openNewAbove: GCTKeybind("cmd+shift+k")!,
+            .openNewBelow: GCTKeybind("cmd+shift+j")!,
+            .openNewLeft: GCTKeybind("cmd+shift+h")!,
+            .openNewRight: GCTKeybind("cmd+shift+l")!,
+            // new-window dims reuse move-focus-on-new-window (center) and
+            // camera-follows/fits-focus-move (center/fit like focus moves).
+            .switcher: GCTKeybind("cmd+p")!,
             .fitAll: GCTKeybind("cmd+0")!,
             .copy: GCTKeybind("cmd+c")!,
             .paste: GCTKeybind("cmd+v")!,
@@ -327,13 +367,22 @@ struct GCTConfig {
     new-window-open-direction = "right"  # above | below | left | right
     # New pane size: "follows" copies the focused pane, or fix a terminal
     # grid as "cols,rows" (e.g. "80,30"). With no panes on the canvas, a
-    # standard 80x24 terminal opens.
+    # standard 80x24 terminal opens. Directional open-new-window-* uses
+    # this same size rule.
     new-window-dim = "follows"
-    # Animate the camera to center a pane created with cmd+t (like cmd+k).
+    # Animate the camera to center a pane created with cmd+t or an
+    # open-new-window-* bind (when its focus move fires).
     move-focus-on-new-window = true
+    # Directional focus moves (cmd+h/j/k/l): center the newly focused
+    # pane, and/or zoom to fit it. Independent; both default true (fit
+    # implies centered, so both true just zooms to fit).
+    camera-follows-focus-move = true
+    camera-fits-focus-move = true
 
     [background]
-    # Canvas background per mode. Hex like "#1a1b26", or "ghostty" to reuse
+    # Canvas background per mode. Hex like "#1a1b26" (alpha 1), or with
+    # alpha like "#1a1b2680" / "#1234" (alpha < 1 makes the canvas
+    # transparent, showing the desktop behind it). "ghostty" reuses
     # the background color from your ghostty config.
     dark = "#000000"
     light = "#ffffff"
@@ -352,7 +401,18 @@ struct GCTConfig {
     new-pane = "cmd+t"
     close-pane = "cmd+w"
     rename-pane = "cmd+r"
-    switcher = "cmd+k"
+    move-focus-above = "cmd+k"
+    move-focus-below = "cmd+j"
+    move-focus-left = "cmd+h"
+    move-focus-right = "cmd+l"
+    # Directional new panes. Side is fixed by the action; size follows
+    # new-window-dim; focus/camera follow move-focus-on-new-window and
+    # the camera-follows/fits-focus-move flags.
+    open-new-window-above = "cmd+shift+k"
+    open-new-window-below = "cmd+shift+j"
+    open-new-window-left = "cmd+shift+h"
+    open-new-window-right = "cmd+shift+l"
+    switcher = "cmd+p"
     fit-all = "cmd+0"
     copy = "cmd+c"
     paste = "cmd+v"

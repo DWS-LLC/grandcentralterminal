@@ -82,7 +82,10 @@ final class CanvasView: NSView {
     // Recompute the theme from config + ghostty and apply it everywhere.
     func applyTheme() {
         GCTTheme.refresh(ghosttyBackground: ghosttyApp?.background)
-        window?.backgroundColor = GCTTheme.current.canvasBackground
+        let bg = GCTTheme.current.canvasBackground
+        window?.backgroundColor = bg
+        // Alpha < 1 needs a non-opaque window or AppKit ignores it.
+        window?.isOpaque = bg.alphaComponent >= 1
         for pane in panes.values { pane.applyChrome() }
     }
 
@@ -307,6 +310,14 @@ final class CanvasView: NSView {
         case .newPane: newPane()
         case .closePane: if let id = focusedID { closePane(id) }
         case .renamePane: if let id = focusedID { renamePane(id) }
+        case .moveFocusAbove: moveFocus(.above)
+        case .moveFocusBelow: moveFocus(.below)
+        case .moveFocusLeft: moveFocus(.left)
+        case .moveFocusRight: moveFocus(.right)
+        case .openNewAbove: newPane(direction: .above)
+        case .openNewBelow: newPane(direction: .below)
+        case .openNewLeft: newPane(direction: .left)
+        case .openNewRight: newPane(direction: .right)
         case .switcher: toggleSwitcher()
         case .fitAll: fitAll()
         case .copy: copyFromFocused()
@@ -597,19 +608,29 @@ final class CanvasView: NSView {
     // MARK: Pane lifecycle
 
     func newPane() {
+        newPane(direction: GCTConfig.current.newWindowDirection)
+    }
+
+    // Directional open-new-window-*: same size rule and overlap handling
+    // as cmd+t, on the action's fixed side. Focus/camera follow only via
+    // move-focus-on-new-window (center) and camera-follows/fits-focus-move
+    // (center/fit on arrival) — see connPaneCreated.
+    func newPane(direction: GCTNewWindowDirection) {
         let cwd = focusedID.flatMap { panes[$0]?.meta.cwd }
-        let r = newPaneRect()
+        let r = newPaneRect(direction: direction)
         conn?.createPane(CreatePane(
             rect: Rect(x: r.minX, y: r.minY, w: r.width, h: r.height),
             cwd: cwd))
     }
 
-    // cmd+t placement: flush against the focused pane on the configured
-    // side, sized per config (focused pane's size, a fixed grid, or a
-    // standard 80x24 terminal when nothing is focused). With overlap
-    // disallowed the rect is pushed clear of every other pane.
-    func newPaneRect() -> NSRect {
+    // New-pane placement: flush against the focused pane on the given
+    // side (cmd+t passes the configured direction; open-new-window-*
+    // passes its fixed side), sized per config (focused pane's size, a
+    // fixed grid, or a standard 80x24 terminal when nothing is focused).
+    // With overlap disallowed the rect is pushed clear of every other pane.
+    func newPaneRect(direction: GCTNewWindowDirection? = nil) -> NSRect {
         let cfg = GCTConfig.current
+        let dir = direction ?? cfg.newWindowDirection
         let focused = focusedID.flatMap { panes[$0] }
 
         // Provisional until replaced below; also the virgin-canvas
@@ -635,7 +656,7 @@ final class CanvasView: NSView {
 
         let origin: CGPoint
         if let f = focused?.frame {
-            switch cfg.newWindowDirection {
+            switch dir {
             case .right: origin = CGPoint(x: f.maxX, y: f.minY)
             case .left:  origin = CGPoint(x: f.minX - size.width, y: f.minY)
             case .above: origin = CGPoint(x: f.minX, y: f.maxY)
@@ -647,13 +668,13 @@ final class CanvasView: NSView {
 
         var rect = NSRect(origin: origin, size: size)
         if !cfg.allowWindowOverlap {
-            let (axis, dir): (Overlap.Axis, Int) = switch cfg.newWindowDirection {
+            let (axis, sign): (Overlap.Axis, Int) = switch dir {
             case .right: (.horizontal, 1)
             case .left:  (.horizontal, -1)
             case .above: (.vertical, 1)
             case .below: (.vertical, -1)
             }
-            rect = Overlap.resolve(rect, direction: dir, axis: axis,
+            rect = Overlap.resolve(rect, direction: sign, axis: axis,
                                    obstacles: panes.values.map(\.frame))
         }
         return rect
@@ -778,6 +799,64 @@ final class CanvasView: NSView {
 
     // MARK: Camera actions
 
+    // Directional focus move (cmd+h/j/k/l): focus the nearest pane in
+    // the given direction from the focused pane. Candidates must overlap
+    // the focused pane on the perpendicular axis (like a tiling WM: only
+    // panes actually in that direction count); the nearest wins by gap
+    // between facing edges, ties broken by less perpendicular drift.
+    // Camera: zoom-to-fit when camera-fits-focus-move, else recenter at
+    // the current scale when camera-follows-focus-move.
+    func moveFocus(_ dir: GCTNewWindowDirection) {
+        guard let focused = focusedID.flatMap({ panes[$0] }) else { return }
+        let f = focused.frame
+        let fcx = f.midX, fcy = f.midY
+        var best: (id: PaneID, gap: CGFloat, drift: CGFloat)?
+        for (id, pane) in panes where id != focused.id {
+            let r = pane.frame
+            let gap: CGFloat
+            let drift: CGFloat
+            switch dir {
+            case .left:
+                guard r.maxX <= f.minX + 0.5, r.maxY > f.minY, r.minY < f.maxY else { continue }
+                gap = f.minX - r.maxX
+                drift = abs(r.midY - fcy)
+            case .right:
+                guard r.minX >= f.maxX - 0.5, r.maxY > f.minY, r.minY < f.maxY else { continue }
+                gap = r.minX - f.maxX
+                drift = abs(r.midY - fcy)
+            case .above:
+                guard r.minY >= f.maxY - 0.5, r.maxX > f.minX, r.minX < f.maxX else { continue }
+                gap = r.minY - f.maxY
+                drift = abs(r.midX - fcx)
+            case .below:
+                guard r.maxY <= f.minY + 0.5, r.maxX > f.minX, r.minX < f.maxX else { continue }
+                gap = f.minY - r.maxY
+                drift = abs(r.midX - fcx)
+            }
+            if let b = best, (gap, drift) >= (b.gap, b.drift) { continue }
+            best = (id, gap, drift)
+        }
+        guard let target = best?.id else { return }
+        focusPane(target)
+        let cfg = GCTConfig.current
+        if cfg.cameraFitsFocusMove {
+            zoomToPane(target)
+        } else if cfg.cameraFollowsFocusMove {
+            centerOnPane(target)
+        }
+    }
+
+    // Recenter the camera on a pane without changing the zoom.
+    func centerOnPane(_ id: PaneID) {
+        guard let pane = panes[id], let window else { return }
+        let screen = window.frame.size
+        let r = pane.frame
+        animateCamera(to: Camera(
+            offset: CGPoint(x: screen.width / 2 - r.midX * camera.scale,
+                            y: screen.height / 2 - r.midY * camera.scale),
+            scale: camera.scale))
+    }
+
     func zoomToPane(_ id: PaneID) {
         guard let pane = panes[id], let window else { return }
         let screen = window.frame.size
@@ -845,7 +924,12 @@ final class CanvasView: NSView {
                                            width: 640, height: 480))
         s.onSelect = { [weak self] id in
             self?.focusPane(id)
-            self?.zoomToPane(id)
+            let cfg = GCTConfig.current
+            if cfg.cameraFitsFocusMove {
+                self?.zoomToPane(id)
+            } else if cfg.cameraFollowsFocusMove {
+                self?.centerOnPane(id)
+            }
         }
         s.onDismiss = { [weak self] in
             self?.window?.makeFirstResponder(self)
