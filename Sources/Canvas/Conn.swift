@@ -1,4 +1,4 @@
-// UI-side connection to canvasd. All delegate callbacks arrive on main.
+// UI-side connection to gctd. All delegate callbacks arrive on main.
 
 import Foundation
 import Common

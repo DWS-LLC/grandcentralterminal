@@ -97,7 +97,7 @@ final class Pane {
         env.removeValue(forKey: "NO_COLOR")
         env["TERM"] = "xterm-256color"
         env["COLORTERM"] = "truecolor"
-        env["TERM_PROGRAM"] = "tmuxInfiniteCanvas"
+        env["TERM_PROGRAM"] = "GrandCentralTerminal"
         // GUI-launched daemons inherit launchd's sparse env: no locale,
         // which degrades htop et al. to ASCII/monochrome output.
         if env["LANG"] == nil || env["LANG"]?.hasSuffix("UTF-8") != true {

@@ -1,14 +1,14 @@
-// canvasd — headless daemon owning pane PTYs.
+// gctd — headless daemon owning pane PTYs.
 
 import Foundation
 import Common
 
 func log(_ s: String) {
-    FileHandle.standardError.write(Data("[canvasd] \(s)\n".utf8))
+    FileHandle.standardError.write(Data("[gctd] \(s)\n".utf8))
 }
 
 let supportDir = (NSHomeDirectory() as NSString)
-    .appendingPathComponent("Library/Application Support/tmuxInfiniteCanvas")
+    .appendingPathComponent("Library/Application Support/Grand Central Terminal")
 let sockPath = supportDir + "/daemon.sock"
 let statePath = supportDir + "/state.json"
 let pidPath = supportDir + "/daemon.pid"
@@ -55,6 +55,18 @@ if let data = FileManager.default.contents(atPath: pidPath),
 }
 try? Data("\(ProcessInfo.processInfo.processIdentifier)\n".utf8)
     .write(to: URL(fileURLWithPath: pidPath), options: .atomic)
+
+// One-time migration from the pre-rename support dir, so an existing pane
+// layout survives the move to Application Support/Grand Central Terminal.
+let fm = FileManager.default
+let legacyDir = (NSHomeDirectory() as NSString)
+    .appendingPathComponent("Library/Application Support/tmuxInfiniteCanvas")
+if !fm.fileExists(atPath: statePath),
+   fm.fileExists(atPath: legacyDir + "/state.json") {
+    try? fm.createDirectory(atPath: supportDir, withIntermediateDirectories: true)
+    try? fm.copyItem(atPath: legacyDir + "/state.json", toPath: statePath)
+    log("migrated pane state from \(legacyDir)")
+}
 
 let state = StateStore(path: statePath)
 let server = Server(state: state, sockPath: sockPath)

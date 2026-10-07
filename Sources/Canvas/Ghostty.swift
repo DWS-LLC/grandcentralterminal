@@ -88,9 +88,9 @@ final class GhosttyApp: @unchecked Sendable {
     // Default config file: canvas look. Loaded before the user's config so
     // ~/.config/ghostty/config still wins on every key.
     private static func baseConfigPath() -> String {
-        let path = NSTemporaryDirectory() + "canvas-ghostty-config"
+        let path = NSTemporaryDirectory() + "gct-ghostty-config"
         let cfg = """
-        # tmuxInfiniteCanvas defaults
+        # Grand Central Terminal defaults
         background = #000000
         foreground = #c8c8c8
         font-family = Menlo

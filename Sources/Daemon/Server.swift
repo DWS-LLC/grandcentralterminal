@@ -106,7 +106,10 @@ final class Server {
             lock.unlock()
         }
 
-        guard remote.conn.send(tag: .welcome, json: welcomePayload()) else { return }
+        // Don't bail if the client is already gone (e.g. `stop` sends
+        // killDaemon and exits before we write): fall through to the read
+        // loop so a queued frame still lands instead of being dropped.
+        _ = remote.conn.send(tag: .welcome, json: welcomePayload())
         remote.conn.readLoop { [weak self] frame in
             self?.handle(remote, frame)
         }

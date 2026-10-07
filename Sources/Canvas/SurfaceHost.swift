@@ -15,7 +15,7 @@ final class SurfaceHost: @unchecked Sendable {
     private let lock = NSLock()
     // Serial queue contract: ghostty_surface_write_output must be
     // serialized per surface. All feeds go through here.
-    private let feedQueue = DispatchQueue(label: "canvas.surface.feed")
+    private let feedQueue = DispatchQueue(label: "gct.surface.feed")
 
     init(paneID: PaneID, hostView: NSView, scale: Double, app: UnsafeMutableRawPointer?,
          delegate: any GhosttyAppDelegate) {

@@ -5,7 +5,7 @@ let manifestPath = #filePath
 let root = String(manifestPath[..<manifestPath.firstRange(of: "/Package.swift")!.lowerBound])
 
 let package = Package(
-    name: "tmuxInfiniteCanvas",
+    name: "GrandCentralTerminal",
     platforms: [.macOS(.v14)],
     targets: [
         // C module over libghostty's embedding API.
@@ -34,14 +34,14 @@ let package = Package(
 
         // Headless daemon that owns PTYs, panes, and persistence.
         .executableTarget(
-            name: "canvasd",
+            name: "gctd",
             dependencies: ["Common", "ProcInfo"],
             path: "Sources/Daemon"
         ),
 
         // The infinite-canvas terminal app.
         .executableTarget(
-            name: "Canvas",
+            name: "GrandCentralTerminal",
             dependencies: [
                 "Common", "CGhostty",
                 .byName(name: "ProcInfo"),

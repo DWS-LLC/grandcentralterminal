@@ -44,7 +44,7 @@ extension CanvasView: CanvasConnDelegate {
         }
     }
 
-    // Spawn canvasd if it isn't already listening.
+    // Spawn gctd if it isn't already listening.
     static func ensureDaemon() {
         let probe = connectUnixSocket(CanvasPaths.sockPath)
         if probe >= 0 {
@@ -53,7 +53,7 @@ extension CanvasView: CanvasConnDelegate {
         }
         let bin = CanvasPaths.daemonPath
         guard FileManager.default.isExecutableFile(atPath: bin) else {
-            NSLog("[canvas] daemon binary missing at \(bin)")
+            NSLog("[gct] daemon binary missing at \(bin)")
             return
         }
         let p = Process()

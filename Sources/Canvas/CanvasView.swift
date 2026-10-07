@@ -511,7 +511,7 @@ extension PaneView.ResizeZone {
 
 enum CanvasPaths {
     static let supportDir = (NSHomeDirectory() as NSString)
-        .appendingPathComponent("Library/Application Support/tmuxInfiniteCanvas")
+        .appendingPathComponent("Library/Application Support/Grand Central Terminal")
     static let sockPath = supportDir + "/daemon.sock"
-    static let daemonPath = supportDir + "/bin/canvasd"
+    static let daemonPath = supportDir + "/bin/gctd"
 }

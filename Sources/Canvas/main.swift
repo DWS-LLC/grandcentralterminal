@@ -1,4 +1,4 @@
-// Canvas — infinite canvas terminal app entry point.
+// Grand Central Terminal — infinite-canvas terminal app entry point.
 
 import AppKit
 import Common
@@ -22,7 +22,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             styleMask: [.borderless, .resizable, .miniaturizable],
             backing: .buffered,
             defer: false)
-        win.title = "Canvas"
+        win.title = "Grand Central Terminal"
         win.backgroundColor = NSColor(white: 0.03, alpha: 1)
         win.isOpaque = true
         win.level = .normal
@@ -55,7 +55,7 @@ let appMenuItem = NSMenuItem()
 menu.addItem(appMenuItem)
 let appMenu = NSMenu()
 appMenu.addItem(NSMenuItem(
-    title: "Quit Canvas", action: #selector(NSApplication.terminate(_:)),
+    title: "Quit Grand Central Terminal", action: #selector(NSApplication.terminate(_:)),
     keyEquivalent: "q"))
 appMenuItem.submenu = appMenu
 app.mainMenu = menu

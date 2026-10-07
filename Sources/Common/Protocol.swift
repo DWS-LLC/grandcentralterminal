@@ -1,4 +1,4 @@
-// Shared wire protocol between canvasd (daemon) and the canvas app.
+// Shared wire protocol between gctd (daemon) and the terminal app.
 //
 // Framing: 4-byte big-endian length, then payload. Payload starts with a
 // one-byte MsgTag. Control messages are UTF-8 JSON; data messages carry a

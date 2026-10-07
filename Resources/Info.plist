@@ -3,11 +3,13 @@
 <plist version="1.0">
 <dict>
     <key>CFBundleExecutable</key>
-    <string>Canvas</string>
+    <string>GrandCentralTerminal</string>
     <key>CFBundleIdentifier</key>
-    <string>dev.dubey.canvas</string>
+    <string>dev.dubey.grandcentralterminal</string>
     <key>CFBundleName</key>
-    <string>Canvas</string>
+    <string>Grand Central Terminal</string>
+    <key>CFBundleDisplayName</key>
+    <string>Grand Central Terminal</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleVersion</key>

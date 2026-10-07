@@ -1,4 +1,4 @@
-# tmuxInfiniteCanvas
+# Grand Central Terminal
 
 A terminal multiplexer that behaves like tmux but lives on an **infinite
 canvas**: no splits, no tabs — panes are free-floating windows you place,
@@ -25,8 +25,8 @@ and everything reattaches, scrollback replayed.
     `⌘V` pastes
 - Titlebars track the shell's cwd (`local – Terminal – /path`) and honor
   program-set titles + OSC 7 (covers ssh panes).
-- Daemon (`canvasd`) persists pane layout to
-  `~/Library/Application Support/tmuxInfiniteCanvas/state.json`; on daemon
+- Daemon (`gctd`) persists pane layout to
+  `~/Library/Application Support/Grand Central Terminal/state.json`; on daemon
   restart it respawns shells in their recorded cwd/rects. Scrollback lives
   with the daemon (8 MiB ring per pane) and is replayed on attach.
 
@@ -36,10 +36,10 @@ and everything reattaches, scrollback replayed.
 vendor/ghostty/          ghostty @ a4aacd91 + patches/libghostty-external-io.patch
 patches/                 the external-IO delta (see patches/README.md)
 Sources/Common/          wire protocol + framed unix-socket connection
-Sources/Daemon/          canvasd: PTYs, panes, scrollback, persistence
+Sources/Daemon/          gctd: PTYs, panes, scrollback, persistence
 Sources/PtyExec/         setsid + TIOCSCTTY + exec helper (per-pane child)
 Sources/Canvas/          the AppKit app: camera, panes, switcher, input
-scripts/build.sh         builds everything into build/Canvas.app
+scripts/build.sh         builds everything into build/Grand Central Terminal.app
 scripts/fetch-ghostty.sh clones + patches the vendored ghostty
 ```
 
@@ -48,7 +48,7 @@ scripts/fetch-ghostty.sh clones + patches the vendored ghostty
 ```sh
 scripts/fetch-ghostty.sh     # once: clone ghostty at the pinned commit + patch
 scripts/build.sh             # libghostty (zig 0.16, incremental) + daemon + app
-open build/Canvas.app
+open "build/Grand Central Terminal.app"
 ```
 
 Prereqs: Xcode (macOS SDK), [zig 0.16.0](https://ziglang.org/download/) on
@@ -56,14 +56,14 @@ Prereqs: Xcode (macOS SDK), [zig 0.16.0](https://ziglang.org/download/) on
 (`xcodebuild -downloadComponent MetalToolchain`, one-time).
 
 `scripts/build.sh` stages the daemon at
-`~/Library/Application Support/tmuxInfiniteCanvas/bin/canvasd`; the app
+`~/Library/Application Support/Grand Central Terminal/bin/gctd`; the app
 auto-starts it if it isn't running.
 
 ## Daemon
 
 ```sh
-canvasd status     # list panes
-canvasd stop       # kill daemon + panes
+gctd status     # list panes
+gctd stop       # kill daemon + panes
 ```
 
 Each pane's shell runs via `ptyexec`, which takes a fresh session, claims
@@ -89,7 +89,7 @@ arrive via `resize_callback` and go to the daemon as `TIOCSWINSZ`. See
 
 - No IME composition (dead keys/accents are limited); everything else types
   fine through ghostty's key encoder.
-- The daemon's scrollback ring is memory-only: `canvasd stop` loses history
+- The daemon's scrollback ring is memory-only: `gctd stop` loses history
   (same as killing a tmux server).
 - Remote/ssh panes are not wired into the UI yet — the daemon supports a
   `command` per pane, but the app only spawns local shells.
