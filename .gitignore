@@ -1,0 +1,5 @@
+vendor/
+lib/
+.build/
+build/
+Sources/CGhostty/ghostty.h

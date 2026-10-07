@@ -1,0 +1,5 @@
+module CGhostty {
+    header "shim.h"
+    link "ghostty"
+    requires c11
+}
