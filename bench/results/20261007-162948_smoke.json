@@ -1,0 +1,103 @@
+{
+ "suite": "smoke",
+ "started": "2026-10-07T20:29:28.722379+00:00",
+ "scenarios": {
+  "create_close_storm": {
+   "created": 20,
+   "seconds": 0.011025190353393555,
+   "panes_per_sec": 1814.0276366152716,
+   "status": "ok",
+   "wall_seconds": 0.01754903793334961,
+   "resources": {
+    "samples": 0
+   }
+  },
+  "many_idle": {
+   "panes": 20,
+   "leaked_panes": 0,
+   "status": "ok",
+   "wall_seconds": 7.015862941741943,
+   "resources": {
+    "samples": 32,
+    "rss_mb": {
+     "p50": 37.76512,
+     "p95": 38.076416,
+     "max": 38.076416
+    },
+    "cpu_pct": {
+     "p50": 0.0,
+     "p95": 0.0,
+     "max": 0.0
+    },
+    "fds": {
+     "p50": 90,
+     "p95": 90,
+     "max": 90
+    },
+    "threads": {
+     "p50": 69,
+     "p95": 88,
+     "max": 88
+    }
+   }
+  },
+  "exit_reap": {
+   "panes": 10,
+   "leaked_panes": 0,
+   "status": "ok",
+   "wall_seconds": 6.011430263519287,
+   "resources": {
+    "samples": 61,
+    "rss_mb": {
+     "p50": 10.862592,
+     "p95": 38.076416,
+     "max": 38.076416
+    },
+    "cpu_pct": {
+     "p50": 0.0,
+     "p95": 0.0,
+     "max": 0.0
+    },
+    "fds": {
+     "p50": 10,
+     "p95": 90,
+     "max": 90
+    },
+    "threads": {
+     "p50": 27,
+     "p95": 88,
+     "max": 88
+    }
+   }
+  }
+ },
+ "total": {
+  "samples": 69,
+  "rss_mb": {
+   "p50": 10.862592,
+   "p95": 38.076416,
+   "max": 38.076416
+  },
+  "cpu_pct": {
+   "p50": 0.0,
+   "p95": 0.0,
+   "max": 0.0
+  },
+  "fds": {
+   "p50": 10,
+   "p95": 90,
+   "max": 90
+  },
+  "threads": {
+   "p50": 27,
+   "p95": 88,
+   "max": 88
+  }
+ },
+ "sink": {
+  "mb": 0.0,
+  "frames": 0
+ },
+ "finished": "2026-10-07T20:29:48.324781+00:00",
+ "failures": 0
+}

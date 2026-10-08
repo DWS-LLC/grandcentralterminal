@@ -78,6 +78,21 @@ final class CanvasView: NSView {
         conn = CanvasConn(sockPath: CanvasPaths.sockPath)
         conn?.delegate = self
         conn?.start()
+        // Window state drives occlusion: miniaturize / un-hide changes
+        // which renderers need to run. Camera moves call refresh via
+        // applyCamera; creation refreshes in makePaneView.
+        NotificationCenter.default.addObserver(
+            forName: NSWindow.didMiniaturizeNotification, object: nil,
+            queue: .main) { [weak self] _ in self?.refreshOcclusion() }
+        NotificationCenter.default.addObserver(
+            forName: NSWindow.didDeminiaturizeNotification, object: nil,
+            queue: .main) { [weak self] _ in self?.refreshOcclusion() }
+        NotificationCenter.default.addObserver(
+            forName: NSApplication.didHideNotification, object: nil,
+            queue: .main) { [weak self] _ in self?.refreshOcclusion() }
+        NotificationCenter.default.addObserver(
+            forName: NSApplication.didUnhideNotification, object: nil,
+            queue: .main) { [weak self] _ in self?.refreshOcclusion() }
     }
 
     // Recompute the theme from config + ghostty and apply it everywhere.
@@ -114,6 +129,29 @@ final class CanvasView: NSView {
         CATransaction.setDisableActions(true)
         worldView.layer?.sublayerTransform = camera.transform()
         CATransaction.commit()
+        refreshOcclusion()
+    }
+
+    // Renderer pause per pane: ghostty stops a surface's DisplayLink
+    // while occluded (VT keeps flowing, presents stop). Sources:
+    // camera frustum (off-screen panes), miniaturized/hidden window.
+    // Cheap rect test, idempotent inside ghostty (visible==visible
+    // short-circuits). Called on every camera commit + window state
+    // change; panes created visible by default (makePaneView refreshes).
+    func refreshOcclusion() {
+        assert(Thread.isMainThread)
+        let windowVisible = !(window?.isMiniaturized ?? false)
+        let viewBounds = bounds
+        for pane in panes.values {
+            guard let host = pane.host else { continue }
+            // World frame -> screen: camera transform, then view bounds.
+            let sp = camera.worldToScreen(pane.frame.origin)
+            let ss = pane.frame.size.applying(
+                CGAffineTransform(scaleX: camera.scale, y: camera.scale))
+            let screenRect = NSRect(origin: sp, size: ss)
+            let visible = windowVisible && viewBounds.intersects(screenRect)
+            host.setOcclusion(visible)
+        }
     }
 
     private func viewPoint(_ event: NSEvent) -> CGPoint {
@@ -204,10 +242,9 @@ final class CanvasView: NSView {
                               width: pane.frame.width,
                               height: pane.frame.height)
             if !GCTConfig.current.allowWindowOverlap {
-                rect = Overlap.resolve(rect,
-                                       obstacles: panes.values
-                                           .filter { $0.id != id }
-                                           .map(\.frame))
+                let clean = Overlap.resolve(NSRectOverlap.from(rect),
+                    obstacles: NSRectOverlap.frames(of: panes, except: id))
+                rect = NSRectOverlap.to(clean)
             }
             pane.setRect(rect, notifySurface: false)
         case .resize(let id, let zone, let rect0):
@@ -226,15 +263,14 @@ final class CanvasView: NSView {
             }
             if zone.resizesN { rect.size.height = max(minH, world.y - rect0.minY) }
             if !GCTConfig.current.allowWindowOverlap {
-                rect = Overlap.clampResize(rect, original: rect0,
-                                           edges: Overlap.Edges(
-                                               w: zone.resizesW,
-                                               e: zone.resizesE,
-                                               s: zone.resizesS,
-                                               n: zone.resizesN),
-                                           obstacles: panes.values
-                                               .filter { $0.id != id }
-                                               .map(\.frame))
+                let clean = Overlap.clampResize(
+                    NSRectOverlap.from(rect),
+                    original: NSRectOverlap.from(rect0),
+                    edges: Overlap.Edges(
+                        w: zone.resizesW, e: zone.resizesE,
+                        s: zone.resizesS, n: zone.resizesN),
+                    obstacles: NSRectOverlap.frames(of: panes, except: id))
+                rect = NSRectOverlap.to(clean)
             }
             pane.setRect(rect, notifySurface: true)
         case .surfaceClick, .none:
@@ -251,7 +287,8 @@ final class CanvasView: NSView {
             pane.host?.mouseButton(GHOSTTY_MOUSE_RELEASE, button, mods)
         }
         if case .move(let id, _) = drag, let pane = panes[id] {
-            conn?.movePane(MovePane(id: id, rect: pane.meta.rect))
+            conn?.movePane(MovePane(id: id, rect: pane.meta.rect,
+                            allowOverlap: GCTConfig.current.allowWindowOverlap))
         }
         drag = .none
     }
@@ -683,8 +720,9 @@ final class CanvasView: NSView {
             case .above: (.vertical, 1)
             case .below: (.vertical, -1)
             }
-            rect = Overlap.resolve(rect, direction: sign, axis: axis,
-                                   obstacles: panes.values.map(\.frame))
+            let clean = Overlap.resolve(NSRectOverlap.from(rect), direction: sign,
+                                          axis: axis, obstacles: panes.values.map { NSRectOverlap.from($0.frame) })
+            rect = NSRectOverlap.to(clean)
         }
         return rect
     }
@@ -755,6 +793,7 @@ final class CanvasView: NSView {
         // One layout pass later, push the real pixel size.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
             self?.panes[meta.id]?.syncSurfaceSize()
+            self?.refreshOcclusion()
         }
     }
 
@@ -780,7 +819,8 @@ final class CanvasView: NSView {
         pane.setRect(rect, notifySurface: false)
         conn?.movePane(MovePane(id: pane.id,
                                 rect: Rect(x: rect.minX, y: rect.minY,
-                                           w: rect.width, h: rect.height)))
+                                           w: rect.width, h: rect.height),
+                                allowOverlap: GCTConfig.current.allowWindowOverlap))
     }
 
     // Loaded layouts can overlap (saved while overlap was allowed): push
@@ -793,13 +833,16 @@ final class CanvasView: NSView {
             var rect = pane.frame
             if !settled.isEmpty {
                 let before = rect
-                rect = Overlap.resolve(rect, obstacles: settled)
+                let clean = Overlap.resolve(NSRectOverlap.from(rect),
+                    obstacles: settled.map { NSRectOverlap.from($0) })
+                rect = NSRectOverlap.to(clean)
                 if rect != before {
                     pane.setRect(rect, notifySurface: false)
                     conn?.movePane(MovePane(
                         id: id,
                         rect: Rect(x: rect.minX, y: rect.minY,
-                                   w: rect.width, h: rect.height)))
+                                   w: rect.width, h: rect.height),
+                        allowOverlap: GCTConfig.current.allowWindowOverlap))
                 }
             }
             settled.append(rect)
@@ -857,27 +900,34 @@ final class CanvasView: NSView {
             case .above: (.vertical, 1)
             case .below: (.vertical, -1)
             }
-            let frames = others.map(\.frame)
-            let pushed = Overlap.pushForResize(rect, obstacles: frames,
+            let frames = others.map { NSRectOverlap.from($0.frame) }
+            let pushed = Overlap.pushForResize(NSRectOverlap.from(rect),
+                                               obstacles: frames,
                                                axis: axis, sign: sign)
-            for (pane, frame) in zip(others, pushed) where frame != pane.frame {
+            for (pane, pushedRect) in zip(others, pushed) {
+                let frame = NSRectOverlap.to(pushedRect)
+                guard frame != pane.frame else { continue }
                 pane.setRect(frame, notifySurface: false)
                 conn?.movePane(MovePane(id: pane.id, rect: Rect(
                     x: frame.minX, y: frame.minY, w: frame.width,
-                    h: frame.height)))
+                    h: frame.height),
+                    allowOverlap: GCTConfig.current.allowWindowOverlap))
             }
         } else if !cfg.allowWindowOverlap {
-            rect = Overlap.clampResize(
-                rect, original: f,
+            let clean = Overlap.clampResize(
+                NSRectOverlap.from(rect),
+                original: NSRectOverlap.from(f),
                 edges: Overlap.Edges(
                     w: edge == .left, e: edge == .right,
                     s: edge == .below, n: edge == .above),
-                obstacles: others.map(\.frame))
+                obstacles: others.map { NSRectOverlap.from($0.frame) })
+            rect = NSRectOverlap.to(clean)
             guard rect != f else { return }
         }
         pane.setRect(rect, notifySurface: true)
         conn?.movePane(MovePane(id: id, rect: Rect(
-            x: rect.minX, y: rect.minY, w: rect.width, h: rect.height)))
+            x: rect.minX, y: rect.minY, w: rect.width, h: rect.height),
+            allowOverlap: GCTConfig.current.allowWindowOverlap))
     }
 
     // MARK: Camera actions
@@ -1037,6 +1087,22 @@ extension PaneView.ResizeZone {
     }
     var resizesN: Bool {
         switch self { case .n, .nw, .ne: return true; default: return false }
+    }
+}
+
+
+// MARK: NSRect bridge over Common.Overlap (pure Rect math, shared with gctd).
+// Local drags/resizes resolve live under the cursor; daemon moves arrive
+// pre-resolved. Both read the same geometry.
+enum NSRectOverlap {
+    static func from(_ r: NSRect) -> Rect {
+        Rect(x: r.minX, y: r.minY, w: r.width, h: r.height)
+    }
+    static func to(_ r: Rect) -> NSRect {
+        NSRect(x: r.x, y: r.y, width: r.w, height: r.h)
+    }
+    static func frames(of panes: [PaneID: PaneView], except id: PaneID) -> [Rect] {
+        panes.values.filter { $0.id != id }.map { from($0.frame) }
     }
 }
 

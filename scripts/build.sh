@@ -31,7 +31,6 @@ echo "== swift build =="
 swift build -c release
 BIN=".build/release"
 
-# 4. App bundle
 APP="build/Grand Central Terminal.app"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
@@ -39,6 +38,7 @@ cp Resources/Info.plist "$APP/Contents/Info.plist"
 cp "$BIN/GrandCentralTerminal" "$APP/Contents/MacOS/"
 cp "$BIN/gctd" "$APP/Contents/MacOS/"
 cp "$BIN/ptyexec" "$APP/Contents/MacOS/"
+cp Resources/AppIcon.icns "$APP/Contents/Resources/"
 echo "built $APP"
 
 # 5. Stage daemon where the app expects it.

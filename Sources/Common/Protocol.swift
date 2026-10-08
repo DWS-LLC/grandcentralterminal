@@ -118,7 +118,20 @@ public struct RenamePane: Codable, Sendable {
 public struct MovePane: Codable, Sendable {
     public var id: PaneID
     public var rect: Rect
-    public init(id: PaneID, rect: Rect) { self.id = id; self.rect = rect }
+    // Layout policy: false (default) = daemon resolves against the store
+    // so the broadcast stream is overlap-free. True = place exactly.
+    // Decodes missing (old clients, scripts) as false.
+    public var allowOverlap: Bool
+    public init(id: PaneID, rect: Rect, allowOverlap: Bool = false) {
+        self.id = id; self.rect = rect; self.allowOverlap = allowOverlap
+    }
+    enum CodingKeys: String, CodingKey { case id, rect, allowOverlap }
+    public init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(PaneID.self, forKey: .id)
+        rect = try c.decode(Rect.self, forKey: .rect)
+        allowOverlap = try c.decodeIfPresent(Bool.self, forKey: .allowOverlap) ?? false
+    }
 }
 
 public struct PaneCwd: Codable, Sendable {

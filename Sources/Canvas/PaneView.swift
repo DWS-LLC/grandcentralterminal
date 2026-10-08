@@ -49,7 +49,17 @@ final class PaneView: NSView {
         self.host = host
     }
 
+    // Daemon rects arrive pre-resolved (the daemon arbitrates layout):
+    // apply as-is. The != guard breaks the echo loop (our own setRect ->
+    // movePane -> broadcast -> update). Must run on main (frame mutation).
+    // INVARIANT: meta.rect == frame, always.
     func update(meta: PaneMeta) {
+        let r = NSRect(x: meta.rect.x, y: meta.rect.y,
+                       width: meta.rect.w, height: meta.rect.h)
+        if r != frame {
+            assert(Thread.isMainThread, "update(meta:) off main")
+            setRect(r, notifySurface: true)
+        }
         self.meta = meta
         layoutChrome()
         applyChrome()

@@ -8,6 +8,10 @@ import Common
 final class Remote: @unchecked Sendable {
     let conn: Conn
     var subs = Set<PaneID>()
+    // Set when a send fails (slow/dead client): skips future fan-out until
+    // the client drains or disconnects. Prevents one stalled subscriber
+    // from wedging every pane reader on the server lock.
+    var wedged = false
     init(conn: Conn) { self.conn = conn }
 }
 
@@ -168,10 +172,26 @@ final class Server {
 
         case .movePane:
             guard let req: MovePane = frame.decode() else { return }
-            lock.lock(); defer { lock.unlock() }
-            guard let pane = panes[req.id] else { return }
-            pane.meta.rect = req.rect
-            scheduleSaveLocked()
+            lock.lock()
+            guard let pane = panes[req.id] else { lock.unlock(); return }
+            // Arbiter: resolve against the TRUE store before broadcast,
+            // so the stream itself is overlap-free (clients apply as-is).
+            // Policy comes from the client (allowOverlap flag); default
+            // disallow preserves current behavior for old clients.
+            var rect = req.rect
+            if !req.allowOverlap {
+                let obstacles = panes.values
+                    .filter { $0.id != req.id }.map(\.meta.rect)
+                rect = Overlap.resolve(rect, obstacles: obstacles)
+            }
+            pane.meta.rect = rect
+            var meta = pane.meta
+            meta.rect = rect
+            let targets = remotes
+            let metas = panes.values.map(\.meta)
+            lock.unlock()
+            for r in targets { _ = r.conn.send(tag: .paneMeta, json: meta) }
+            state.scheduleSave(metas)
 
         case .paneCwd:
             // OSC 7 from remote panes; local panes are polled in-process.
@@ -238,9 +258,20 @@ final class Server {
     }
 
     private func fanOut(pane: Pane, data: Data) {
-        lock.lock(); defer { lock.unlock() }
-        for r in remotes where r.subs.contains(pane.id) {
-            _ = r.conn.sendData(tag: .outputPane, paneID: pane.id, data: data)
+        lock.lock()
+        var targets = [Remote]()
+        for r in remotes where !r.wedged && r.subs.contains(pane.id) {
+            targets.append(r)
+        }
+        lock.unlock()
+        // Blocking socket writes OUTSIDE the server lock: a full client
+        // buffer stalls only this pane's reader, never control traffic.
+        for r in targets {
+            if !r.conn.sendData(tag: .outputPane, paneID: pane.id, data: data) {
+                lock.lock()
+                r.wedged = true
+                lock.unlock()
+            }
         }
     }
 

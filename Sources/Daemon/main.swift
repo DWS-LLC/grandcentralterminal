@@ -9,9 +9,12 @@ func log(_ s: String) {
 
 let supportDir = (NSHomeDirectory() as NSString)
     .appendingPathComponent("Library/Application Support/Grand Central Terminal")
-let sockPath = supportDir + "/daemon.sock"
-let statePath = supportDir + "/state.json"
-let pidPath = supportDir + "/daemon.pid"
+// Test/bench isolation: point a daemon at scratch paths without touching the
+// live instance. Unset (normal use) = current defaults.
+let env = ProcessInfo.processInfo.environment
+let sockPath = env["GCT_SOCK"] ?? supportDir + "/daemon.sock"
+let statePath = env["GCT_STATE"] ?? supportDir + "/state.json"
+let pidPath = env["GCT_PID"] ?? supportDir + "/daemon.pid"
 
 let args = CommandLine.arguments.dropFirst()
 

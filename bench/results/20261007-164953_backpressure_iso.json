@@ -1,0 +1,105 @@
+{
+ "suite": "backpressure",
+ "started": "2026-10-07T20:49:20.425537+00:00",
+ "scenarios": {
+  "slow_subscriber": {
+   "status": "FAIL",
+   "error": "OSError: timeout waiting for frame",
+   "daemon_alive": true,
+   "daemon_log_tail": "[gctd] migrated pane state from /Users/dubey/Library/Application Support/tmuxInfiniteCanvas\n[gctd] listening on /var/folders/88/h6frzgn55c5fzz36dt2sp97c0000gn/T/gctbench-btjnnunq/daemon.sock\n[conn] write fd=4 errno=32\n[conn] close fd=4\n",
+   "wall_seconds": 30.03851318359375,
+   "resources": {
+    "samples": 112,
+    "rss_mb": {
+     "p50": 283.77088,
+     "p95": 1149.41952,
+     "max": 1239.138304
+    },
+    "cpu_pct": {
+     "p50": 0.0,
+     "p95": 0.0,
+     "max": 0.0
+    },
+    "fds": {
+     "p50": 12,
+     "p95": 12,
+     "max": 12
+    },
+    "threads": {
+     "p50": 11,
+     "p95": 15,
+     "max": 15
+    },
+    "tree_rss_mb": {
+     "p50": 290.422784,
+     "p95": 1156.071424,
+     "max": 1245.790208
+    },
+    "tree_cpu_pct": {
+     "p50": 0.0,
+     "p95": 0.0,
+     "max": 0.0
+    },
+    "tree_fds": {
+     "p50": 27,
+     "p95": 27,
+     "max": 27
+    },
+    "tree_threads": {
+     "p50": 16,
+     "p95": 20,
+     "max": 20
+    }
+   }
+  }
+ },
+ "total": {
+  "samples": 120,
+  "rss_mb": {
+   "p50": 355.254272,
+   "p95": 1293.76256,
+   "max": 1378.435072
+  },
+  "cpu_pct": {
+   "p50": 0.0,
+   "p95": 0.0,
+   "max": 0.0
+  },
+  "fds": {
+   "p50": 12,
+   "p95": 12,
+   "max": 12
+  },
+  "threads": {
+   "p50": 11,
+   "p95": 15,
+   "max": 15
+  },
+  "tree_rss_mb": {
+   "p50": 361.906176,
+   "p95": 1300.414464,
+   "max": 1385.086976
+  },
+  "tree_cpu_pct": {
+   "p50": 0.0,
+   "p95": 0.0,
+   "max": 0.0
+  },
+  "tree_fds": {
+   "p50": 27,
+   "p95": 27,
+   "max": 27
+  },
+  "tree_threads": {
+   "p50": 16,
+   "p95": 20,
+   "max": 20
+  }
+ },
+ "sink": {
+  "mb": 0.0,
+  "frames": 0
+ },
+ "finished": "2026-10-07T20:49:52.986817+00:00",
+ "failures": 1
+}

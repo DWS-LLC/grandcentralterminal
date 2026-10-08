@@ -101,9 +101,15 @@ public final class Conn: @unchecked Sendable {
         return writeFrame(payload)
     }
 
+    // Blocking write with a short timeout: a wedged peer stalls the caller
+    // briefly, then fails so the server can mark it and move on — instead
+    // of wedging every pane reader on a full socket buffer forever.
     private func writeFrame(_ payload: Data) -> Bool {
         if closed { return false }
         writeLock.lock(); defer { writeLock.unlock() }
+        var tv = timeval(tv_sec: 0, tv_usec: 200_000)  // 200ms per frame
+        setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv,
+                   socklen_t(MemoryLayout<timeval>.size))
         var hdr = UInt32(payload.count).bigEndian
         var out = Data(capacity: 4 + payload.count)
         withUnsafeBytes(of: &hdr) { out.append(contentsOf: $0) }
@@ -116,6 +122,7 @@ public final class Conn: @unchecked Sendable {
                     if errno == EINTR { continue }
                     return false
                 }
+                if n == 0 { return false }
                 off += n
             }
             return true

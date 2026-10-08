@@ -6,6 +6,8 @@
     <string>GrandCentralTerminal</string>
     <key>CFBundleIdentifier</key>
     <string>dev.dubey.grandcentralterminal</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
     <key>CFBundleName</key>
     <string>Grand Central Terminal</string>
     <key>CFBundleDisplayName</key>
@@ -13,7 +15,7 @@
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleVersion</key>
-    <string>0.1</string>
+    <string>0.2</string>
     <key>CFBundleShortVersionString</key>
     <string>0.1</string>
     <key>LSMinimumSystemVersion</key>

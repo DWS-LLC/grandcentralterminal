@@ -105,11 +105,20 @@ final class SurfaceHost: @unchecked Sendable {
                 Double(size.cell_width_px) / scale, Double(size.cell_height_px) / scale)
     }
 
-    func setFocus(_ focused: Bool) {
+    // Renderer pause: ghostty stops the surface's DisplayLink while
+    // occluded (zero presents, VT keeps flowing). Drive from canvas
+    // visibility: off-screen panes, miniaturized/hidden window.
+    func setOcclusion(_ visible: Bool) {
         assert(Thread.isMainThread)
         guard let s = surfaceIfOpen() else { return }
-        ghostty_surface_set_focus(s, focused)
+        ghostty_surface_set_occlusion(s, visible)
     }
+
+     func setFocus(_ focused: Bool) {
+         assert(Thread.isMainThread)
+         guard let s = surfaceIfOpen() else { return }
+         ghostty_surface_set_focus(s, focused)
+     }
 
     func key(_ event: ghostty_input_key_s) -> Bool {
         assert(Thread.isMainThread)
