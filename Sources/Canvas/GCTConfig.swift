@@ -245,6 +245,12 @@ struct GCTConfig {
     var titlebarText: String?
     var titlebarFont: String?
     var titlebarFontSize: CGFloat = 12
+    // Pane chrome: border on the left/right/bottom edges in points (the
+    // top edge hides behind the titlebar itself; same color as the
+    // titlebar), plus the drop shadow. shadow-opacity 0 turns it off.
+    var titlebarBorderWidth: CGFloat = 4
+    var shadowOpacity: Float = 0.55
+    var shadowRadius: CGFloat = 12
     var keybinds: [GCTAction: GCTKeybind] = GCTConfig.defaultKeybinds
     // Panes are kept from overlapping: creation, moves, and resizes all
     // resolve collisions.
@@ -332,6 +338,15 @@ struct GCTConfig {
         }
         if let s = tb["font-size"], let n = Double(s), (6.0...48.0).contains(n) {
             cfg.titlebarFontSize = CGFloat(n)
+        }
+        if let s = tb["border-width"], let n = Double(s), (0.0...32.0).contains(n) {
+            cfg.titlebarBorderWidth = CGFloat(n)
+        }
+        if let s = tb["shadow-opacity"], let n = Double(s), (0.0...1.0).contains(n) {
+            cfg.shadowOpacity = Float(n)
+        }
+        if let s = tb["shadow-radius"], let n = Double(s), (0.0...64.0).contains(n) {
+            cfg.shadowRadius = CGFloat(n)
         }
 
         var binds = defaultKeybinds
@@ -421,12 +436,22 @@ struct GCTConfig {
     light = "#ffffff"
 
     [titlebar]
-    # Pane titlebar colors. Hex like "#2b2b2b", or "default" for the usual grey.
+    # Pane titlebar colors. RGBA hex like "#2b2b2b" or "#2b2b2bcc", or
+    # "default" for the usual grey. The left/right/bottom border uses the
+    # same color as the titlebar background.
     background = "default"
     text = "default"
     # Title text font: family name (e.g. "SF Mono") and size in points.
     font = "default"
     font-size = 12
+    # Border on the left/right/bottom edges in points (the top edge is the
+    # titlebar itself). Wider borders grab edges/corners for resizing more
+    # easily, even zoomed out.
+    border-width = 4
+    # Drop shadow: opacity 0 turns it off, radius blurs it. Defaults match
+    # the current look.
+    shadow-opacity = 0.55
+    shadow-radius = 12
 
     [keybinds]
     # App shortcuts. Modifiers cmd, ctrl, alt, shift joined with "+"; the
@@ -481,6 +506,11 @@ struct GCTTheme {
     let titlebarTextUnfocused: NSColor
     let borderFocused: NSColor
     let borderUnfocused: NSColor
+    // Left/right/bottom border width in points (top edge is the titlebar
+    // itself). Drop shadow; opacity 0 turns it off.
+    let borderWidth: CGFloat
+    let shadowOpacity: Float
+    let shadowRadius: CGFloat
     let titleFont: NSFont
 
     // Effective light/dark honoring the config's appearance setting.
@@ -535,14 +565,13 @@ struct GCTTheme {
             titlebarTextUnfocused = NSColor(white: 0.70, alpha: 1)
         }
 
-        // Pane borders: focused more salient.
-        if dark {
-            borderFocused = NSColor(white: 0.28, alpha: 1)
-            borderUnfocused = NSColor(white: 0.19, alpha: 1)
-        } else {
-            borderFocused = NSColor(white: 0.55, alpha: 1)
-            borderUnfocused = NSColor(white: 0.78, alpha: 1)
-        }
+        // Side/bottom borders: same color as the titlebar background, so
+        // the chrome reads as one frame around the terminal.
+        borderFocused = titlebarBackgroundFocused
+        borderUnfocused = titlebarBackgroundUnfocused
+        borderWidth = max(0, min(32, cfg.titlebarBorderWidth))
+        shadowOpacity = max(0, min(1, cfg.shadowOpacity))
+        shadowRadius = max(0, min(64, cfg.shadowRadius))
 
         let size = cfg.titlebarFontSize
         if let name = cfg.titlebarFont, let f = NSFont(name: name, size: size) {

@@ -28,11 +28,16 @@ final class PaneView: NSView {
 
         titlebar.wantsLayer = true
         titlebar.autoresizingMask = [.width]
+        // Square titlebar corners would poke past the pane's rounded
+        // corners; round just the top pair to match.
+        titlebar.layer?.cornerRadius = 6
+        titlebar.layer?.maskedCorners = [.layerMinXMaxYCorner, .layerMaxXMaxYCorner]
+        titlebar.layer?.masksToBounds = true
         addSubview(titlebar)
 
         titleLabel.contentsScale = NSScreen.main?.backingScaleFactor ?? 2
-        titleLabel.fontSize = 12
         titleLabel.alignmentMode = .left
+        titleLabel.truncationMode = .end
         titlebar.layer?.addSublayer(titleLabel)
 
         surfaceHostView.wantsLayer = true
@@ -91,31 +96,42 @@ final class PaneView: NSView {
     private func layoutChrome() {
         let w = bounds.width
         let h = bounds.height
+        let bw = GCTTheme.current.borderWidth
+        // Titlebar spans the full width (it hides the top border); the
+        // terminal insets for the side/bottom border.
         titlebar.frame = NSRect(x: 0, y: h - PaneView.titleBarHeight,
                                 width: w, height: PaneView.titleBarHeight)
-        surfaceHostView.frame = NSRect(x: 0, y: 0,
-                                       width: w, height: h - PaneView.titleBarHeight)
+        surfaceHostView.frame = NSRect(x: bw, y: bw,
+                                       width: max(0, w - bw * 2),
+                                       height: max(0, h - PaneView.titleBarHeight - bw))
+        // Concentric rounding: square terminal corners would poke past
+        // the pane's rounded border at wide border widths.
+        let inner: CGFloat = max(0, 6 - bw)
+        surfaceHostView.layer?.cornerRadius = inner
+        surfaceHostView.layer?.maskedCorners = [.layerMinXMinYCorner, .layerMaxXMinYCorner]
+        surfaceHostView.layer?.masksToBounds = inner > 0
 
-        // Title text vertically centered, 8pt inset.
-        let scale = NSScreen.main?.backingScaleFactor ?? 2
-        let textW = w - 16
-        let textH: CGFloat = 15
+        // Title text vertically centered, 8pt inset. Sublayer frames are
+        // in points, not pixels — no backing-scale multiplication.
+        let textH = min(PaneView.titleBarHeight - 6, GCTTheme.current.titleFont.pointSize + 3)
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        titleLabel.frame = CGRect(x: 8 * scale,
-                                  y: (PaneView.titleBarHeight * scale - textH * scale) / 2,
-                                  width: textW * scale,
-                                  height: textH * scale)
+        titleLabel.frame = CGRect(x: 8, y: (PaneView.titleBarHeight - textH) / 2,
+                                  width: max(0, w - 16), height: textH)
         CATransaction.commit()
     }
 
     // Colors + font come from GCTTheme; re-run on focus and theme changes.
     func applyChrome() {
         let t = GCTTheme.current
-        layer?.borderWidth = 1
-        layer?.borderColor = (isFocused ? t.borderFocused : t.borderUnfocused).cgColor
-        layer?.shadowOpacity = 0.55
-        layer?.shadowRadius = 12
+        layer?.borderWidth = 0
+        layer?.borderColor = nil
+        // Fill the pane behind the terminal with the titlebar color: the
+        // inset terminal leaves the side/bottom border visible.
+        layer?.backgroundColor =
+            (isFocused ? t.borderFocused : t.borderUnfocused).cgColor
+        layer?.shadowOpacity = t.shadowOpacity
+        layer?.shadowRadius = t.shadowRadius
         layer?.shadowOffset = CGSize(width: 0, height: -6)
         layer?.shadowColor = NSColor.black.cgColor
 
@@ -126,6 +142,8 @@ final class PaneView: NSView {
         titleLabel.foregroundColor =
             (isFocused ? t.titlebarTextFocused : t.titlebarTextUnfocused).cgColor
         titleLabel.font = t.titleFont
+        titleLabel.fontSize = t.titleFont.pointSize
+        layoutChrome()
     }
 
     private var titleText: String {
@@ -141,17 +159,19 @@ final class PaneView: NSView {
 
     func resizeZone(at worldPoint: CGPoint, screenTolerance t: CGFloat) -> ResizeZone? {
         let r = frame
-        let inside = worldPoint.x >= r.minX - t && worldPoint.x <= r.maxX + t
-            && worldPoint.y >= r.minY - t && worldPoint.y <= r.maxY + t
+        // grab zone so wide borders stay easy to catch zoomed out.
+        let grab = max(t, GCTTheme.current.borderWidth)
+        let inside = worldPoint.x >= r.minX - grab && worldPoint.x <= r.maxX + grab
+            && worldPoint.y >= r.minY - grab && worldPoint.y <= r.maxY + grab
         guard inside,
-              worldPoint.x <= r.minX + t || worldPoint.x >= r.maxX - t
-                  || worldPoint.y <= r.minY + t || worldPoint.y >= r.maxY - t
+              worldPoint.x <= r.minX + grab || worldPoint.x >= r.maxX - grab
+                  || worldPoint.y <= r.minY + grab || worldPoint.y >= r.maxY - grab
         else { return nil }
 
-        let nearW = abs(worldPoint.x - r.minX) <= t
-        let nearE = abs(worldPoint.x - r.maxX) <= t
-        let nearS = abs(worldPoint.y - r.minY) <= t
-        let nearN = abs(worldPoint.y - r.maxY) <= t
+        let nearW = abs(worldPoint.x - r.minX) <= grab
+        let nearE = abs(worldPoint.x - r.maxX) <= grab
+        let nearS = abs(worldPoint.y - r.minY) <= grab
+        let nearN = abs(worldPoint.y - r.maxY) <= grab
         switch (nearW, nearE, nearS, nearN) {
         case (true, false, false, true): return .nw
         case (false, true, false, true): return .ne
@@ -170,7 +190,7 @@ final class PaneView: NSView {
             && frame.contains(worldPoint)
     }
 
-    func containsWorld(_ worldPoint: CGPoint) -> Bool {
-        frame.contains(worldPoint)
+    func containsWorld(_ worldPoint: CGPoint, grab: CGFloat = 0) -> Bool {
+        frame.insetBy(dx: -grab, dy: -grab).contains(worldPoint)
     }
 }

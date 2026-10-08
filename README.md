@@ -33,8 +33,10 @@ and everything reattaches, scrollback replayed.
   - dead keys, accents, and IME composition work: keys route through the
     text input system, preedit renders inline at the cursor, commit lands
     as typed input, and composition keys (⌫, ^H) only affect the preedit
-- Titlebars track the shell's cwd (`local – Terminal – /path`) and honor
-  program-set titles + OSC 7 (covers ssh panes).
+ - Panes carry a titlebar-color border on the left/right/bottom edges
+   (`[titlebar] border-width`, default 4pt — wider stays grabbable for
+   edge/corner resizes even zoomed out) and a configurable drop shadow
+   (`shadow-opacity` 0 turns it off, `shadow-radius` blurs).
 - Daemon (`gctd`) persists pane layout to
   `~/Library/Application Support/Grand Central Terminal/state.json`; on daemon
   restart it respawns shells in their recorded cwd/rects. Scrollback lives
@@ -166,13 +168,23 @@ camera-fits-focus-move = true
 dark = "#000000"
 light = "#ffffff"
 
-[titlebar]
-# Pane titlebar colors. Hex like "#2b2b2b", or "default" for the usual grey.
-background = "default"
-text = "default"
-# Title text font: family name (e.g. "SF Mono") and size in points.
-font = "default"
-font-size = 12
+ [titlebar]
+ # Pane titlebar colors. RGBA hex like "#2b2b2b" or "#2b2b2bcc", or
+ # "default" for the usual grey. The left/right/bottom border uses the
+ # same color as the titlebar background.
+ background = "default"
+ text = "default"
+ # Title text font: family name (e.g. "SF Mono") and size in points.
+ font = "default"
+ font-size = 12
+ # Border on the left/right/bottom edges in points (the top edge is the
+ # titlebar itself). Wider borders grab edges/corners for resizing more
+ # easily, even zoomed out.
+ border-width = 4
+ # Drop shadow: opacity 0 turns it off, radius blurs it. Defaults match
+ # the current look.
+ shadow-opacity = 0.55
+ shadow-radius = 12
 
 [keybinds]
 # App shortcuts. Modifiers cmd, ctrl, alt, shift joined with "+"; the last

@@ -102,7 +102,9 @@ final class CanvasView: NSView {
         window?.backgroundColor = bg
         // Alpha < 1 needs a non-opaque window or AppKit ignores it.
         window?.isOpaque = bg.alphaComponent >= 1
-        for pane in panes.values { pane.applyChrome() }
+        // Border width is theme state: applyChrome relayouts before
+        // repainting, then the surface follows the inset terminal frame.
+        for pane in panes.values { pane.applyChrome(); pane.syncSurfaceSize() }
     }
 
     // appearance = "system": light/dark follows macOS, so re-resolve on change.
@@ -164,9 +166,9 @@ final class CanvasView: NSView {
 
     // MARK: Pane lookup helpers
 
-    private func topPane(at worldPoint: CGPoint) -> PaneView? {
+    private func topPane(at worldPoint: CGPoint, grab: CGFloat = 0) -> PaneView? {
         for id in zOrder.reversed() {
-            if let pane = panes[id], pane.containsWorld(worldPoint) { return pane }
+            if let pane = panes[id], pane.containsWorld(worldPoint, grab: grab) { return pane }
         }
         return nil
     }
@@ -200,11 +202,10 @@ final class CanvasView: NSView {
     override func mouseDown(with event: NSEvent) {
         window?.makeFirstResponder(self)
         let world = worldPoint(event)
-
-        if let pane = topPane(at: world) {
+        if let pane = topPane(at: world, grab: camera.screenToWorldDistance(5)) {
             focusPane(pane.id)
             if let zone = pane.resizeZone(at: world,
-                                          screenTolerance: camera.worldToScreenDistance(5)) {
+                                          screenTolerance: camera.screenToWorldDistance(5)) {
                 drag = .resize(id: pane.id, zone: zone, rect0: pane.frame)
                 return
             }
@@ -728,10 +729,13 @@ final class CanvasView: NSView {
     }
 
     // Frame size for a cols x rows grid, from measured cell metrics.
+    // Includes titlebar + side/bottom border so grid panes open at the
+    // requested terminal size.
     private func frameForGrid(_ cols: Int, _ rows: Int) -> NSSize? {
         guard let cell = cellSize else { return nil }
-        return NSSize(width: CGFloat(cols) * cell.width,
-                      height: CGFloat(rows) * cell.height + PaneView.titleBarHeight)
+        let bw = GCTTheme.current.borderWidth
+        return NSSize(width: CGFloat(cols) * cell.width + bw * 2,
+                      height: CGFloat(rows) * cell.height + PaneView.titleBarHeight + bw)
     }
 
     func closePane(_ id: PaneID) {
@@ -810,9 +814,10 @@ final class CanvasView: NSView {
     private func applyPendingGridFixup(_ pane: PaneView) {
         guard let grid = pendingGridFixup, let cell = cellSize else { return }
         pendingGridFixup = nil
-        let target = NSSize(width: CGFloat(grid.cols) * cell.width,
+        let bw = GCTTheme.current.borderWidth
+        let target = NSSize(width: CGFloat(grid.cols) * cell.width + bw * 2,
                             height: CGFloat(grid.rows) * cell.height
-                                + PaneView.titleBarHeight)
+                                + PaneView.titleBarHeight + bw)
         guard abs(pane.frame.width - target.width) > 0.5
                 || abs(pane.frame.height - target.height) > 0.5 else { return }
         let rect = NSRect(origin: pane.frame.origin, size: target)
