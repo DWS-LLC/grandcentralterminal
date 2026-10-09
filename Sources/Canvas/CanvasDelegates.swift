@@ -45,6 +45,7 @@ extension CanvasView: CanvasConnDelegate {
     func connPaneMeta(_ meta: PaneMeta) {
         panes[meta.id]?.update(meta: meta)
         refreshGroupViews()
+        restackFloating()
         // Daemon broadcasts relocate frames under a static camera
         // (other clients, group moves, arbitration): the frustum test
         // must follow the frames, not just the camera.

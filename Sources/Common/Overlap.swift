@@ -303,7 +303,8 @@ public enum GroupLayout {
     public static func moveObstacles(moving: PaneID, memberOf: Set<GroupID>,
                                      panes: [PaneID: Rect],
                                      groups: [GroupID: GroupMeta],
-                                     allowOverlap: Bool) -> [Rect] {
+                                     allowOverlap: Bool,
+                                     floating: Set<PaneID> = []) -> [Rect] {
         let b = bounds(groups: groups, panes: panes)
         var out = [Rect]()
         var foreignMembers = Set<PaneID>()
@@ -311,9 +312,29 @@ public enum GroupLayout {
             out.append(r)
             foreignMembers.formUnion(groups[id]?.members ?? [])
         }
+        // Floating movers ignore same-scope frames only: a grouped
+        // floater may overlap siblings but still avoids loose panes (it
+        // floats over its own group, nothing else); a groupless floater
+        // roams free. Foreign group bounds (above) always bind. Floating
+        // frames never block anyone — tiled movers slide under them.
+        if floating.contains(moving) {
+            if !memberOf.isEmpty {
+                var inside = Set<PaneID>()
+                for m in memberOf { inside.formUnion(groups[m]?.members ?? []) }
+                var grouped = Set<PaneID>()
+                for g in groups.values { grouped.formUnion(g.members) }
+                for (id, r) in panes
+                    where id != moving && !inside.contains(id)
+                        && !grouped.contains(id) && !floating.contains(id) {
+                    out.append(r)
+                }
+            }
+            return out
+        }
         if !allowOverlap {
             for (id, r) in panes
-                where id != moving && !foreignMembers.contains(id) {
+                where id != moving && !foreignMembers.contains(id)
+                    && !floating.contains(id) {
                 out.append(r)
             }
         } else if !memberOf.isEmpty {
@@ -321,16 +342,24 @@ public enum GroupLayout {
             for m in memberOf { inside.formUnion(groups[m]?.members ?? []) }
             for (id, r) in panes
                 where id != moving && !inside.contains(id)
-                    && !foreignMembers.contains(id) { out.append(r) }
+                    && !foreignMembers.contains(id) && !floating.contains(id) {
+                out.append(r)
+            }
         }
         return out
     }
-    // Obstacles for placing a brand-new (groupless) pane.
-    public static func creationObstacles(panes: [Rect],
+    // Obstacles for placing a brand-new (groupless, tiled) pane. Floating
+    // panes never block creation; new panes slide under them.
+    public static func creationObstacles(paneRects: [PaneID: Rect],
                                          groups: [GroupID: GroupMeta],
-                                         paneRects: [PaneID: Rect],
-                                         allowOverlap: Bool) -> [Rect] {
-        var out = allowOverlap ? [] : panes
+                                         allowOverlap: Bool,
+                                         floating: Set<PaneID> = []) -> [Rect] {
+        var out = [Rect]()
+        if !allowOverlap {
+            for (id, r) in paneRects where !floating.contains(id) {
+                out.append(r)
+            }
+        }
         for (_, r) in bounds(groups: groups, panes: paneRects) { out.append(r) }
         return out
     }
@@ -354,7 +383,8 @@ public enum GroupLayout {
     // order-dependent).
     public static func shoveUnits(moving: PaneID, memberOf: Set<GroupID>,
                                   panes: [PaneID: Rect],
-                                  groups: [GroupID: GroupMeta]) -> [ShoveUnit] {
+                                  groups: [GroupID: GroupMeta],
+                                  floating: Set<PaneID> = []) -> [ShoveUnit] {
         var units = [ShoveUnit]()
         let b = bounds(groups: groups, panes: panes)
         var foreignMembers = Set<PaneID>()
@@ -367,7 +397,7 @@ public enum GroupLayout {
         for m in memberOf { inside.formUnion(groups[m]?.members ?? []) }
         for (id, r) in panes
             where id != moving && !inside.contains(id)
-                && !foreignMembers.contains(id) {
+                && !foreignMembers.contains(id) && !floating.contains(id) {
             units.append(ShoveUnit(rect: r, panes: [id]))
         }
         return units
@@ -397,9 +427,11 @@ public enum GroupLayout {
                                   panes: [PaneID: Rect],
                                   groups: [GroupID: GroupMeta],
                                   axis: Overlap.Axis, sign: Int,
-                                  allowOverlap: Bool) -> [PaneID: Rect] {
+                                  allowOverlap: Bool,
+                                  floating: Set<PaneID> = []) -> [PaneID: Rect] {
         var units = shoveUnits(moving: moving, memberOf: memberOf,
-                               panes: panes, groups: groups)
+                               panes: panes, groups: groups,
+                               floating: floating)
         if allowOverlap {
             units = units.filter {
                 $0.isGroup || Overlap.overlaps($0.rect, grown)
@@ -423,10 +455,12 @@ public enum GroupLayout {
     // Obstacles for a rigid group-block move: every UNGROUPED pane plus
     // every other group's bounds. Always enforced. Foreign members are
     // covered by their block bounds — never double-listed as frames
-    // (see moveObstacles).
+    // (see moveObstacles). Floating panes never block: blocks slide
+    // under them.
     public static func blockObstacles(moving: GroupID,
                                       panes: [PaneID: Rect],
-                                      groups: [GroupID: GroupMeta]) -> [Rect] {
+                                      groups: [GroupID: GroupMeta],
+                                      floating: Set<PaneID> = []) -> [Rect] {
         let members = Set(groups[moving]?.members ?? [])
         var grouped = Set<PaneID>()
         for (id, g) in groups where id != moving {
@@ -434,7 +468,8 @@ public enum GroupLayout {
         }
         var out = [Rect]()
         for (id, r) in panes
-            where !members.contains(id) && !grouped.contains(id) {
+            where !members.contains(id) && !grouped.contains(id)
+                && !floating.contains(id) {
             out.append(r)
         }
         for (id, r) in bounds(groups: groups, panes: panes)
@@ -450,7 +485,27 @@ public enum GroupLayout {
     public static func grownClash(moving: PaneID, memberOf: GroupID,
                                   candidate: Rect,
                                   panes: [PaneID: Rect],
-                                  groups: [GroupID: GroupMeta]) -> Bool {
+                                  groups: [GroupID: GroupMeta],
+                                  floating: Set<PaneID> = []) -> Bool {
+        // Floating members stretch the bounds over siblings freely;
+        // loose panes and foreign bounds still bind.
+        if floating.contains(moving) {
+            var varied = panes
+            varied[moving] = candidate
+            let live = bounds(groups: groups, panes: varied)
+            guard let mine = live[memberOf] else { return false }
+            for (id, b) in live where id != memberOf {
+                if Overlap.overlaps(mine, b) { return true }
+            }
+            var grouped = Set<PaneID>()
+            for g in groups.values { grouped.formUnion(g.members) }
+            for (id, r) in varied
+                where id != moving && !grouped.contains(id)
+                    && !floating.contains(id) {
+                if Overlap.overlaps(mine, r) { return true }
+            }
+            return false
+        }
         var varied = panes
         varied[moving] = candidate
         let live = bounds(groups: groups, panes: varied)
@@ -474,7 +529,8 @@ public enum GroupLayout {
     public static func slideGrownRect(candidate: Rect,
                                       moving: PaneID, memberOf: GroupID,
                                       panes: [PaneID: Rect],
-                                      groups: [GroupID: GroupMeta]) -> Rect {
+                                      groups: [GroupID: GroupMeta],
+                                      floating: Set<PaneID> = []) -> Rect {
         var varied = panes
         varied[moving] = candidate
         guard let grown = bounds(groups: groups, panes: varied)[memberOf]
@@ -482,10 +538,21 @@ public enum GroupLayout {
         var foreign = [Rect]()
         for (id, b) in bounds(groups: groups, panes: varied)
             where id != memberOf { foreign.append(b) }
-        let inside = Set(groups[memberOf]?.members ?? [])
-        for (id, r) in varied
-            where id != moving && !inside.contains(id) {
-            foreign.append(r)
+        if floating.contains(moving) {
+            var grouped = Set<PaneID>()
+            for g in groups.values { grouped.formUnion(g.members) }
+            for (id, r) in varied
+                where id != moving && !grouped.contains(id)
+                    && !floating.contains(id) {
+                foreign.append(r)
+            }
+        } else {
+            let inside = Set(groups[memberOf]?.members ?? [])
+            for (id, r) in varied
+                where id != moving && !inside.contains(id)
+                    && !floating.contains(id) {
+                foreign.append(r)
+            }
         }
         let clean = Overlap.resolve(grown, obstacles: foreign)
         return Rect(x: candidate.x + (clean.x - grown.x),

@@ -237,6 +237,7 @@ enum GCTAction: String, CaseIterable {
     case paste = "paste"
     case groupSelection = "group-selection"
     case ungroup = "ungroup"
+    case toggleFloating = "toggle-floating"
 }
 // MARK: - Config
 
@@ -462,6 +463,7 @@ struct GCTConfig {
             .paste: GCTKeybind("cmd+v")!,
             .groupSelection: GCTKeybind("cmd+g")!,
             .ungroup: GCTKeybind("cmd+shift+g")!,
+            .toggleFloating: GCTKeybind("cmd+f")!,
         ]
     }
 
@@ -597,6 +599,11 @@ struct GCTConfig {
     # allowed); right-click the background for rename/color/ungroup.
     group-selection = "cmd+g"
     ungroup = "cmd+shift+g"
+    # Floating: the focused pane floats above same-scope windows (ignores
+    # the overlap rule; foreign group bounds still block). With overlap
+    # allowed every window already overlaps, so toggling only changes the
+    # stacking + marker. Re-press re-tiles into the layout.
+    toggle-floating = "cmd+f"
     """
 }
 

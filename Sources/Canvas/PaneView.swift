@@ -122,6 +122,8 @@ final class PaneView: NSView {
     }
 
     // Colors + font come from GCTTheme; re-run on focus and theme changes.
+    // Floating panes get a pin marker + heavier shadow so they read at a
+    // glance; the border fill stays the theme color.
     func applyChrome() {
         let t = GCTTheme.current
         layer?.borderWidth = 0
@@ -130,8 +132,10 @@ final class PaneView: NSView {
         // inset terminal leaves the side/bottom border visible.
         layer?.backgroundColor =
             (isFocused ? t.borderFocused : t.borderUnfocused).cgColor
-        layer?.shadowOpacity = t.shadowOpacity
-        layer?.shadowRadius = t.shadowRadius
+        // Floating reads at a glance: deeper shadow lifts it off the
+        // canvas; plain titlebar otherwise.
+        layer?.shadowOpacity = meta.floating ? min(1, t.shadowOpacity + 0.25) : t.shadowOpacity
+        layer?.shadowRadius = meta.floating ? t.shadowRadius + 6 : t.shadowRadius
         layer?.shadowOffset = CGSize(width: 0, height: -6)
         layer?.shadowColor = NSColor.black.cgColor
 
@@ -149,7 +153,8 @@ final class PaneView: NSView {
     private var titleText: String {
         let host_ = meta.host
         let kind = meta.name ?? "Terminal"
-        return "\(host_) – \(kind) – \(meta.cwd)"
+        let pin = meta.floating ? "⬆ " : ""
+        return "\(pin)\(host_) – \(kind) – \(meta.cwd)"
     }
 
     // Hit zones for manual routing (world coords).

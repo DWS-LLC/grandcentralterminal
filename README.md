@@ -30,17 +30,20 @@ and everything reattaches, scrollback replayed.
     titlebar; on a grouped pane it renames the GROUP instead).
     `⌘⇧H/J/K/L` opens a new pane on that fixed side with the
     same size/focus/camera rules
-  - terminal groups: right-drag empty space rubber-bands panes into a
-    named, colored group (titlebar + border in the group color, same
-    shapes as panes; background rectangle = member bounds + padding,
-    with headroom for the titlebar). Drag the background to move every
-    member together as one rigid block. Panes outside a group can never
-    overlap its rectangle, even with `allow-window-overlap = true`.
     Mouse drags never shove anything aside — they slide along collisions
     and hold when wedged (only keyboard grow shoves;
     `allow-mouse-drag-to-push = true` opts mouse drags back into shoving).
     Right-click the background for rename / color / ungroup; `⌘G` renames
     the focused pane's group, `⌘⇧G` dissolves it (panes stay).
+    Floating windows (`⌘F`, `toggle-floating`): a floated pane ignores the
+    overlap rule within its own scope — a grouped pane floats over its
+    siblings, an ungrouped one over every other ungrouped pane — and
+    always stacks above tiled panes with a `⬆` title marker + deeper
+    shadow. Foreign group bounds still block floaters, tiled panes slide
+    under floaters instead of shoving them, and re-pressing `⌘F` re-tiles
+    the pane back into the layout. With `allow-window-overlap = true`
+    every window already overlaps, so floating only changes the stacking
+    + marker.
   - `⌘C` copies the selection (or sends `^C` when nothing is selected),
     `⌘V` pastes
   - dead keys, accents, and IME composition work: keys route through the
@@ -142,8 +145,7 @@ arrive via `resize_callback` and go to the daemon as `TIOCSWINSZ`. See
 | `⌘W` | close focused pane |
 | `⌘R` | rename focused pane (or its group) |
 | `⌘G` | rename focused pane's group |
-| `⌘⇧G` | dissolve focused pane's group (panes stay) |
-| `⌘H/J/K/L` | move focus left/down/up/right |
+| `⌘F` | float / re-tile focused pane |
 | `⌘⌃H/J/K/L` | grow focused pane toward left/down/up/right (shoves blockers) |
 | `⌘⌃⇧H/J/K/L` | shrink focused pane from that edge |
 | `⌘P` | pane switcher (type to filter, ⏎ to jump) |
@@ -287,6 +289,9 @@ paste = "cmd+v"
 # targets the group when the focused pane has one.
 group-selection = "cmd+g"
 ungroup = "cmd+shift+g"
+# Floating: the focused pane floats above same-scope windows (see above);
+# re-press re-tiles it. With overlap allowed, only stacking + marker.
+toggle-floating = "cmd+f"
 ```
 
 Terminal colors (inside panes) are ghostty's domain and come from your ghostty

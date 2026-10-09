@@ -70,6 +70,7 @@ final class CanvasConn: @unchecked Sendable {
     func renamePane(_ req: RenamePane) { conn.send(tag: .renamePane, json: req) }
     func movePane(_ req: MovePane) { conn.send(tag: .movePane, json: req) }
     func paneCwd(_ req: PaneCwd) { conn.send(tag: .paneCwd, json: req) }
+    func setFloating(_ req: SetFloating) { conn.send(tag: .setFloating, json: req) }
     func sendInput(_ id: PaneID, _ data: Data) {
         conn.sendData(tag: .inputPane, paneID: id, data: data)
     }

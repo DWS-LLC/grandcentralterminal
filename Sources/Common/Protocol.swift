@@ -26,6 +26,7 @@ public enum MsgTag: UInt8 {
     case updateGroup = 14 // JSON UpdateGroup
     case deleteGroup = 15 // JSON GroupRef
     case moveGroup   = 16 // JSON MoveGroup
+    case setFloating = 17 // JSON SetFloating
 
     // daemon -> client
     case welcome     = 64 // JSON Welcome
@@ -170,10 +171,28 @@ public struct PaneMeta: Codable, Sendable {
     public var host: String       // "local" or hostname
     public var title: String?     // program-set title (OSC)
     public var exited: Bool
+    // Floating: ignores same-group/ungrouped overlap (still hard-blocked
+    // by foreign group bounds). Decodes missing (old daemons) as false.
+    public var floating: Bool
     public init(id: PaneID, rect: Rect, name: String?, cwd: String, host: String,
-                title: String?, exited: Bool) {
+                title: String?, exited: Bool, floating: Bool = false) {
         self.id = id; self.rect = rect; self.name = name; self.cwd = cwd
         self.host = host; self.title = title; self.exited = exited
+        self.floating = floating
+    }
+    enum CodingKeys: String, CodingKey {
+        case id, rect, name, cwd, host, title, exited, floating
+    }
+    public init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(PaneID.self, forKey: .id)
+        rect = try c.decode(Rect.self, forKey: .rect)
+        name = try c.decodeIfPresent(String.self, forKey: .name)
+        cwd = try c.decodeIfPresent(String.self, forKey: .cwd) ?? NSHomeDirectory()
+        host = try c.decodeIfPresent(String.self, forKey: .host) ?? "local"
+        title = try c.decodeIfPresent(String.self, forKey: .title)
+        exited = try c.decodeIfPresent(Bool.self, forKey: .exited) ?? false
+        floating = try c.decodeIfPresent(Bool.self, forKey: .floating) ?? false
     }
 }
 
@@ -313,4 +332,22 @@ public struct GroupRef: Codable, Sendable {
 public struct GroupCreated: Codable, Sendable {
     public var meta: GroupMeta
     public init(meta: GroupMeta) { self.meta = meta }
+}
+
+public struct SetFloating: Codable, Sendable {
+    public var id: PaneID
+    public var floating: Bool
+    // Re-tiling policy: false = daemon resolves the pane out of overlap
+    // when un-floating. Decodes missing as false.
+    public var allowOverlap: Bool
+    public init(id: PaneID, floating: Bool, allowOverlap: Bool = false) {
+        self.id = id; self.floating = floating; self.allowOverlap = allowOverlap
+    }
+    enum CodingKeys: String, CodingKey { case id, floating, allowOverlap }
+    public init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(PaneID.self, forKey: .id)
+        floating = try c.decode(Bool.self, forKey: .floating)
+        allowOverlap = try c.decodeIfPresent(Bool.self, forKey: .allowOverlap) ?? false
+    }
 }

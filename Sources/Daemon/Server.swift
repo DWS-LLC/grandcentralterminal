@@ -193,10 +193,11 @@ final class Server {
             let memberOf = groupOfLocked(req.id)
             let rects = paneRectsLocked()
             let metas = groupMetasLocked()
+            let floating = floatingLocked()
             let obstacles = GroupLayout.moveObstacles(
                 moving: req.id, memberOf: memberOf.map { Set([$0]) } ?? [],
                 panes: rects, groups: metas,
-                allowOverlap: req.allowOverlap)
+                allowOverlap: req.allowOverlap, floating: floating)
             rect = Overlap.resolve(rect, obstacles: obstacles)
             // Invariant: a member's new rect must not grow its group's
             // bounds over anything foreign — another group's bounds or a
@@ -206,14 +207,17 @@ final class Server {
             if let memberOf,
                GroupLayout.grownClash(moving: req.id, memberOf: memberOf,
                                       candidate: rect,
-                                      panes: rects, groups: metas) {
+                                      panes: rects, groups: metas,
+                                      floating: floating) {
                 let slid = GroupLayout.slideGrownRect(
                     candidate: rect,
                     moving: req.id, memberOf: memberOf,
-                    panes: rects, groups: metas)
+                    panes: rects, groups: metas,
+                    floating: floating)
                 rect = GroupLayout.grownClash(
                     moving: req.id, memberOf: memberOf, candidate: slid,
-                    panes: rects, groups: metas)
+                    panes: rects, groups: metas,
+                    floating: floating)
                     ? rects[req.id] ?? rect : slid
             }
             pane.meta.rect = rect
@@ -336,6 +340,47 @@ final class Server {
             guard let req: MoveGroup = frame.decode() else { return }
             moveGroup(req)
 
+        case .setFloating:
+            guard let req: SetFloating = frame.decode() else { return }
+            lock.lock()
+            guard let pane = panes[req.id] else { lock.unlock(); return }
+            pane.meta.floating = req.floating
+            // Un-floating re-tiles: resolve the stored rect against live
+            // obstacles so the pane lands overlap-free. Floating just
+            // records the flag — position never changes.
+            if !req.floating && !req.allowOverlap {
+                let memberOf = groupOfLocked(req.id)
+                let rects = paneRectsLocked()
+                let metas = groupMetasLocked()
+                let floating = floatingLocked()
+                let obstacles = GroupLayout.moveObstacles(
+                    moving: req.id,
+                    memberOf: memberOf.map { Set([$0]) } ?? [],
+                    panes: rects, groups: metas,
+                    allowOverlap: req.allowOverlap, floating: floating)
+                var rect = Overlap.resolve(pane.meta.rect, obstacles: obstacles)
+                if let memberOf,
+                   GroupLayout.grownClash(moving: req.id, memberOf: memberOf,
+                                          candidate: rect,
+                                          panes: rects, groups: metas,
+                                          floating: floating) {
+                    let slid = GroupLayout.slideGrownRect(
+                        candidate: rect, moving: req.id, memberOf: memberOf,
+                        panes: rects, groups: metas,
+                        floating: floating)
+                    rect = GroupLayout.grownClash(
+                        moving: req.id, memberOf: memberOf, candidate: slid,
+                        panes: rects, groups: metas,
+                        floating: floating)
+                        ? rects[req.id] ?? rect : slid
+                }
+                pane.meta.rect = rect
+            }
+            let meta = pane.meta
+            let saved = snapshotLocked()
+            lock.unlock()
+            broadcast(tag: .paneMeta, json: meta)
+            state.scheduleSave(saved)
         default:
             break
         }
@@ -360,6 +405,10 @@ final class Server {
 
     private func groupOfLocked(_ id: PaneID) -> GroupID? {
         groups.first { $0.value.members.contains(id) }?.key
+    }
+
+    private func floatingLocked() -> Set<PaneID> {
+        Set(panes.values.lazy.filter(\.meta.floating).map(\.id))
     }
 
     private func snapshotLocked() -> SavedState {
@@ -450,7 +499,8 @@ final class Server {
             lock.unlock(); return
         }
         let obstacles = GroupLayout.blockObstacles(
-            moving: req.id, panes: rects, groups: metas)
+            moving: req.id, panes: rects, groups: metas,
+            floating: floatingLocked())
         let target = Rect(x: b.x + req.dx, y: b.y + req.dy, w: b.w, h: b.h)
         let clean = Overlap.resolve(target, obstacles: obstacles)
         let dx = clean.x - b.x, dy = clean.y - b.y
@@ -479,9 +529,10 @@ final class Server {
         let metas = groupMetasLocked()
         let rect: Rect = {
             let obstacles = GroupLayout.creationObstacles(
-                panes: req.allowOverlap ? [] : Array(rects.values),
-                groups: metas, paneRects: rects,
-                allowOverlap: req.allowOverlap)
+                paneRects: rects,
+                groups: metas,
+                allowOverlap: req.allowOverlap,
+                floating: floatingLocked())
             // allowOverlap + no groups = untouched fast path.
             guard !obstacles.isEmpty else { return req.rect }
             return Overlap.resolve(req.rect, obstacles: obstacles)

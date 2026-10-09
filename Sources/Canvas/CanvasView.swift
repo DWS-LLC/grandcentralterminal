@@ -258,8 +258,42 @@ final class CanvasView: NSView {
         zOrder.append(id)
         pane.removeFromSuperview()
         worldView.addSubview(pane)
+        restackFloating()
     }
 
+    // Live floating ids from pane metas.
+    func floatingPanes() -> Set<PaneID> {
+        Set(panes.values.lazy.filter(\.meta.floating).map(\.id))
+    }
+
+    // Floating panes stack above every tiled pane (order within each
+    // layer follows zOrder). Called after focus/z changes and meta
+    // updates.
+    func restackFloating() {
+        for id in zOrder {
+            guard let pane = panes[id], !pane.meta.floating else { continue }
+            pane.removeFromSuperview()
+            worldView.addSubview(pane)
+        }
+        for id in zOrder {
+            guard let pane = panes[id], pane.meta.floating else { continue }
+            pane.removeFromSuperview()
+            worldView.addSubview(pane)
+        }
+    }
+
+    // Toggle float on the focused pane. Daemon owns the flag (persisted
+    // + broadcast via paneMeta); restack locally for instant feedback.
+    func toggleFloating() {
+        guard let id = focusedID, let pane = panes[id] else { return }
+        let next = !pane.meta.floating
+        var meta = pane.meta
+        meta.floating = next
+        pane.update(meta: meta)
+        restackFloating()
+        conn?.setFloating(SetFloating(id: id, floating: next,
+            allowOverlap: GCTConfig.current.allowWindowOverlap))
+    }
     func focusPane(_ id: PaneID) {
         focusPane(id, raise: true)
     }
@@ -362,7 +396,8 @@ final class CanvasView: NSView {
             guard let grown = GroupLayout.bounds(
                 groups: groupMetas, panes: varied)[id] else { return }
             let foreign = GroupLayout.blockObstacles(
-                moving: id, panes: varied, groups: groupMetas)
+                moving: id, panes: varied, groups: groupMetas,
+                floating: floatingPanes())
             if foreign.contains(where: { Overlap.overlaps(grown, $0) }) {
                 // Static world by default: SLIDE the block along the
                 // collision (nothing else moves). Opt-in
@@ -397,7 +432,8 @@ final class CanvasView: NSView {
                     grown: grown, moving: members[0], memberOf: Set([id]),
                     panes: varied, groups: groupMetas,
                     axis: axis, sign: sign,
-                    allowOverlap: GCTConfig.current.allowWindowOverlap)
+                    allowOverlap: GCTConfig.current.allowWindowOverlap,
+                    floating: floatingPanes())
                 var check = varied
                 for (pid, r) in moves { check[pid] = r }
                 guard shoveClearsBlock(grown: grown, id: id,
@@ -430,7 +466,8 @@ final class CanvasView: NSView {
             let obstacles = GroupLayout.moveObstacles(
                 moving: id, memberOf: memberOf, panes: paneRects(),
                 groups: groupMetas,
-                allowOverlap: GCTConfig.current.allowWindowOverlap)
+                allowOverlap: GCTConfig.current.allowWindowOverlap,
+                floating: floatingPanes())
             // Fast path preserves old behavior exactly: no groups, overlap
             // allowed = untouched.
             if !obstacles.isEmpty || !GCTConfig.current.allowWindowOverlap {
@@ -449,17 +486,21 @@ final class CanvasView: NSView {
                     guard ok else { return }
                 } else {
                     var candidate = NSRectOverlap.from(rect)
+                    let floating = floatingPanes()
                     if GroupLayout.grownClash(
                         moving: id, memberOf: memberOf, candidate: candidate,
-                        panes: paneRects(), groups: groupMetas) {
+                        panes: paneRects(), groups: groupMetas,
+                        floating: floating) {
                         candidate = GroupLayout.slideGrownRect(
                             candidate: candidate,
                             moving: id, memberOf: memberOf,
-                            panes: paneRects(), groups: groupMetas)
+                            panes: paneRects(), groups: groupMetas,
+                            floating: floating)
                         guard !GroupLayout.grownClash(
                             moving: id, memberOf: memberOf,
                             candidate: candidate,
-                            panes: paneRects(), groups: groupMetas) else {
+                            panes: paneRects(), groups: groupMetas,
+                            floating: floating) else {
                             return
                         }
                     }
@@ -490,7 +531,8 @@ final class CanvasView: NSView {
             let obstacles = GroupLayout.moveObstacles(
                 moving: id, memberOf: memberOf, panes: paneRects(),
                 groups: groupMetas,
-                allowOverlap: GCTConfig.current.allowWindowOverlap)
+                allowOverlap: GCTConfig.current.allowWindowOverlap,
+                floating: floatingPanes())
             if !GCTConfig.current.allowWindowOverlap || !obstacles.isEmpty {
                 let clean = Overlap.clampResize(
                     NSRectOverlap.from(rect),
@@ -530,17 +572,21 @@ final class CanvasView: NSView {
                     guard ok else { return }
                 } else {
                     var candidate = NSRectOverlap.from(rect)
+                    let floating = floatingPanes()
                     if GroupLayout.grownClash(
                         moving: id, memberOf: memberOf, candidate: candidate,
-                        panes: paneRects(), groups: groupMetas) {
+                        panes: paneRects(), groups: groupMetas,
+                        floating: floating) {
                         candidate = GroupLayout.slideGrownRect(
                             candidate: candidate,
                             moving: id, memberOf: memberOf,
-                            panes: paneRects(), groups: groupMetas)
+                            panes: paneRects(), groups: groupMetas,
+                            floating: floating)
                         guard !GroupLayout.grownClash(
                             moving: id, memberOf: memberOf,
                             candidate: candidate,
-                            panes: paneRects(), groups: groupMetas) else {
+                            panes: paneRects(), groups: groupMetas,
+                            floating: floating) else {
                             return
                         }
                     }
@@ -781,9 +827,10 @@ final class CanvasView: NSView {
         var r = newPaneRect()
         r.origin = CGPoint(x: p.x - r.width / 2, y: p.y - r.height / 2)
         let obstacles = GroupLayout.creationObstacles(
-            panes: panes.values.map { NSRectOverlap.from($0.frame) },
-            groups: groupMetas, paneRects: paneRects(),
-            allowOverlap: GCTConfig.current.allowWindowOverlap)
+            paneRects: paneRects(),
+            groups: groupMetas,
+            allowOverlap: GCTConfig.current.allowWindowOverlap,
+            floating: floatingPanes())
         if !GCTConfig.current.allowWindowOverlap || !obstacles.isEmpty {
             r = NSRectOverlap.to(Overlap.resolve(NSRectOverlap.from(r),
                                                  obstacles: obstacles))
@@ -964,6 +1011,7 @@ final class CanvasView: NSView {
         case .groupSelection: promptGroupSelection()
         case .ungroup:
             if let id = focusedID, let gid = groupOf(id) { ungroup(gid) }
+        case .toggleFloating: toggleFloating()
         }
     }
 
@@ -1352,11 +1400,13 @@ final class CanvasView: NSView {
 
         var rect = NSRect(origin: origin, size: size)
         // Group bounds always block new panes, even when overlap is
-        // allowed; pane frames follow the overlap policy.
+        // allowed; pane frames follow the overlap policy. Floating
+        // panes never block.
         let obstacles = GroupLayout.creationObstacles(
-            panes: panes.values.map { NSRectOverlap.from($0.frame) },
-            groups: groupMetas, paneRects: paneRects(),
-            allowOverlap: cfg.allowWindowOverlap)
+            paneRects: paneRects(),
+            groups: groupMetas,
+            allowOverlap: cfg.allowWindowOverlap,
+            floating: floatingPanes())
         if !cfg.allowWindowOverlap || !obstacles.isEmpty {
             if cfg.allowWindowOverlap {
                 let clean = Overlap.resolve(NSRectOverlap.from(rect),
@@ -1372,7 +1422,7 @@ final class CanvasView: NSView {
                 // Directional placement, then full resolve so group
                 // bounds (not just pane frames) also hold.
                 var placed = Overlap.resolve(NSRectOverlap.from(rect), direction: sign,
-                    axis: axis, obstacles: panes.values.map { NSRectOverlap.from($0.frame) })
+                    axis: axis, obstacles: paneRects().filter { !floatingPanes().contains($0.key) }.map(\.value))
                 placed = Overlap.resolve(placed, obstacles: obstacles)
                 rect = NSRectOverlap.to(placed)
             }
@@ -1492,9 +1542,12 @@ final class CanvasView: NSView {
         // members resolve against their group's (fresh) bounds instead of
         // double-counting member frames (see moveObstacles).
         var settled = [(PaneID, NSRect)]()
+        let floating = floatingPanes()
         for id in zOrder {
             guard let pane = panes[id] else { continue }
             var rect = pane.frame
+            // Floating panes stay where the daemon persisted them.
+            if floating.contains(id) { settled.append((id, rect)); continue }
             // Fresh bounds every pane: earlier placements shift them.
             let live = GroupLayout.bounds(groups: groupMetas, panes: paneRects())
             let memberOf: Set<GroupID> = groupOf(id).map { Set([$0]) } ?? []
@@ -1505,7 +1558,8 @@ final class CanvasView: NSView {
                 foreignMembers.formUnion(groupMetas[gid]?.members ?? [])
             }
             for (sid, srect) in settled
-                where sid != id && !foreignMembers.contains(sid) {
+                where sid != id && !foreignMembers.contains(sid)
+                    && !floating.contains(sid) {
                 obstacles.append(NSRectOverlap.from(srect))
             }
             if !obstacles.isEmpty {
@@ -1587,7 +1641,8 @@ final class CanvasView: NSView {
             // members additionally avoid loose panes.
             let obstacles = GroupLayout.moveObstacles(
                 moving: id, memberOf: memberOf, panes: paneRects(),
-                groups: groupMetas, allowOverlap: cfg.allowWindowOverlap)
+                groups: groupMetas, allowOverlap: cfg.allowWindowOverlap,
+                floating: floatingPanes())
             if !cfg.allowWindowOverlap || !obstacles.isEmpty {
                 let clean = Overlap.clampResize(
                     NSRectOverlap.from(rect),
@@ -1646,7 +1701,8 @@ final class CanvasView: NSView {
             grown: grown, moving: moving, memberOf: memberOf,
             panes: rects, groups: groupMetas,
             axis: axis, sign: sign,
-            allowOverlap: GCTConfig.current.allowWindowOverlap)
+            allowOverlap: GCTConfig.current.allowWindowOverlap,
+            floating: floatingPanes())
         for (pid, r) in moves {
             guard let pane = panes[pid], pane.id != moving else { continue }
             let frame = NSRectOverlap.to(r)

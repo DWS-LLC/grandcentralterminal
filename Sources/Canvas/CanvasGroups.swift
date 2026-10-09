@@ -55,17 +55,22 @@ extension CanvasView {
                             colorHex: meta.color)
             }
         }
-        // Panes always above group backgrounds.
+        // Panes always above group backgrounds; floating panes above
+        // every tiled pane.
         for view in groupViews.values { view.removeFromSuperview() }
         for (id, view) in groupViews {
             guard groupMetas[id] != nil else { continue }
             worldView.addSubview(view, positioned: .below, relativeTo: nil)
         }
         for id in zOrder {
-            if let pane = panes[id] {
-                pane.removeFromSuperview()
-                worldView.addSubview(pane)
-            }
+            guard let pane = panes[id], !pane.meta.floating else { continue }
+            pane.removeFromSuperview()
+            worldView.addSubview(pane)
+        }
+        for id in zOrder {
+            guard let pane = panes[id], pane.meta.floating else { continue }
+            pane.removeFromSuperview()
+            worldView.addSubview(pane)
         }
     }
 
@@ -180,9 +185,11 @@ extension CanvasView {
                                candidate: Rect, from current: NSRect,
                                axis override: (Overlap.Axis, Int)? = nil) -> Bool {
         let rects = paneRects()
+        let floating = floatingPanes()
         guard GroupLayout.grownClash(moving: id, memberOf: memberOf,
                                      candidate: candidate,
-                                     panes: rects, groups: groupMetas) else {
+                                     panes: rects, groups: groupMetas,
+                                     floating: floating) else {
             return true
         }
         let dx = candidate.x - Double(current.minX)
@@ -204,7 +211,8 @@ extension CanvasView {
             grown: grown, moving: id, memberOf: Set([memberOf]),
             panes: rects, groups: groupMetas,
             axis: axis, sign: sign,
-            allowOverlap: GCTConfig.current.allowWindowOverlap)
+            allowOverlap: GCTConfig.current.allowWindowOverlap,
+            floating: floating)
         guard !moves.isEmpty else { return false }
         // Verify before touching anything.
         var varied = rects
@@ -212,7 +220,8 @@ extension CanvasView {
         for (pid, r) in moves { varied[pid] = r }
         guard !GroupLayout.grownClash(moving: id, memberOf: memberOf,
                                       candidate: candidate,
-                                      panes: varied, groups: groupMetas) else {
+                                      panes: varied, groups: groupMetas,
+                                      floating: floating) else {
             return false
         }
         for (pid, r) in moves {
@@ -233,7 +242,8 @@ extension CanvasView {
     func shoveClearsBlock(grown: Rect, id: GroupID,
                           panes: [PaneID: Rect]) -> Bool {
         let foreign = GroupLayout.blockObstacles(
-            moving: id, panes: panes, groups: groupMetas)
+            moving: id, panes: panes, groups: groupMetas,
+            floating: floatingPanes())
         return !foreign.contains(where: { Overlap.overlaps(grown, $0) })
     }
 }
