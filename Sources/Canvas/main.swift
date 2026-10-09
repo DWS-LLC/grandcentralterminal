@@ -15,7 +15,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var canvas: CanvasView!
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        let screen = NSScreen.main?.frame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
+        // Visible frame, not full frame: the borderless window sits below
+        // the OS menubar (and above the Dock) instead of under them.
+        // Tracks autohide automatically — when the menubar hides, the
+        // visible frame grows and the window follows on next launch.
+        let screen = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
 
         // Config first; created with defaults if it doesn't exist yet.
         GCTConfig.current = GCTConfig.load()
@@ -47,7 +51,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         view.applyTheme()
         win.makeKeyAndOrderFront(nil)
 
+        // Menubar/Dock autohide changes the visible frame live — follow
+        // it without a restart. Fires on menubar show/hide, Dock
+        // show/hide, display reconfigure, and resolution changes.
+        NotificationCenter.default.addObserver(
+            forName: NSApplication.didChangeScreenParametersNotification,
+            object: nil, queue: .main) { [weak self] _ in
+            self?.conformToVisibleFrame()
+        }
         NSApp.activate(ignoringOtherApps: true)
+    }
+
+    /// Re-fit the window to the screen's visible frame (below the
+    /// menubar, above the Dock). Called live on screen changes.
+    func conformToVisibleFrame() {
+        guard let win = window,
+              let vf = win.screen?.visibleFrame ?? NSScreen.main?.visibleFrame else { return }
+        // Skip while minimized — never fight the user.
+        guard !win.isMiniaturized else { return }
+        if win.frame != vf {
+            win.setFrame(vf, display: true, animate: true)
+        }
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {

@@ -52,6 +52,8 @@ final class CanvasView: NSView {
     // property self-clears after dismissal.
     private weak var switcher: SwitcherView?
     var firstRunHandled = false
+    // Screen-space overlay status bar (nil when disabled in config).
+    var statusBar: StatusBarView?
 
     // IME composition state (NSTextInputClient below). markedText mirrors
     // the input context's preedit; keyTextAccumulator collects text the IME
@@ -87,6 +89,7 @@ final class CanvasView: NSView {
         worldView.frame = bounds
         worldView.autoresizingMask = [.width, .height]
         window?.acceptsMouseMovedEvents = true
+        setupStatusBar()
 
         conn = CanvasConn(sockPath: CanvasPaths.sockPath)
         conn?.delegate = self
@@ -118,6 +121,8 @@ final class CanvasView: NSView {
         // Border width is theme state: applyChrome relayouts before
         // repainting, then the surface follows the inset terminal frame.
         for pane in panes.values { pane.applyChrome(); pane.syncSurfaceSize() }
+        statusBar?.applyTheme()
+        layoutStatusBar()
     }
 
     // appearance = "system": light/dark follows macOS, so re-resolve on change.
@@ -132,11 +137,72 @@ final class CanvasView: NSView {
     // is meaningless for panes; we take every event ourselves. Screen-space
     // overlays (the switcher) still get normal hit-testing.
     override func hitTest(_ point: NSPoint) -> NSView? {
+        let p = convert(point, from: superview)
+        // Screen-space overlays get normal hit-testing: the bar first
+        // (it sits on its own topmost layer), then the switcher.
+        if let bar = statusBar, bar.superview != nil, bar.frame.contains(p) {
+            return super.hitTest(point)
+        }
         if let switcher, switcher.window != nil,
-           switcher.frame.contains(convert(point, from: superview)) {
+           switcher.frame.contains(p) {
             return switcher
         }
         return self
+    }
+
+    // MARK: Status bar
+
+    private func setupStatusBar() {
+        guard GCTConfig.current.statusbarEnabled else { return }
+        StatusBarLibrary.ensure()
+        let bar = StatusBarView()
+        // terminal=true rows open in a new GCT pane, never Apple's
+        // Terminal: same placement/focus/camera as cmd+t.
+        bar.onTerminal = { [weak self] exe, args in
+            self?.openCommandInPane(exe, args: args)
+        }
+        statusBar = bar
+        addSubview(bar)
+        layoutStatusBar()
+        bar.applyTheme()
+    }
+
+    /// Run an executable+args in a new pane. Falls back to a login shell
+    /// when the command line is empty.
+    func openCommandInPane(_ exe: String, args: [String]) {
+        let cwd = focusedID.flatMap { panes[$0]?.meta.cwd }
+        let r = newPaneRect(direction: GCTConfig.current.newWindowDirection)
+        var cmd = ([exe] + args).map {
+            $0.contains(" ") ? "\"\($0)\"" : $0
+        }.joined(separator: " ")
+        if cmd.trimmingCharacters(in: .whitespaces).isEmpty {
+            cmd = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
+        }
+        conn?.createPane(CreatePane(
+            rect: Rect(x: r.minX, y: r.minY, w: r.width, h: r.height),
+            cwd: cwd,
+            name: exe.split(separator: "/").last.map(String.init),
+            command: cmd,
+            allowOverlap: GCTConfig.current.allowWindowOverlap))
+    }
+
+    private func layoutStatusBar() {
+        guard let bar = statusBar, bar.superview != nil else { return }
+        let h = bar.barHeight
+        // Window is already constrained to the visible frame, so top of
+        // window == below the menubar. No offset math here.
+        let y: CGFloat
+        switch GCTConfig.current.statusbarPosition {
+        case .top: y = bounds.height - h
+        case .bottom: y = 0
+        }
+        bar.frame = NSRect(x: 0, y: y, width: bounds.width, height: h)
+        bar.refresh()
+    }
+
+    override func layout() {
+        super.layout()
+        layoutStatusBar()
     }
 
     private func applyCamera() {
@@ -1614,6 +1680,8 @@ final class CanvasView: NSView {
         addSubview(s)
         switcher = s
         s.present(panes.values.map(\.meta), order: zOrder)
+        // Keep the bar on its own topmost layer, above the switcher.
+        if let bar = statusBar, bar.superview != nil { addSubview(bar) }
     }
 }
 

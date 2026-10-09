@@ -204,6 +204,11 @@ enum GCTNewWindowDim: Equatable {
     }
 }
 
+// Screen-space status bar edge.
+enum GCTStatusbarPosition: String {
+    case top, bottom
+}
+
 enum GCTAction: String, CaseIterable {
     case newPane = "new-pane"
     case closePane = "close-pane"
@@ -275,6 +280,19 @@ struct GCTConfig {
     // implies centered, so both true just zooms to fit).
     var cameraFollowsFocusMove = true
     var cameraFitsFocusMove = true
+    // Screen-space overlay bar of xbar-compatible plugin components.
+    // Off by default; top/bottom edge; components lists plugin
+    // basenames with `gap` spacers absorbing leftover width.
+    var statusbarEnabled = false
+    var statusbarPosition = GCTStatusbarPosition.bottom
+    var statusbarComponents: [String] = ["clock", "gap"]
+    var statusbarHeight: CGFloat = 26
+    var statusbarSpacing: CGFloat = 8
+    var statusbarBackground: String?
+    var statusbarText: String?
+    var statusbarFont: String?
+    var statusbarFontSize: CGFloat = 12
+    var statusbarOpacity: CGFloat = 1
 
     static let path: String = (NSHomeDirectory() as NSString)
         .appendingPathComponent(".config/gct/config.toml")
@@ -330,6 +348,37 @@ struct GCTConfig {
         }
         if let v = root["camera-fits-focus-move"] {
             cfg.cameraFitsFocusMove = v.lowercased() == "true"
+        }
+        let sb = t["statusbar"] ?? [:]
+        if let v = sb["enabled"] {
+            cfg.statusbarEnabled = v.lowercased() == "true"
+        }
+        if let v = sb["position"],
+           let p = GCTStatusbarPosition(rawValue: v.lowercased()) {
+            cfg.statusbarPosition = p
+        }
+        if let v = sb["components"], !v.isEmpty {
+            let parts = v.split(separator: ",").map {
+                $0.trimmingCharacters(in: .whitespaces)
+            }.filter { !$0.isEmpty }
+            if !parts.isEmpty { cfg.statusbarComponents = parts }
+        }
+        if let s = sb["height"], let n = Double(s), (16.0...64.0).contains(n) {
+            cfg.statusbarHeight = CGFloat(n)
+        }
+        if let s = sb["spacing"], let n = Double(s), (0.0...64.0).contains(n) {
+            cfg.statusbarSpacing = CGFloat(n)
+        }
+        if let s = sb["opacity"], let n = Double(s), (0.0...1.0).contains(n) {
+            cfg.statusbarOpacity = CGFloat(n)
+        }
+        cfg.statusbarBackground = colorSpec(sb["background"])
+        cfg.statusbarText = colorSpec(sb["text"])
+        if let f = sb["font"], f.lowercased() != "default" {
+            cfg.statusbarFont = f
+        }
+        if let s = sb["font-size"], let n = Double(s), (6.0...48.0).contains(n) {
+            cfg.statusbarFontSize = CGFloat(n)
         }
 
         let bg = t["background"] ?? [:]
@@ -465,6 +514,32 @@ struct GCTConfig {
     shadow-opacity = 0.55
     shadow-radius = 12
 
+    [statusbar]
+    # Overlay bar of xbar-compatible plugin components: executables in
+    # ~/.config/gct/statusbar/ named {name}.{interval}.{ext} (e.g.
+    # clock.10s.sh). New plugins are picked up live — no recompile, no
+    # restart. These keys need a relaunch.
+    enabled = false
+    # Bar edge: "top" or "bottom". Always above panes on its own layer;
+    # panes slide under it, never collide with it.
+    position = "bottom"
+    # Ordered cells: plugin basenames (clock matches clock.10s.sh) plus
+    # `gap` spacers that absorb leftover width, so
+    # component-gap-component-gap-component aligns left/center/right.
+    components = "clock, gap"
+    # Bar height (16-64pt) and spacing between cells.
+    height = 26
+    spacing = 8
+    # Colors: RGBA hex like "#1a1b26" or "#1a1b2680", or "default" for
+    # the usual greys.
+    background = "default"
+    text = "default"
+    # Font: family name (e.g. "SF Mono") and size in points.
+    font = "default"
+    font-size = 12
+    # Overall opacity 0-1 (multiplies the background alpha).
+    opacity = 1
+
     [keybinds]
     # App shortcuts. Modifiers cmd, ctrl, alt, shift joined with "+"; the
     # last part is the key, e.g. new-pane = "cmd+shift+t".
@@ -529,6 +604,9 @@ struct GCTTheme {
     let shadowOpacity: Float
     let shadowRadius: CGFloat
     let titleFont: NSFont
+    let statusbarBackground: NSColor
+    let statusbarText: NSColor
+    let statusbarFont: NSFont
 
     // Effective light/dark honoring the config's appearance setting.
     static func isDark() -> Bool {
@@ -595,6 +673,28 @@ struct GCTTheme {
             titleFont = f
         } else {
             titleFont = .monospacedSystemFont(ofSize: size, weight: .medium)
+        }
+        // Status bar: explicit colors or the usual dark/light greys.
+        // Opacity stays in the view (it multiplies background alpha).
+        if let c = Self.color(cfg.statusbarBackground, ghostty: nil) {
+            statusbarBackground = c
+        } else if dark {
+            statusbarBackground = NSColor(white: 0.13, alpha: 1)
+        } else {
+            statusbarBackground = NSColor(white: 0.93, alpha: 1)
+        }
+        if let c = Self.color(cfg.statusbarText, ghostty: nil) {
+            statusbarText = c
+        } else if statusbarBackground.gctLuminance > 0.55 {
+            statusbarText = NSColor(white: 0.12, alpha: 1)
+        } else {
+            statusbarText = NSColor(white: 0.92, alpha: 1)
+        }
+        let sbSize = cfg.statusbarFontSize
+        if let name = cfg.statusbarFont, let f = NSFont(name: name, size: sbSize) {
+            statusbarFont = f
+        } else {
+            statusbarFont = .monospacedSystemFont(ofSize: sbSize, weight: .regular)
         }
     }
 

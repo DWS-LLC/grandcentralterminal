@@ -45,6 +45,18 @@ and everything reattaches, scrollback replayed.
    (`[titlebar] border-width`, default 4pt — wider stays grabbable for
    edge/corner resizes even zoomed out) and a configurable drop shadow
    (`shadow-opacity` 0 turns it off, `shadow-radius` blurs).
+- Status bar (`[statusbar]`, off by default): top/bottom overlay of
+  xbar-compatible plugin components — any executable in
+  `~/.config/gct/statusbar/` named `{name}.{interval}.{ext}`
+  (e.g. `clock.10s.sh`), picked up live with no recompile/restart.
+  `gap` spacers absorb leftover width, so
+  component-gap-component-gap-component aligns left/center/right.
+  Click a component for its dropdown menu (`---` section, `--` submenus);
+  rows with `href=` open URLs, `shell=` runs detached, `terminal=true`
+  opens in a new GCT pane, `refresh=true` re-runs the plugin. Headers
+  before the first `---` cycle in the bar; `image=`/`templateImage=`
+  take base64 icons. Own background/text color, font, and opacity;
+  always above panes on its own layer, outside the camera transform.
 - Daemon (`gctd`) persists pane layout + groups to
   `~/Library/Application Support/Grand Central Terminal/state.json`; on daemon
   restart it respawns shells in their recorded cwd/rects and restores groups
@@ -202,6 +214,27 @@ light = "#ffffff"
  # the current look.
  shadow-opacity = 0.55
  shadow-radius = 12
+
+    [statusbar]
+    # Overlay bar of xbar-compatible executables in
+    # ~/.config/gct/statusbar/ ({name}.{interval}.{ext}, e.g.
+    # clock.10s.sh — picked up live, no recompile/restart). Needs a
+    # relaunch for these keys.
+    enabled = false
+    # Bar edge: "top" or "bottom". Always above panes on its own layer.
+    position = "bottom"
+    # Ordered cells: plugin basenames plus `gap` spacers absorbing
+    # leftover width (component-gap-component-gap-component =
+    # left/center/right).
+    components = "clock, gap"
+    height = 26
+    spacing = 8
+    background = "default"
+    text = "default"
+    font = "default"
+    font-size = 12
+    # Overall opacity 0-1.
+    opacity = 1
 
 [keybinds]
 # App shortcuts. Modifiers cmd, ctrl, alt, shift joined with "+"; the last
