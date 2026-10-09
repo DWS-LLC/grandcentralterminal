@@ -4,16 +4,22 @@ import AppKit
 import Common
 
 extension CanvasView: CanvasConnDelegate {
-    func connWelcome(_ panes: [PaneMeta]) {
+    func connWelcome(_ panes: [PaneMeta], _ groups: [GroupMeta]) {
         for meta in panes {
             makePaneView(meta)
         }
+        for g in groups {
+            groupMetas[g.id] = g
+            ensureGroupView(g.id)
+        }
+        refreshGroupViews()
         if panes.isEmpty && !firstRunHandled {
             // Empty canvas: seed one pane at the origin.
             firstRunHandled = true
             let r = newPaneRect()
             conn?.createPane(CreatePane(
-                rect: Rect(x: r.minX, y: r.minY, w: r.width, h: r.height)))
+                rect: Rect(x: r.minX, y: r.minY, w: r.width, h: r.height),
+                allowOverlap: GCTConfig.current.allowWindowOverlap))
         } else if !panes.isEmpty {
             if !GCTConfig.current.allowWindowOverlap {
                 untangleLoadedPanes()
@@ -38,6 +44,11 @@ extension CanvasView: CanvasConnDelegate {
 
     func connPaneMeta(_ meta: PaneMeta) {
         panes[meta.id]?.update(meta: meta)
+        refreshGroupViews()
+        // Daemon broadcasts relocate frames under a static camera
+        // (other clients, group moves, arbitration): the frustum test
+        // must follow the frames, not just the camera.
+        refreshOcclusion()
     }
 
     func connOutput(_ id: PaneID, _ data: Data) {
@@ -46,6 +57,25 @@ extension CanvasView: CanvasConnDelegate {
 
     func connPaneExit(_ id: PaneID, _ code: Int32) {
         removePane(id)
+        refreshGroupViews()
+    }
+
+    func connGroupCreated(_ meta: GroupMeta) {
+        groupMetas[meta.id] = meta
+        ensureGroupView(meta.id)
+        refreshGroupViews()
+    }
+
+    func connGroupMeta(_ meta: GroupMeta) {
+        groupMetas[meta.id] = meta
+        ensureGroupView(meta.id)
+        refreshGroupViews()
+    }
+
+    func connGroupExit(_ id: GroupID) {
+        groupMetas.removeValue(forKey: id)
+        groupViews[id]?.removeFromSuperview()
+        groupViews.removeValue(forKey: id)
     }
 
     func connClosed() {

@@ -12,7 +12,15 @@ final class CanvasView: NSView {
     var panes = [PaneID: PaneView]()
     var zOrder = [PaneID]()
     private(set) var focusedID: PaneID?
-
+    // Terminal groups: daemon-owned membership, local background views.
+    var groupMetas = [GroupID: GroupMeta]()
+    var groupViews = [GroupID: GroupView]()
+    // Rubber-band selection of pane ids (world rect at press/drag).
+    var selectionBand: (anchor: CGPoint, current: CGPoint)?
+    var selectionView: NSView?
+    // Right-click on a group background arms a possible group drag;
+    // cleared on up (menu) or when the drag confirms.
+    var pendingRightGroup: CGPoint?
     // Points per terminal cell, measured from any open surface (all panes
     // share the ghostty app config, so one measurement serves every
     // cols/rows <-> frame conversion). Nil until a surface exists.
@@ -32,6 +40,11 @@ final class CanvasView: NSView {
         case move(id: PaneID, grabDelta: CGPoint)
         case resize(id: PaneID, zone: PaneView.ResizeZone, rect0: NSRect)
         case surfaceClick(id: PaneID, button: ghostty_input_mouse_button_e)
+        // Rubber-band: right-drag on empty space selects panes for grouping.
+        case select(anchor: CGPoint)
+        // Whole-group move: id plus the member offsets at grab time.
+        case groupMove(id: GroupID, grabDelta: CGPoint,
+                       members: [PaneID], rects0: [PaneID: NSRect])
     }
     private var drag = Drag.none
 
@@ -226,6 +239,21 @@ final class CanvasView: NSView {
             return
         }
 
+        // Group background (not on a pane): drag moves the whole group.
+        if let g = topGroup(at: world), let b = groupBounds(g.id) {
+            var rects = [PaneID: NSRect]()
+            for m in groupMetas[g.id]?.members ?? [] {
+                if let p = panes[m] { rects[m] = p.frame }
+            }
+            drag = .groupMove(id: g.id,
+                              grabDelta: CGPoint(x: world.x - b.minX,
+                                                 y: world.y - b.minY),
+                              members: Array(rects.keys), rects0: rects)
+            return
+        }
+
+        // Plain drag on empty space pans the camera. (Rubber-band grouping
+        // is on the right button; group menus too — see rightMouseDown.)
         drag = .pan(start: viewPoint(event), offset0: camera.offset)
     }
 
@@ -236,18 +264,136 @@ final class CanvasView: NSView {
             camera.offset = CGPoint(x: offset0.x + (p.x - start.x),
                                     y: offset0.y + (p.y - start.y))
             applyCamera()
+        case .select(let anchor):
+            selectionBand = (anchor: anchor, current: worldPoint(event))
+            showSelectionBand()
+        case .groupMove(let id, let grabDelta, let members, let rects0):
+            let world = worldPoint(event)
+            guard let b0 = groupBoundsFrom(rects0) else { return }
+            let want = CGPoint(x: world.x - grabDelta.x, y: world.y - grabDelta.y)
+            let dx = want.x - b0.minX, dy = want.y - b0.minY
+            // Member targets from grab-time layout (no drift).
+            var targets = [PaneID: Rect]()
+            for m in members {
+                guard let r0 = rects0[m] else { continue }
+                targets[m] = Rect(x: Double(r0.minX + dx),
+                                  y: Double(r0.minY + dy),
+                                  w: Double(r0.width), h: Double(r0.height))
+            }
+            guard !targets.isEmpty else { return }
+            let rects = paneRects()
+            var varied = rects
+            for (m, t) in targets { varied[m] = t }
+            guard let grown = GroupLayout.bounds(
+                groups: groupMetas, panes: varied)[id] else { return }
+            let foreign = GroupLayout.blockObstacles(
+                moving: id, panes: varied, groups: groupMetas)
+            if foreign.contains(where: { Overlap.overlaps(grown, $0) }) {
+                // Static world by default: SLIDE the block along the
+                // collision (nothing else moves). Opt-in
+                // (allow-mouse-drag-to-push): foreigners yield instead.
+                if !GCTConfig.current.allowMouseDragToPush {
+                    let clean = Overlap.resolve(
+                        NSRectOverlap.from(NSRect(
+                            x: b0.minX + dx, y: b0.minY + dy,
+                            width: b0.width, height: b0.height)),
+                        obstacles: foreign)
+                    let sdx = clean.x - Double(b0.minX),
+                        sdy = clean.y - Double(b0.minY)
+                    for m in members {
+                        guard let pane = panes[m], let r0 = rects0[m] else { continue }
+                        pane.setRect(NSRect(x: r0.minX + sdx, y: r0.minY + sdy,
+                                            width: r0.width, height: r0.height),
+                                     notifySurface: false)
+                    }
+                    refreshGroupViews()
+                    refreshOcclusion()
+                    return
+                }
+                let (axis, sign): (Overlap.Axis, Int)
+                if abs(dx) >= abs(dy), dx != 0 {
+                    axis = .horizontal; sign = dx > 0 ? 1 : -1
+                } else if dy != 0 {
+                    axis = .vertical; sign = dy > 0 ? 1 : -1
+                } else {
+                    return // no motion: hold
+                }
+                let moves = GroupLayout.shoveAside(
+                    grown: grown, moving: members[0], memberOf: Set([id]),
+                    panes: varied, groups: groupMetas,
+                    axis: axis, sign: sign,
+                    allowOverlap: GCTConfig.current.allowWindowOverlap)
+                var check = varied
+                for (pid, r) in moves { check[pid] = r }
+                guard shoveClearsBlock(grown: grown, id: id,
+                                        panes: check) else { return }
+                for (pid, r) in moves {
+                    guard let pane = panes[pid] else { continue }
+                    let frame = NSRectOverlap.to(r)
+                    guard frame != pane.frame else { continue }
+                    pane.setRect(frame, notifySurface: false)
+                    conn?.movePane(MovePane(
+                        id: pid, rect: r,
+                        allowOverlap: GCTConfig.current.allowWindowOverlap))
+                }
+            }
+            for m in members {
+                guard let pane = panes[m], let r0 = rects0[m] else { continue }
+                pane.setRect(NSRect(x: r0.minX + dx, y: r0.minY + dy,
+                                    width: r0.width, height: r0.height),
+                             notifySurface: false)
+            }
+            refreshGroupViews()
+            refreshOcclusion()
         case .move(let id, let grabDelta):
             guard let pane = panes[id] else { return }
             let world = worldPoint(event)
             var rect = NSRect(x: world.x - grabDelta.x, y: world.y - grabDelta.y,
                               width: pane.frame.width,
                               height: pane.frame.height)
-            if !GCTConfig.current.allowWindowOverlap {
-                let clean = Overlap.resolve(NSRectOverlap.from(rect),
-                    obstacles: NSRectOverlap.frames(of: panes, except: id))
-                rect = NSRectOverlap.to(clean)
+            let memberOf: Set<GroupID> = groupOf(id).map { Set([$0]) } ?? []
+            let obstacles = GroupLayout.moveObstacles(
+                moving: id, memberOf: memberOf, panes: paneRects(),
+                groups: groupMetas,
+                allowOverlap: GCTConfig.current.allowWindowOverlap)
+            // Fast path preserves old behavior exactly: no groups, overlap
+            // allowed = untouched.
+            if !obstacles.isEmpty || !GCTConfig.current.allowWindowOverlap {
+                rect = NSRectOverlap.to(Overlap.resolve(
+                    NSRectOverlap.from(rect), obstacles: obstacles))
+            }
+            // Members: static world by default — slide along collisions
+            // (frames via the resolve above, grown bounds via the slide
+            // below), hold only when truly wedged. Opt-in
+            // (allow-mouse-drag-to-push): shove foreigners aside instead.
+            if let memberOf = groupOf(id) {
+                if GCTConfig.current.allowMouseDragToPush {
+                    let ok = shoveForeignForMember(
+                        id: id, memberOf: memberOf,
+                        candidate: NSRectOverlap.from(rect), from: pane.frame)
+                    guard ok else { return }
+                } else {
+                    var candidate = NSRectOverlap.from(rect)
+                    if GroupLayout.grownClash(
+                        moving: id, memberOf: memberOf, candidate: candidate,
+                        panes: paneRects(), groups: groupMetas) {
+                        candidate = GroupLayout.slideGrownRect(
+                            candidate: candidate,
+                            moving: id, memberOf: memberOf,
+                            panes: paneRects(), groups: groupMetas)
+                        guard !GroupLayout.grownClash(
+                            moving: id, memberOf: memberOf,
+                            candidate: candidate,
+                            panes: paneRects(), groups: groupMetas) else {
+                            return
+                        }
+                    }
+                    rect = NSRectOverlap.to(candidate)
+                }
             }
             pane.setRect(rect, notifySurface: false)
+            refreshGroupViews()
+            refreshOcclusion()
         case .resize(let id, let zone, let rect0):
             guard let pane = panes[id] else { return }
             let world = worldPoint(event)
@@ -263,17 +409,72 @@ final class CanvasView: NSView {
                 rect.size.height = rect0.maxY - rect.origin.y
             }
             if zone.resizesN { rect.size.height = max(minH, world.y - rect0.minY) }
-            if !GCTConfig.current.allowWindowOverlap {
+            // Group bounds always block, even when overlap is allowed;
+            // members additionally avoid loose panes.
+            let memberOf: Set<GroupID> = groupOf(id).map { Set([$0]) } ?? []
+            let obstacles = GroupLayout.moveObstacles(
+                moving: id, memberOf: memberOf, panes: paneRects(),
+                groups: groupMetas,
+                allowOverlap: GCTConfig.current.allowWindowOverlap)
+            if !GCTConfig.current.allowWindowOverlap || !obstacles.isEmpty {
                 let clean = Overlap.clampResize(
                     NSRectOverlap.from(rect),
                     original: NSRectOverlap.from(rect0),
                     edges: Overlap.Edges(
                         w: zone.resizesW, e: zone.resizesE,
                         s: zone.resizesS, n: zone.resizesN),
-                    obstacles: NSRectOverlap.frames(of: panes, except: id))
+                    obstacles: obstacles)
                 rect = NSRectOverlap.to(clean)
             }
+            // Members: static world by default — slide the grown bounds
+            // along collisions, hold when wedged. Opt-in: shove instead.
+            if let memberOf = groupOf(id) {
+                if GCTConfig.current.allowMouseDragToPush {
+                    // Axis from growth: E/W edges push horizontally, N/S
+                    // vertically; corners take the dominant growth.
+                    let gw = abs(rect.width - rect0.width)
+                    let gh = abs(rect.height - rect0.height)
+                    let ax: (Overlap.Axis, Int)
+                    if zone.resizesE || (zone.resizesW && !zone.resizesN && !zone.resizesS) {
+                        ax = (.horizontal, 1)
+                    } else if zone.resizesW {
+                        ax = (.horizontal, -1)
+                    } else if zone.resizesN {
+                        ax = (.vertical, 1)
+                    } else if zone.resizesS {
+                        ax = (.vertical, -1)
+                    } else if gw >= gh {
+                        ax = (.horizontal, rect.width >= rect0.width ? 1 : -1)
+                    } else {
+                        ax = (.vertical, rect.height >= rect0.height ? 1 : -1)
+                    }
+                    let ok = shoveForeignForMember(
+                        id: id, memberOf: memberOf,
+                        candidate: NSRectOverlap.from(rect), from: pane.frame,
+                        axis: ax)
+                    guard ok else { return }
+                } else {
+                    var candidate = NSRectOverlap.from(rect)
+                    if GroupLayout.grownClash(
+                        moving: id, memberOf: memberOf, candidate: candidate,
+                        panes: paneRects(), groups: groupMetas) {
+                        candidate = GroupLayout.slideGrownRect(
+                            candidate: candidate,
+                            moving: id, memberOf: memberOf,
+                            panes: paneRects(), groups: groupMetas)
+                        guard !GroupLayout.grownClash(
+                            moving: id, memberOf: memberOf,
+                            candidate: candidate,
+                            panes: paneRects(), groups: groupMetas) else {
+                            return
+                        }
+                    }
+                    rect = NSRectOverlap.to(candidate)
+                }
+            }
             pane.setRect(rect, notifySurface: true)
+            refreshGroupViews()
+            refreshOcclusion()
         case .surfaceClick, .none:
             break
         }
@@ -291,13 +492,219 @@ final class CanvasView: NSView {
             conn?.movePane(MovePane(id: id, rect: pane.meta.rect,
                             allowOverlap: GCTConfig.current.allowWindowOverlap))
         }
+        if case .groupMove(let id, _, _, let rects0) = drag,
+           let b0 = groupBoundsFrom(rects0),
+           let b1 = groupBounds(id) {
+            conn?.moveGroup(MoveGroup(id: id,
+                                      dx: Double(b1.minX - b0.minX),
+                                      dy: Double(b1.minY - b0.minY),
+                                      allowOverlap: GCTConfig.current.allowWindowOverlap))
+            refreshGroupViews()
+        }
+        if case .select = drag {
+            finishSelectionBand()
+        }
         drag = .none
+        hideSelectionBand()
+    }
+
+    // MARK: Right button — groups live here
+    //
+    // Left-click drags on empty space pan; the right button is free (no
+    // rightMouseDown override existed, and surface clicks only forward
+    // left/right presses that START on a pane). So: right-drag on empty
+    // space rubber-bands panes into a group; right-click on a group
+    // background pops its menu (rename, color, ungroup); right-click on
+    // empty space pans nothing and shows the canvas menu (new pane here).
+    override func rightMouseDown(with event: NSEvent) {
+        window?.makeFirstResponder(self)
+        let world = worldPoint(event)
+        // On a pane: forward to the terminal as before (apps like vim /
+        // tmux expect right-click). No drag state: mouseUp ignores it.
+        if let pane = topPane(at: world) {
+            focusPane(pane.id)
+            let local = paneLocal(pane, world)
+            let mods = GhosttyMods(event.modifierFlags)
+            pane.host?.mousePos(x: local.x, y: local.y, mods: mods)
+            pane.host?.mouseButton(GHOSTTY_MOUSE_PRESS, GHOSTTY_MOUSE_RIGHT,
+                                   mods)
+            drag = .surfaceClick(id: pane.id, button: GHOSTTY_MOUSE_RIGHT)
+            return
+        }
+        if topGroup(at: world) != nil {
+            // Click (no drag): menu on rightMouseUp. Possible drag:
+            // arm a pending group move; rightMouseDragged confirms it.
+            pendingRightGroup = world
+            return
+        }
+        drag = .select(anchor: world)
+        selectionBand = (anchor: world, current: world)
+        showSelectionBand()
+    }
+
+    override func rightMouseDragged(with event: NSEvent) {
+        // Rubber-band follows the right drag (started on empty space).
+        if case .select(let anchor) = drag {
+            selectionBand = (anchor: anchor, current: worldPoint(event))
+            showSelectionBand()
+            return
+        }
+        // Group background + right drag = same whole-group move as left.
+        if pendingRightGroup != nil {
+            let world = worldPoint(event)
+            guard let g = topGroup(at: pendingRightGroup ?? world),
+                  let b = groupBounds(g.id) else {
+                pendingRightGroup = nil
+                return
+            }
+            var rects = [PaneID: NSRect]()
+            for m in groupMetas[g.id]?.members ?? [] {
+                if let p = panes[m] { rects[m] = p.frame }
+            }
+            drag = .groupMove(id: g.id,
+                              grabDelta: CGPoint(x: world.x - b.minX,
+                                                 y: world.y - b.minY),
+                              members: Array(rects.keys), rects0: rects)
+            pendingRightGroup = nil
+            return
+        }
+        super.rightMouseDragged(with: event)
+    }
+
+    override func rightMouseUp(with event: NSEvent) {
+        let world = worldPoint(event)
+        // Release of a terminal right-click: forward the release.
+        if case .surfaceClick(let id, let button) = drag,
+           let pane = panes[id] {
+            let local = paneLocal(pane, world)
+            let mods = GhosttyMods(event.modifierFlags)
+            pane.host?.mousePos(x: local.x, y: local.y, mods: mods)
+            pane.host?.mouseButton(GHOSTTY_MOUSE_RELEASE, button, mods)
+            drag = .none
+            return
+        }
+        // End of a rubber-band or group move: shared finish path.
+        if case .select = drag {
+            mouseUp(with: event)
+            return
+        }
+        if case .groupMove = drag {
+            mouseUp(with: event)
+            return
+        }
+        // Plain right-click: group menu on background, canvas menu on
+        // empty space.
+        pendingRightGroup = nil
+        if let g = topGroup(at: world) {
+            showGroupMenu(g.id, at: event)
+        } else if topPane(at: world) == nil {
+            showCanvasMenu(at: event, world: world)
+        }
+    }
+
+    // Right-click on a group background: rename, recolor, ungroup.
+    func showGroupMenu(_ id: GroupID, at event: NSEvent) {
+        guard let meta = groupMetas[id] else { return }
+        let menu = NSMenu()
+        let title = NSMenuItem(title: meta.name ?? "Group", action: nil,
+                               keyEquivalent: "")
+        title.isEnabled = false
+        menu.addItem(title)
+        menu.addItem(.separator())
+
+        let rename = NSMenuItem(title: "Rename…", action: #selector(renameGroupFromMenu(_:)),
+                                keyEquivalent: "")
+        rename.target = self
+        rename.representedObject = id.uuid.uuidString
+        menu.addItem(rename)
+
+        let colors = NSMenuItem(title: "Color", action: nil, keyEquivalent: "")
+        let palette = NSMenu(title: "Color")
+        for hex in GroupStyle.palette {
+            let item = NSMenuItem(title: hex, action: #selector(recolorGroupFromMenu(_:)),
+                                  keyEquivalent: "")
+            item.target = self
+            // "id|hex" — representedObject is Any?.
+            item.representedObject = id.uuid.uuidString + "|" + hex
+            item.attributedTitle = NSAttributedString(
+                string: "  \(hex)",
+                attributes: [.foregroundColor: NSColor(gctHex: hex) ?? .labelColor])
+            palette.addItem(item)
+        }
+        colors.submenu = palette
+        menu.addItem(colors)
+
+        menu.addItem(.separator())
+        let ungroup = NSMenuItem(title: "Ungroup", action: #selector(ungroupFromMenu(_:)),
+                                 keyEquivalent: "")
+        ungroup.target = self
+        ungroup.representedObject = id.uuid.uuidString
+        menu.addItem(ungroup)
+
+        NSMenu.popUpContextMenu(menu, with: event, for: self)
+    }
+
+    // Right-click on empty canvas: quick actions at that point.
+    func showCanvasMenu(at event: NSEvent, world: CGPoint) {
+        let menu = NSMenu()
+        let here = NSMenuItem(title: "New pane here",
+                              action: #selector(newPaneHereFromMenu(_:)),
+                              keyEquivalent: "")
+        here.target = self
+        here.representedObject = NSStringFromPoint(world)
+        menu.addItem(here)
+        NSMenu.popUpContextMenu(menu, with: event, for: self)
+    }
+
+    @objc func renameGroupFromMenu(_ sender: NSMenuItem) {
+        guard let s = sender.representedObject as? String,
+              let u = UUID(uuidString: s) else { return }
+        promptRenameGroup(GroupID(u))
+    }
+
+    @objc func recolorGroupFromMenu(_ sender: NSMenuItem) {
+        guard let s = sender.representedObject as? String else { return }
+        let parts = s.split(separator: "|").map(String.init)
+        guard parts.count == 2, let u = UUID(uuidString: parts[0]),
+              let hex = GroupStyle.sanitizedColor(parts[1]) else { return }
+        let id = GroupID(u)
+        guard var g = groupMetas[id] else { return }
+        g.color = hex
+        groupMetas[id] = g
+        refreshGroupViews()
+        conn?.updateGroup(UpdateGroup(id: id, name: g.name,
+                                      color: g.color, members: g.members))
+    }
+
+    @objc func ungroupFromMenu(_ sender: NSMenuItem) {
+        guard let s = sender.representedObject as? String,
+              let u = UUID(uuidString: s) else { return }
+        ungroup(GroupID(u))
+    }
+
+    @objc func newPaneHereFromMenu(_ sender: NSMenuItem) {
+        guard let s = sender.representedObject as? String else { return }
+        let p = NSPointFromString(s)
+        let cwd = focusedID.flatMap { panes[$0]?.meta.cwd }
+        var r = newPaneRect()
+        r.origin = CGPoint(x: p.x - r.width / 2, y: p.y - r.height / 2)
+        let obstacles = GroupLayout.creationObstacles(
+            panes: panes.values.map { NSRectOverlap.from($0.frame) },
+            groups: groupMetas, paneRects: paneRects(),
+            allowOverlap: GCTConfig.current.allowWindowOverlap)
+        if !GCTConfig.current.allowWindowOverlap || !obstacles.isEmpty {
+            r = NSRectOverlap.to(Overlap.resolve(NSRectOverlap.from(r),
+                                                 obstacles: obstacles))
+        }
+        conn?.createPane(CreatePane(
+            rect: Rect(x: r.minX, y: r.minY, w: r.width, h: r.height),
+            cwd: cwd,
+            allowOverlap: GCTConfig.current.allowWindowOverlap))
     }
 
     override func mouseMoved(with event: NSEvent) {
         guard let id = focusedID, let pane = panes[id] else { return }
         let world = worldPoint(event)
-        guard pane.containsWorld(world) else { return }
         let local = paneLocal(pane, world)
         pane.host?.mousePos(x: local.x, y: local.y, mods: GhosttyMods(event.modifierFlags))
     }
@@ -348,7 +755,7 @@ final class CanvasView: NSView {
         switch action {
         case .newPane: newPane()
         case .closePane: if let id = focusedID { closePane(id) }
-        case .renamePane: if let id = focusedID { renamePane(id) }
+        case .renamePane: renameFocusedOrGroup()
         case .moveFocusAbove: moveFocus(.above)
         case .moveFocusBelow: moveFocus(.below)
         case .moveFocusLeft: moveFocus(.left)
@@ -369,6 +776,50 @@ final class CanvasView: NSView {
         case .fitAll: fitAll()
         case .copy: copyFromFocused()
         case .paste: pasteIntoFocused()
+        case .groupSelection: promptGroupSelection()
+        case .ungroup:
+            if let id = focusedID, let gid = groupOf(id) { ungroup(gid) }
+        }
+    }
+
+    // Rename targets the focused pane's GROUP when it has one (the name
+    // shows on the background), else the pane itself.
+    func renameFocusedOrGroup() {
+        if let id = focusedID, let gid = groupOf(id) {
+            promptRenameGroup(gid)
+        } else if let id = focusedID {
+            renamePane(id)
+        }
+    }
+
+    // cmd+g renames the focused pane's group (no group = no-op).
+    // Making groups is the rubber-band's job: shift+drag empty space.
+    func promptGroupSelection() {
+        if let id = focusedID, let gid = groupOf(id) {
+            promptRenameGroup(gid)
+        }
+    }
+
+    func promptRenameGroup(_ id: GroupID) {
+        promptName(title: "Rename group",
+                   initial: groupMetas[id]?.name ?? "") { [weak self] name in
+            self?.renameGroup(id, name: name)
+        }
+    }
+
+    func promptName(title: String, initial: String,
+                    done: @escaping (String?) -> Void) {
+        guard let window else { return }
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.addButton(withTitle: "OK")
+        alert.addButton(withTitle: "Cancel")
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 280, height: 24))
+        field.stringValue = initial
+        alert.accessoryView = field
+        alert.beginSheetModal(for: window) { _ in
+            let name = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            done(name.isEmpty ? nil : name)
         }
     }
 
@@ -667,7 +1118,8 @@ final class CanvasView: NSView {
         let r = newPaneRect(direction: direction)
         conn?.createPane(CreatePane(
             rect: Rect(x: r.minX, y: r.minY, w: r.width, h: r.height),
-            cwd: cwd))
+            cwd: cwd,
+            allowOverlap: GCTConfig.current.allowWindowOverlap))
     }
 
     // New-pane placement: flush against the focused pane on the given
@@ -714,16 +1166,31 @@ final class CanvasView: NSView {
         }
 
         var rect = NSRect(origin: origin, size: size)
-        if !cfg.allowWindowOverlap {
-            let (axis, sign): (Overlap.Axis, Int) = switch dir {
-            case .right: (.horizontal, 1)
-            case .left:  (.horizontal, -1)
-            case .above: (.vertical, 1)
-            case .below: (.vertical, -1)
+        // Group bounds always block new panes, even when overlap is
+        // allowed; pane frames follow the overlap policy.
+        let obstacles = GroupLayout.creationObstacles(
+            panes: panes.values.map { NSRectOverlap.from($0.frame) },
+            groups: groupMetas, paneRects: paneRects(),
+            allowOverlap: cfg.allowWindowOverlap)
+        if !cfg.allowWindowOverlap || !obstacles.isEmpty {
+            if cfg.allowWindowOverlap {
+                let clean = Overlap.resolve(NSRectOverlap.from(rect),
+                                            obstacles: obstacles)
+                rect = NSRectOverlap.to(clean)
+            } else {
+                let (axis, sign): (Overlap.Axis, Int) = switch dir {
+                case .right: (.horizontal, 1)
+                case .left: (.horizontal, -1)
+                case .above: (.vertical, 1)
+                case .below: (.vertical, -1)
+                }
+                // Directional placement, then full resolve so group
+                // bounds (not just pane frames) also hold.
+                var placed = Overlap.resolve(NSRectOverlap.from(rect), direction: sign,
+                    axis: axis, obstacles: panes.values.map { NSRectOverlap.from($0.frame) })
+                placed = Overlap.resolve(placed, obstacles: obstacles)
+                rect = NSRectOverlap.to(placed)
             }
-            let clean = Overlap.resolve(NSRectOverlap.from(rect), direction: sign,
-                                          axis: axis, obstacles: panes.values.map { NSRectOverlap.from($0.frame) })
-            rect = NSRectOverlap.to(clean)
         }
         return rect
     }
@@ -769,6 +1236,7 @@ final class CanvasView: NSView {
             focusedID = nil
             if let last = zOrder.last { focusPane(last) }
         }
+        refreshGroupViews()
     }
 
     func makePaneView(_ meta: PaneMeta) {
@@ -788,6 +1256,7 @@ final class CanvasView: NSView {
         panes[meta.id] = pane
         zOrder.append(meta.id)
         worldView.addSubview(pane)
+        refreshGroupViews()
 
         // Attach after the surface exists; the daemon answers with the
         // scrollback ring, then live output.
@@ -826,20 +1295,38 @@ final class CanvasView: NSView {
                                 rect: Rect(x: rect.minX, y: rect.minY,
                                            w: rect.width, h: rect.height),
                                 allowOverlap: GCTConfig.current.allowWindowOverlap))
+        refreshOcclusion()
     }
 
     // Loaded layouts can overlap (saved while overlap was allowed): push
     // each pane out of the ones before it, oldest first, and persist the
-    // corrections. Overlap stays allowed: untouched.
+    // corrections. Group bounds always block non-members (even when
+    // overlap stays allowed); members untangle within their own group.
     func untangleLoadedPanes() {
-        var settled = [NSRect]()
+        // settled tracks placed frames WITH their pane ids, so grouped
+        // members resolve against their group's (fresh) bounds instead of
+        // double-counting member frames (see moveObstacles).
+        var settled = [(PaneID, NSRect)]()
         for id in zOrder {
             guard let pane = panes[id] else { continue }
             var rect = pane.frame
-            if !settled.isEmpty {
+            // Fresh bounds every pane: earlier placements shift them.
+            let live = GroupLayout.bounds(groups: groupMetas, panes: paneRects())
+            let memberOf: Set<GroupID> = groupOf(id).map { Set([$0]) } ?? []
+            var foreignMembers = Set<PaneID>()
+            var obstacles = [Rect]()
+            for (gid, b) in live where !memberOf.contains(gid) {
+                obstacles.append(b)
+                foreignMembers.formUnion(groupMetas[gid]?.members ?? [])
+            }
+            for (sid, srect) in settled
+                where sid != id && !foreignMembers.contains(sid) {
+                obstacles.append(NSRectOverlap.from(srect))
+            }
+            if !obstacles.isEmpty {
                 let before = rect
                 let clean = Overlap.resolve(NSRectOverlap.from(rect),
-                    obstacles: settled.map { NSRectOverlap.from($0) })
+                                            obstacles: obstacles)
                 rect = NSRectOverlap.to(clean)
                 if rect != before {
                     pane.setRect(rect, notifySurface: false)
@@ -850,8 +1337,10 @@ final class CanvasView: NSView {
                         allowOverlap: GCTConfig.current.allowWindowOverlap))
                 }
             }
-            settled.append(rect)
+            settled.append((id, rect))
         }
+        refreshGroupViews()
+        refreshOcclusion()
     }
     // MARK: Keyboard resize
 
@@ -897,7 +1386,7 @@ final class CanvasView: NSView {
             rect.size.height = h
         }
         guard rect != f else { return }
-        let others = panes.values.filter { $0.id != id }
+        let memberOf: Set<GroupID> = groupOf(id).map { Set([$0]) } ?? []
         if grow, !cfg.allowWindowOverlap {
             let (axis, sign): (Overlap.Axis, Int) = switch edge {
             case .right: (.horizontal, 1)
@@ -905,34 +1394,84 @@ final class CanvasView: NSView {
             case .above: (.vertical, 1)
             case .below: (.vertical, -1)
             }
-            let frames = others.map { NSRectOverlap.from($0.frame) }
-            let pushed = Overlap.pushForResize(NSRectOverlap.from(rect),
-                                               obstacles: frames,
-                                               axis: axis, sign: sign)
-            for (pane, pushedRect) in zip(others, pushed) {
-                let frame = NSRectOverlap.to(pushedRect)
-                guard frame != pane.frame else { continue }
-                pane.setRect(frame, notifySurface: false)
-                conn?.movePane(MovePane(id: pane.id, rect: Rect(
-                    x: frame.minX, y: frame.minY, w: frame.width,
-                    h: frame.height),
-                    allowOverlap: GCTConfig.current.allowWindowOverlap))
+            shoveForGrow(candidate: NSRectOverlap.from(rect),
+                         moving: id, axis: axis, sign: sign)
+        } else if !cfg.allowWindowOverlap || groupOf(id) != nil {
+            // Shrink (and any grouped grow with overlap allowed): clamp
+            // against the shared policy. Group bounds always block;
+            // members additionally avoid loose panes.
+            let obstacles = GroupLayout.moveObstacles(
+                moving: id, memberOf: memberOf, panes: paneRects(),
+                groups: groupMetas, allowOverlap: cfg.allowWindowOverlap)
+            if !cfg.allowWindowOverlap || !obstacles.isEmpty {
+                let clean = Overlap.clampResize(
+                    NSRectOverlap.from(rect),
+                    original: NSRectOverlap.from(f),
+                    edges: Overlap.Edges(
+                        w: edge == .left, e: edge == .right,
+                        s: edge == .below, n: edge == .above),
+                    obstacles: obstacles)
+                rect = NSRectOverlap.to(clean)
+                guard rect != f else { return }
             }
-        } else if !cfg.allowWindowOverlap {
-            let clean = Overlap.clampResize(
-                NSRectOverlap.from(rect),
-                original: NSRectOverlap.from(f),
-                edges: Overlap.Edges(
-                    w: edge == .left, e: edge == .right,
-                    s: edge == .below, n: edge == .above),
-                obstacles: others.map { NSRectOverlap.from($0.frame) })
-            rect = NSRectOverlap.to(clean)
-            guard rect != f else { return }
+            // Members: foreigners in the grown path shove aside along the
+            // resize axis (persisted immediately). Unresolvable → hold.
+            if let memberOf = groupOf(id) {
+                let ax: (Overlap.Axis, Int) = switch edge {
+                case .right: (.horizontal, 1)
+                case .left: (.horizontal, -1)
+                case .above: (.vertical, 1)
+                case .below: (.vertical, -1)
+                }
+                let ok = shoveForeignForMember(
+                    id: id, memberOf: memberOf,
+                    candidate: NSRectOverlap.from(rect), from: pane.frame,
+                    axis: ax)
+                guard ok else { return }
+            }
         }
         pane.setRect(rect, notifySurface: true)
         conn?.movePane(MovePane(id: id, rect: Rect(
             x: rect.minX, y: rect.minY, w: rect.width, h: rect.height),
             allowOverlap: GCTConfig.current.allowWindowOverlap))
+        refreshGroupViews()
+        refreshOcclusion()
+    }
+
+    // Keyboard grow-shove along one axis: push blockers out of the way.
+    // Foreign groups move as RIGID BLOCKS (every member by the same
+    // delta); lone panes move individually. Every touched pane persists
+    // via movePane (notifySurface false — size unchanged).
+    private func shoveForGrow(candidate: Rect, moving: PaneID,
+                              axis: Overlap.Axis, sign: Int) {
+        let memberOf: Set<GroupID> = groupOf(moving).map { Set([$0]) } ?? []
+        let rects = paneRects()
+        // Push grown bounds (padding counts as exclusion), not just the
+        // member frame.
+        let grown: Rect
+        if let memberOf = groupOf(moving),
+           let g = GroupLayout.grownRect(moving: moving, memberOf: memberOf,
+                                         candidate: candidate,
+                                         panes: rects, groups: groupMetas) {
+            grown = g
+        } else {
+            grown = candidate
+        }
+        let moves = GroupLayout.shoveAside(
+            grown: grown, moving: moving, memberOf: memberOf,
+            panes: rects, groups: groupMetas,
+            axis: axis, sign: sign,
+            allowOverlap: GCTConfig.current.allowWindowOverlap)
+        for (pid, r) in moves {
+            guard let pane = panes[pid], pane.id != moving else { continue }
+            let frame = NSRectOverlap.to(r)
+            guard frame != pane.frame else { continue }
+            pane.setRect(frame, notifySurface: false)
+            conn?.movePane(MovePane(id: pid, rect: r,
+                    allowOverlap: GCTConfig.current.allowWindowOverlap))
+        }
+        refreshGroupViews()
+        refreshOcclusion()
     }
 
     // MARK: Camera actions

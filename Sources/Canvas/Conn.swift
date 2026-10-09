@@ -4,11 +4,14 @@ import Foundation
 import Common
 
 protocol CanvasConnDelegate: AnyObject {
-    func connWelcome(_ panes: [PaneMeta])
+    func connWelcome(_ panes: [PaneMeta], _ groups: [GroupMeta])
     func connPaneCreated(_ meta: PaneMeta)
     func connPaneMeta(_ meta: PaneMeta)
     func connOutput(_ id: PaneID, _ data: Data)
     func connPaneExit(_ id: PaneID, _ code: Int32)
+    func connGroupCreated(_ meta: GroupMeta)
+    func connGroupMeta(_ meta: GroupMeta)
+    func connGroupExit(_ id: GroupID)
     func connClosed()
 }
 
@@ -38,7 +41,9 @@ final class CanvasConn: @unchecked Sendable {
     private func handle(_ frame: Frame) {
         switch frame.tag {
         case .welcome, .paneList:
-            if let w: Welcome = frame.decode() { delegate?.connWelcome(w.panes) }
+            if let w: Welcome = frame.decode() {
+                delegate?.connWelcome(w.panes, w.groups)
+            }
         case .paneCreated:
             if let m: PaneCreated = frame.decode() { delegate?.connPaneCreated(m.meta) }
         case .paneMeta:
@@ -47,6 +52,12 @@ final class CanvasConn: @unchecked Sendable {
             if let id = frame.paneID { delegate?.connOutput(id, frame.data) }
         case .paneExit:
             if let e: PaneExit = frame.decode() { delegate?.connPaneExit(e.id, e.code) }
+        case .groupCreated:
+            if let m: GroupCreated = frame.decode() { delegate?.connGroupCreated(m.meta) }
+        case .groupMeta:
+            if let m: GroupMeta = frame.decode() { delegate?.connGroupMeta(m) }
+        case .groupExit:
+            if let e: GroupRef = frame.decode() { delegate?.connGroupExit(e.id) }
         default:
             break
         }
@@ -62,4 +73,8 @@ final class CanvasConn: @unchecked Sendable {
     func sendInput(_ id: PaneID, _ data: Data) {
         conn.sendData(tag: .inputPane, paneID: id, data: data)
     }
+    func createGroup(_ req: CreateGroup) { conn.send(tag: .createGroup, json: req) }
+    func updateGroup(_ req: UpdateGroup) { conn.send(tag: .updateGroup, json: req) }
+    func deleteGroup(_ id: GroupID) { conn.send(tag: .deleteGroup, json: GroupRef(id: id)) }
+    func moveGroup(_ req: MoveGroup) { conn.send(tag: .moveGroup, json: req) }
 }

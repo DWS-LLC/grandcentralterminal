@@ -230,8 +230,9 @@ enum GCTAction: String, CaseIterable {
     case fitAll = "fit-all"
     case copy = "copy"
     case paste = "paste"
+    case groupSelection = "group-selection"
+    case ungroup = "ungroup"
 }
-
 // MARK: - Config
 
 struct GCTConfig {
@@ -255,7 +256,9 @@ struct GCTConfig {
     // Panes are kept from overlapping: creation, moves, and resizes all
     // resolve collisions.
     var allowWindowOverlap = false
-    // Which side of the focused pane cmd+t opens on.
+    // Mouse drags never shove other panes/groups out of the way (they
+    // slide around or hold instead). Keyboard grow always shoves.
+    var allowMouseDragToPush = false
     var newWindowDirection = GCTNewWindowDirection.right
     // Size of new panes: focused pane's size, or a fixed cols x rows grid
     // (80x24 when the canvas is empty).
@@ -301,6 +304,9 @@ struct GCTConfig {
 
         if let v = root["allow-window-overlap"] {
             cfg.allowWindowOverlap = v.lowercased() == "true"
+        }
+        if let v = root["allow-mouse-drag-to-push"] {
+            cfg.allowMouseDragToPush = v.lowercased() == "true"
         }
         if let v = root["new-window-open-direction"],
            let d = GCTNewWindowDirection(rawValue: v.lowercased()) {
@@ -393,6 +399,8 @@ struct GCTConfig {
             .fitAll: GCTKeybind("cmd+0")!,
             .copy: GCTKeybind("cmd+c")!,
             .paste: GCTKeybind("cmd+v")!,
+            .groupSelection: GCTKeybind("cmd+g")!,
+            .ungroup: GCTKeybind("cmd+shift+g")!,
         ]
     }
 
@@ -406,6 +414,10 @@ struct GCTConfig {
     # Window placement. Panes are kept from overlapping unless you allow
     # it: new panes, moves, and resizes all resolve collisions.
     allow-window-overlap = false
+    # Mouse drags slide around (or hold against) other panes/groups —
+    # they never shove anything out of the way. Keyboard grow always
+    # shoves. Set true to let mouse drags shove too.
+    allow-mouse-drag-to-push = false
     # Side of the focused pane that cmd+t opens on.
     new-window-open-direction = "right"  # above | below | left | right
     # New pane size: "follows" copies the focused pane, or fix a terminal
@@ -485,6 +497,11 @@ struct GCTConfig {
     fit-all = "cmd+0"
     copy = "cmd+c"
     paste = "cmd+v"
+    # Terminal groups: right-drag empty space rubber-bands panes into a
+    # group (colored background, blocks non-members even when overlap is
+    # allowed); right-click the background for rename/color/ungroup.
+    group-selection = "cmd+g"
+    ungroup = "cmd+shift+g"
     """
 }
 

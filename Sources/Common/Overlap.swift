@@ -44,6 +44,15 @@ public enum Overlap {
     // advances past one blocker edge, which terminates on an infinite
     // canvas. Nearest of the four escapes wins. Guaranteed overlap-free.
     public static func resolve(_ rect: Rect, obstacles: [Rect]) -> Rect {
+        // Canonical order: callers build obstacle lists from Swift dicts
+        // (random per-process seed), so canvas and daemon would otherwise
+        // resolve the same scene differently. Sort once at entry.
+        let obstacles = obstacles.sorted {
+            if $0.x != $1.x { return $0.x < $1.x }
+            if $0.y != $1.y { return $0.y < $1.y }
+            if $0.w != $1.w { return $0.w < $1.w }
+            return $0.h < $1.h
+        }
         let orig = rect
         var rect = rect
         for _ in 0...obstacles.count {
@@ -132,7 +141,18 @@ public enum Overlap {
     // direction. Returns updated frames for `obstacles` in order.
     public static func pushForResize(_ candidate: Rect, obstacles: [Rect],
                                      axis: Axis, sign: Int) -> [Rect] {
-        var frames = obstacles
+        // Deterministic across processes (see resolve): work on a
+        // canonically sorted copy, then map back to input positions so
+        // the return stays positional for zip-back callers.
+        let order = obstacles.indices.sorted {
+            let a = obstacles[$0], b = obstacles[$1]
+            if a.x != b.x { return a.x < b.x }
+            if a.y != b.y { return a.y < b.y }
+            if a.w != b.w { return a.w < b.w }
+            if a.h != b.h { return a.h < b.h }
+            return $0 < $1
+        }
+        var frames = order.map { obstacles[$0] }
         var moved = Set<Int>()
         let cap = (frames.count + 1) * (frames.count + 1) + 1
         for _ in 0..<cap {
@@ -159,7 +179,7 @@ public enum Overlap {
                 }
                 if pair != nil { break }
             }
-            guard let (a, b) = pair else { return frames }
+            guard let (a, b) = pair else { return unmap(frames, order) }
             let moveA: Bool = switch (axis, sign > 0) {
             case (.horizontal, true): frames[a].x > frames[b].x
             case (.horizontal, false): frames[a].x < frames[b].x
@@ -188,6 +208,311 @@ public enum Overlap {
                 moved.insert(b)
             }
         }
-        return frames
+        return unmap(frames, order)
+    }
+
+    // Inverse of the canonical sort in pushForResize: sorted position i
+    // holds input position order[i].
+    private static func unmap(_ frames: [Rect], _ order: [Int]) -> [Rect] {
+        var out = frames
+        for (sorted, input) in order.enumerated() { out[input] = frames[sorted] }
+        return out
+    }
+}
+
+// MARK: - Terminal groups
+// The group's exclusion rectangle is the union bounds of its member
+// frames (plus padding), computed identically by daemon and canvas so
+// neither side drifts. Panes outside the group always resolve against
+// this rectangle, regardless of allowOverlap.
+public enum GroupGeometry {
+    // Padding in world points around the member union.
+    public static let padding: Double = 16
+    // Extra headroom above the topmost member for the group titlebar.
+    // Matches the pane titlebar height so the family reads as one.
+    public static let titleClearance: Double = 22
+
+    // Union bounds of members + padding (+ title clearance on top). Nil
+    // when fewer than one member frame is present (group hidden).
+    public static func bounds(frames: [Rect]) -> Rect? {
+        guard !frames.isEmpty else { return nil }
+        var minX = frames[0].x, minY = frames[0].y
+        var maxX = frames[0].x + frames[0].w
+        var maxY = frames[0].y + frames[0].h
+        for f in frames.dropFirst() {
+            minX = min(minX, f.x)
+            minY = min(minY, f.y)
+            maxX = max(maxX, f.x + f.w)
+            maxY = max(maxY, f.y + f.h)
+        }
+        return Rect(x: minX - padding, y: minY - padding,
+                    w: maxX - minX + padding * 2,
+                    h: maxY - minY + padding * 2 + titleClearance)
+    }
+
+    // Obstacles for a pane OUTSIDE the given membership: the bounds of
+    // every group the pane is not in. Members ignore their own group's
+    // bounds (they may touch/overlap freely); other groups still block.
+    public static func obstacles(memberOf: Set<GroupID>,
+                                 groups: [GroupID: (members: Set<PaneID>, bounds: Rect?)])
+        -> [Rect] {
+        var out = [Rect]()
+        for (id, g) in groups where !memberOf.contains(id) {
+            if let b = g.bounds { out.append(b) }
+        }
+        return out
+    }
+
+    // Rigid block move: shift the whole member set by (dx, dy), resolving
+    // the GROUP BOUNDS against outside obstacles so relative offsets
+    // survive. Returns nil when the shifted bounds already clear
+    // everything (fast path); else the corrected origin delta.
+    public static func resolveBlockMove(bounds: Rect,
+                                        dx: Double, dy: Double,
+                                        obstacles: [Rect]) -> (dx: Double, dy: Double)? {
+        let target = Rect(x: bounds.x + dx, y: bounds.y + dy,
+                          w: bounds.w, h: bounds.h)
+        let clean = Overlap.resolve(target, obstacles: obstacles)
+        guard clean.x != target.x || clean.y != target.y else { return nil }
+        return (clean.x - bounds.x, clean.y - bounds.y)
+    }
+}
+// MARK: - Group layout arbitration (shared canvas + daemon)
+// Single source of truth so local drags and daemon arbitration agree.
+// Rule: panes outside a group can never overlap its bounds, regardless
+// of allowOverlap. Inside a group the normal overlap policy applies.
+public enum GroupLayout {
+    // Live bounds of every group with at least one known member frame.
+    public static func bounds(groups: [GroupID: GroupMeta],
+                              panes: [PaneID: Rect]) -> [GroupID: Rect] {
+        var out = [GroupID: Rect]()
+        for (id, g) in groups {
+            let frames = g.members.compactMap { panes[$0] }
+            if let b = GroupGeometry.bounds(frames: frames) { out[id] = b }
+        }
+        return out
+    }
+    // Obstacles for moving/resizing `moving` (a member of `memberOf`).
+    // Foreign groups appear ONCE, as their bounds (which already cover
+    // their members' frames + padding). Listing member frames alongside
+    // double-counts the same pane at two rects, and pushOut's
+    // least-penetration choice then flips with relative rect sizes.
+    // Pane frames follow the overlap policy otherwise; members always
+    // avoid non-members (a member dragged onto a loose pane would drag
+    // its bounds over it).
+    public static func moveObstacles(moving: PaneID, memberOf: Set<GroupID>,
+                                     panes: [PaneID: Rect],
+                                     groups: [GroupID: GroupMeta],
+                                     allowOverlap: Bool) -> [Rect] {
+        let b = bounds(groups: groups, panes: panes)
+        var out = [Rect]()
+        var foreignMembers = Set<PaneID>()
+        for (id, r) in b where !memberOf.contains(id) {
+            out.append(r)
+            foreignMembers.formUnion(groups[id]?.members ?? [])
+        }
+        if !allowOverlap {
+            for (id, r) in panes
+                where id != moving && !foreignMembers.contains(id) {
+                out.append(r)
+            }
+        } else if !memberOf.isEmpty {
+            var inside = Set<PaneID>()
+            for m in memberOf { inside.formUnion(groups[m]?.members ?? []) }
+            for (id, r) in panes
+                where id != moving && !inside.contains(id)
+                    && !foreignMembers.contains(id) { out.append(r) }
+        }
+        return out
+    }
+    // Obstacles for placing a brand-new (groupless) pane.
+    public static func creationObstacles(panes: [Rect],
+                                         groups: [GroupID: GroupMeta],
+                                         paneRects: [PaneID: Rect],
+                                         allowOverlap: Bool) -> [Rect] {
+        var out = allowOverlap ? [] : panes
+        for (_, r) in bounds(groups: groups, panes: paneRects) { out.append(r) }
+        return out
+    }
+    // One shove unit: a lone pane ([pane], isGroup false) or a whole
+    // foreign group (bounds + every member, moved together by the same
+    // delta, isGroup true).
+    public struct ShoveUnit {
+        public var rect: Rect
+        public var panes: [PaneID]
+        public var isGroup: Bool
+        public init(rect: Rect, panes: [PaneID], isGroup: Bool = false) {
+            self.rect = rect; self.panes = panes; self.isGroup = isGroup
+        }
+    }
+    // Units a member-initiated shove may push: foreign groups as blocks
+    // plus every ungrouped pane solo. Own-group members are NEVER units
+    // (the group moves rigidly; members slide around siblings via the
+    // caller's own resolve, never by shoving them). Foreign-group
+    // members are covered by their block unit only — never double-driven
+    // as solo units (that made multi-member blocks non-rigid and
+    // order-dependent).
+    public static func shoveUnits(moving: PaneID, memberOf: Set<GroupID>,
+                                  panes: [PaneID: Rect],
+                                  groups: [GroupID: GroupMeta]) -> [ShoveUnit] {
+        var units = [ShoveUnit]()
+        let b = bounds(groups: groups, panes: panes)
+        var foreignMembers = Set<PaneID>()
+        for (id, r) in b where !memberOf.contains(id) {
+            let members = (groups[id]?.members ?? []).filter { panes[$0] != nil }
+            foreignMembers.formUnion(members)
+            units.append(ShoveUnit(rect: r, panes: members, isGroup: true))
+        }
+        var inside = Set<PaneID>()
+        for m in memberOf { inside.formUnion(groups[m]?.members ?? []) }
+        for (id, r) in panes
+            where id != moving && !inside.contains(id)
+                && !foreignMembers.contains(id) {
+            units.append(ShoveUnit(rect: r, panes: [id]))
+        }
+        return units
+    }
+    // other visible frame to union with... actually returns the
+    // candidate + padding even solo — bounds() needs ≥1 frame, and the
+    // candidate supplies it. Nil only when the group id is unknown.
+    public static func grownRect(moving: PaneID, memberOf: GroupID,
+                                 candidate: Rect,
+                                 panes: [PaneID: Rect],
+                                 groups: [GroupID: GroupMeta]) -> Rect? {
+        guard groups[memberOf] != nil else { return nil }
+        var varied = panes
+        varied[moving] = candidate
+        return bounds(groups: groups, panes: varied)[memberOf]
+    }
+
+    // Push foreign units out of `grown` along (axis, sign). Returns new
+    // rects for the foreign panes that moved (only those). Deterministic
+    // across processes (pushForResize sorts internally; the zip-back is
+    // positional per caller-side unit order, which maps correctly on
+    // both sides). When overlap is allowed, solo panes move only on
+    // grown contact (free overlap elsewhere); foreign groups always
+    // participate (still exclusive).
+    public static func shoveAside(grown: Rect,
+                                  moving: PaneID, memberOf: Set<GroupID>,
+                                  panes: [PaneID: Rect],
+                                  groups: [GroupID: GroupMeta],
+                                  axis: Overlap.Axis, sign: Int,
+                                  allowOverlap: Bool) -> [PaneID: Rect] {
+        var units = shoveUnits(moving: moving, memberOf: memberOf,
+                               panes: panes, groups: groups)
+        if allowOverlap {
+            units = units.filter {
+                $0.isGroup || Overlap.overlaps($0.rect, grown)
+            }
+        }
+        guard !units.isEmpty else { return [:] }
+        let frames = units.map(\.rect)
+        let pushed = Overlap.pushForResize(grown, obstacles: frames,
+                                           axis: axis, sign: sign)
+        var out = [PaneID: Rect]()
+        for (unit, frame) in zip(units, pushed) {
+            let dx = frame.x - unit.rect.x, dy = frame.y - unit.rect.y
+            guard dx != 0 || dy != 0 else { continue }
+            for pid in unit.panes {
+                guard let r = panes[pid] else { continue }
+                out[pid] = Rect(x: r.x + dx, y: r.y + dy, w: r.w, h: r.h)
+            }
+        }
+        return out
+    }
+    // Obstacles for a rigid group-block move: every UNGROUPED pane plus
+    // every other group's bounds. Always enforced. Foreign members are
+    // covered by their block bounds — never double-listed as frames
+    // (see moveObstacles).
+    public static func blockObstacles(moving: GroupID,
+                                      panes: [PaneID: Rect],
+                                      groups: [GroupID: GroupMeta]) -> [Rect] {
+        let members = Set(groups[moving]?.members ?? [])
+        var grouped = Set<PaneID>()
+        for (id, g) in groups where id != moving {
+            grouped.formUnion(g.members)
+        }
+        var out = [Rect]()
+        for (id, r) in panes
+            where !members.contains(id) && !grouped.contains(id) {
+            out.append(r)
+        }
+        for (id, r) in bounds(groups: groups, panes: panes)
+            where id != moving { out.append(r) }
+        return out
+    }
+
+    // True when `candidate` (a member's proposed rect) grows its own
+    // group's bounds over anything foreign: another group's bounds OR
+    // any non-member pane frame. The padding overhang counts — bounds
+    // are exclusion zones, not just member frames. Shared by canvas
+    // (slide/hold for drags) and daemon (backstop).
+    public static func grownClash(moving: PaneID, memberOf: GroupID,
+                                  candidate: Rect,
+                                  panes: [PaneID: Rect],
+                                  groups: [GroupID: GroupMeta]) -> Bool {
+        var varied = panes
+        varied[moving] = candidate
+        let live = bounds(groups: groups, panes: varied)
+        guard let mine = live[memberOf] else { return false }
+        for (id, b) in live where id != memberOf {
+            if Overlap.overlaps(mine, b) { return true }
+        }
+        let inside = Set(groups[memberOf]?.members ?? [])
+        for (id, r) in varied
+            where id != moving && !inside.contains(id) {
+            if Overlap.overlaps(mine, r) { return true }
+        }
+        return false
+    }
+
+    // Slide a clashing member candidate along its grown bounds: resolve
+    // the grown rect against foreign obstacles, shift the candidate by
+    // the result. Lets drags glide along walls instead of sticking on
+    // the padding graze. Total function — caller re-checks grownClash
+    // and holds if it still clashes.
+    public static func slideGrownRect(candidate: Rect,
+                                      moving: PaneID, memberOf: GroupID,
+                                      panes: [PaneID: Rect],
+                                      groups: [GroupID: GroupMeta]) -> Rect {
+        var varied = panes
+        varied[moving] = candidate
+        guard let grown = bounds(groups: groups, panes: varied)[memberOf]
+            else { return candidate }
+        var foreign = [Rect]()
+        for (id, b) in bounds(groups: groups, panes: varied)
+            where id != memberOf { foreign.append(b) }
+        let inside = Set(groups[memberOf]?.members ?? [])
+        for (id, r) in varied
+            where id != moving && !inside.contains(id) {
+            foreign.append(r)
+        }
+        let clean = Overlap.resolve(grown, obstacles: foreign)
+        return Rect(x: candidate.x + (clean.x - grown.x),
+                    y: candidate.y + (clean.y - grown.y),
+                    w: candidate.w, h: candidate.h)
+    }
+}
+// MARK: - Group style
+public enum GroupStyle {
+    // Defaults cycled on create.
+    public static let palette = [
+        "#3b82f6", "#22c55e", "#a855f7", "#f59e0b",
+        "#ec4899", "#14b8af",
+    ]
+    // "#rgb"/"#rrggbb"/"#rgba"/"#rrggbbaa", "#" optional.
+    public static func sanitizedColor(_ raw: String?) -> String? {
+        guard var s = raw?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !s.isEmpty else { return nil }
+        if s.hasPrefix("#") { s = String(s.dropFirst()) }
+        if s.count == 3 || s.count == 4 { s = s.map { "\($0)\($0)" }.joined() }
+        guard s.count == 6 || s.count == 8,
+              UInt32(s, radix: 16) != nil else { return nil }
+        return "#" + s.lowercased()
+    }
+    public static func sanitizedName(_ raw: String?) -> String? {
+        guard let t = raw?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !t.isEmpty else { return nil }
+        return String(t.prefix(128))
     }
 }

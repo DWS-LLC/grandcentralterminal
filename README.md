@@ -22,12 +22,20 @@ and everything reattaches, scrollback replayed.
   - `⌘T` new pane (opens beside the focused pane — direction and size are
     configurable — and focuses + centers it; inherits the focused pane's
     cwd), `⌘W` close, `⌘R` rename (the `✻`-style named panes in the
-    titlebar). `⌘⇧H/J/K/L` opens a new pane on that fixed side with the
+    titlebar; on a grouped pane it renames the GROUP instead).
+    `⌘⇧H/J/K/L` opens a new pane on that fixed side with the
     same size/focus/camera rules
-  - panes never overlap unless you allow it: creation, titlebar drags,
-    edge/corner resizes, and keyboard grow/shrink all resolve collisions
-    (keyboard grow shoves blocking panes out of the way along that axis,
-    chained); layouts saved while overlap was allowed are untangled on load
+  - terminal groups: right-drag empty space rubber-bands panes into a
+    named, colored group (titlebar + border in the group color, same
+    shapes as panes; background rectangle = member bounds + padding,
+    with headroom for the titlebar). Drag the background to move every
+    member together as one rigid block. Panes outside a group can never
+    overlap its rectangle, even with `allow-window-overlap = true`.
+    Mouse drags never shove anything aside — they slide along collisions
+    and hold when wedged (only keyboard grow shoves;
+    `allow-mouse-drag-to-push = true` opts mouse drags back into shoving).
+    Right-click the background for rename / color / ungroup; `⌘G` renames
+    the focused pane's group, `⌘⇧G` dissolves it (panes stay).
   - `⌘C` copies the selection (or sends `^C` when nothing is selected),
     `⌘V` pastes
   - dead keys, accents, and IME composition work: keys route through the
@@ -37,9 +45,10 @@ and everything reattaches, scrollback replayed.
    (`[titlebar] border-width`, default 4pt — wider stays grabbable for
    edge/corner resizes even zoomed out) and a configurable drop shadow
    (`shadow-opacity` 0 turns it off, `shadow-radius` blurs).
-- Daemon (`gctd`) persists pane layout to
+- Daemon (`gctd`) persists pane layout + groups to
   `~/Library/Application Support/Grand Central Terminal/state.json`; on daemon
-  restart it respawns shells in their recorded cwd/rects. Scrollback lives
+  restart it respawns shells in their recorded cwd/rects and restores groups
+  (members pruned to live panes). Scrollback lives
   with the daemon (8 MiB ring per pane) and is replayed on attach.
 
 ## Layout
@@ -114,7 +123,9 @@ arrive via `resize_callback` and go to the daemon as `TIOCSWINSZ`. See
 | --- | --- |
 | `⌘T` | new pane |
 | `⌘W` | close focused pane |
-| `⌘R` | rename focused pane |
+| `⌘R` | rename focused pane (or its group) |
+| `⌘G` | rename focused pane's group |
+| `⌘⇧G` | dissolve focused pane's group (panes stay) |
 | `⌘H/J/K/L` | move focus left/down/up/right |
 | `⌘⌃H/J/K/L` | grow focused pane toward left/down/up/right (shoves blockers) |
 | `⌘⌃⇧H/J/K/L` | shrink focused pane from that edge |
@@ -123,7 +134,11 @@ arrive via `resize_callback` and go to the daemon as `TIOCSWINSZ`. See
 | scroll | zoom canvas (toward cursor) |
 | shift+scroll | scroll the terminal under the cursor |
 | drag empty space | pan |
+| right-drag empty space | rubber-band panes into a group |
+| right-click group background | rename / color / ungroup menu |
+| right-click empty space | new pane here |
 | drag titlebar | move pane |
+| drag group background | move every member together |
 | drag edges/corners | resize pane |
 
 ## Configuration
@@ -141,7 +156,9 @@ appearance = "system"
 # Window placement. Panes are kept from overlapping unless you allow it:
 # new panes, moves, and resizes all resolve collisions.
 allow-window-overlap = false
-# Side of the focused pane that cmd+t opens on.
+# Mouse drags never shove anything aside (they slide or hold); keyboard
+# grow always shoves. Set true to let mouse drags shove too.
+allow-mouse-drag-to-push = false
 new-window-open-direction = "right"  # above | below | left | right
 # New pane size: "follows" copies the focused pane, or fix a terminal grid
 # as "cols,rows" (e.g. "80,30"). With no panes on the canvas, a standard
@@ -217,6 +234,11 @@ switcher = "cmd+p"
 fit-all = "cmd+0"
 copy = "cmd+c"
 paste = "cmd+v"
+# Groups: right-drag empty space makes one; drag the background to move
+# it; right-click it for rename/color/ungroup; rename-pane (cmd+r)
+# targets the group when the focused pane has one.
+group-selection = "cmd+g"
+ungroup = "cmd+shift+g"
 ```
 
 Terminal colors (inside panes) are ghostty's domain and come from your ghostty

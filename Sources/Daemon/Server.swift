@@ -18,9 +18,12 @@ final class Remote: @unchecked Sendable {
 final class Server {
     private let state: StateStore
     private let sockPath: String
-    private let lock = NSLock()  // guards panes + remotes
+    private let lock = NSLock()  // guards panes + groups + remotes
 
     private var panes = [PaneID: Pane]()
+    // Group ownership: sanitized once on write; member ids pruned to
+    // live panes on load and on every pane exit/close.
+    private var groups = [GroupID: GroupMeta]()
     private var remotes = [Remote]()
 
     init(state: StateStore, sockPath: String) {
@@ -30,7 +33,9 @@ final class Server {
 
     func run() {
         // Existing panes from a previous life: respawn their shells.
-        for meta in state.load() {
+        // Groups restore with members pruned to live panes.
+        let saved = state.load()
+        for meta in saved.panes {
             var fresh = meta
             fresh.exited = false
             let pane = Pane(meta: fresh, command: nil)
@@ -42,6 +47,11 @@ final class Server {
             }
             panes[pane.id] = pane
             startPaneThreads(pane)
+        }
+        let live = Set(panes.keys)
+        for var g in saved.groups {
+            g.members = g.members.filter { live.contains($0) }
+            groups[g.id] = g
         }
 
         unlink(sockPath)
@@ -177,21 +187,43 @@ final class Server {
             // Arbiter: resolve against the TRUE store before broadcast,
             // so the stream itself is overlap-free (clients apply as-is).
             // Policy comes from the client (allowOverlap flag); default
-            // disallow preserves current behavior for old clients.
+            // disallow preserves current behavior for old clients. Group
+            // bounds always block non-members, regardless of the flag.
             var rect = req.rect
-            if !req.allowOverlap {
-                let obstacles = panes.values
-                    .filter { $0.id != req.id }.map(\.meta.rect)
-                rect = Overlap.resolve(rect, obstacles: obstacles)
+            let memberOf = groupOfLocked(req.id)
+            let rects = paneRectsLocked()
+            let metas = groupMetasLocked()
+            let obstacles = GroupLayout.moveObstacles(
+                moving: req.id, memberOf: memberOf.map { Set([$0]) } ?? [],
+                panes: rects, groups: metas,
+                allowOverlap: req.allowOverlap)
+            rect = Overlap.resolve(rect, obstacles: obstacles)
+            // Invariant: a member's new rect must not grow its group's
+            // bounds over anything foreign — another group's bounds or a
+            // loose pane. Slide along the grown bounds first (mirrors the
+            // canvas static drags so the stream converges); hold the
+            // current rect only when truly wedged.
+            if let memberOf,
+               GroupLayout.grownClash(moving: req.id, memberOf: memberOf,
+                                      candidate: rect,
+                                      panes: rects, groups: metas) {
+                let slid = GroupLayout.slideGrownRect(
+                    candidate: rect,
+                    moving: req.id, memberOf: memberOf,
+                    panes: rects, groups: metas)
+                rect = GroupLayout.grownClash(
+                    moving: req.id, memberOf: memberOf, candidate: slid,
+                    panes: rects, groups: metas)
+                    ? rects[req.id] ?? rect : slid
             }
             pane.meta.rect = rect
             var meta = pane.meta
             meta.rect = rect
             let targets = remotes
-            let metas = panes.values.map(\.meta)
+            let saved = snapshotLocked()
             lock.unlock()
             for r in targets { _ = r.conn.send(tag: .paneMeta, json: meta) }
-            state.scheduleSave(metas)
+            state.scheduleSave(saved)
 
         case .paneCwd:
             // OSC 7 from remote panes; local panes are polled in-process.
@@ -207,12 +239,102 @@ final class Server {
             guard let pane = panes[req.id] else { lock.unlock(); return }
             panes.removeValue(forKey: req.id)
             for r in remotes { r.subs.remove(req.id) }
+            let pruned = prunePaneLocked(req.id)
+            let saved = snapshotLocked()
             lock.unlock()
             // The reader thread unblocks with EIO once the shell dies; its
             // paneDied becomes a no-op (untracked), so broadcast here.
             pane.terminate()
             broadcast(tag: .paneExit, json: PaneExit(id: req.id, code: -1))
-            scheduleSaveLocked()
+            for g in pruned { broadcast(tag: .groupMeta, json: g) }
+            state.scheduleSave(saved)
+
+        case .createGroup:
+            guard let req: CreateGroup = frame.decode() else { return }
+            lock.lock()
+            let meta = makeGroupLocked(name: req.name, color: req.color,
+                                       members: req.members)
+            let afterCreate = snapshotLocked()
+            lock.unlock()
+            broadcast(tag: .groupCreated, json: GroupCreated(meta: meta))
+            state.scheduleSave(afterCreate)
+
+        case .updateGroup:
+            guard let req: UpdateGroup = frame.decode() else { return }
+            lock.lock()
+            guard var g = groups[req.id] else { lock.unlock(); return }
+            // Membership change must not grow our bounds over a loose
+            // pane (or a foreign group). Admit incrementally: current
+            // members first (stability), then additions in request order,
+            // keeping each only while the trial bounds stay clear.
+            let live = Set(panes.keys)
+            let wanted = req.members.filter { live.contains($0) }
+            let rects = paneRectsLocked()
+            let current = g.members.filter { live.contains($0) }
+            var admitted = [PaneID]()
+            var admittedSet = Set<PaneID>()
+            func clearAdding(_ id: PaneID) -> Bool {
+                var trial = g
+                trial.members = admitted + [id]
+                var trialGroups = groups
+                trialGroups[req.id] = trial
+                guard let grown = GroupLayout.bounds(
+                    groups: trialGroups, panes: rects)[req.id] else {
+                    return true
+                }
+                let liveBounds = GroupLayout.bounds(groups: groups,
+                                                    panes: rects)
+                for (gid, b) in liveBounds where gid != req.id {
+                    if Overlap.overlaps(grown, b) { return false }
+                }
+                for (pid, r) in rects
+                    where pid != id && !admittedSet.contains(pid) {
+                    if Overlap.overlaps(grown, r) { return false }
+                }
+                return true
+            }
+            for id in current where wanted.contains(id) {
+                if clearAdding(id) { admitted.append(id); admittedSet.insert(id) }
+            }
+            for id in wanted where !admittedSet.contains(id) {
+                if clearAdding(id) { admitted.append(id); admittedSet.insert(id) }
+            }
+            g.members = admitted
+            g.name = GroupStyle.sanitizedName(req.name)
+            g.color = GroupStyle.sanitizedColor(req.color) ?? g.color
+            // Admitted members evicted from any other group (single
+            // membership).
+            let fresh = Set(admitted)
+            var evicted = [GroupMeta]()
+            for (id, var other) in groups where id != req.id {
+                let before = other.members.count
+                other.members.removeAll { fresh.contains($0) }
+                if other.members.count != before {
+                    groups[id] = other
+                    evicted.append(other)
+                }
+            }
+            groups[req.id] = g
+            let updated = g
+            let afterUpdate = snapshotLocked()
+            lock.unlock()
+            for e in evicted { broadcast(tag: .groupMeta, json: e) }
+            broadcast(tag: .groupMeta, json: updated)
+            state.scheduleSave(afterUpdate)
+        case .deleteGroup:
+            guard let req: GroupRef = frame.decode() else { return }
+            lock.lock()
+            guard groups.removeValue(forKey: req.id) != nil else {
+                lock.unlock(); return
+            }
+            let afterDelete = snapshotLocked()
+            lock.unlock()
+            broadcast(tag: .groupExit, json: req)
+            state.scheduleSave(afterDelete)
+
+        case .moveGroup:
+            guard let req: MoveGroup = frame.decode() else { return }
+            moveGroup(req)
 
         default:
             break
@@ -223,12 +345,150 @@ final class Server {
         lock.lock(); defer { lock.unlock() }
         return Welcome(panes: panes.values
             .sorted { $0.id.uuid.uuidString < $1.id.uuid.uuidString }
-            .map(\.meta))
+            .map(\.meta), groups: Array(groups.values))
+    }
+
+    // MARK: Groups (all require `lock`)
+
+    private func groupMetasLocked() -> [GroupID: GroupMeta] { groups }
+
+    private func paneRectsLocked() -> [PaneID: Rect] {
+        var out = [PaneID: Rect]()
+        for (id, p) in panes { out[id] = p.meta.rect }
+        return out
+    }
+
+    private func groupOfLocked(_ id: PaneID) -> GroupID? {
+        groups.first { $0.value.members.contains(id) }?.key
+    }
+
+    private func snapshotLocked() -> SavedState {
+        SavedState(panes: panes.values.map(\.meta),
+                   groups: Array(groups.values))
+    }
+
+    // Create + sanitize: unknown ids dropped, members evicted from other
+    // groups (single membership), color validated, empty name cleared.
+    private func makeGroupLocked(name: String?, color: String?,
+                                 members: [PaneID]) -> GroupMeta {
+        let live = Set(panes.keys)
+        let wanted = members.filter { live.contains($0) }
+        let rects = paneRectsLocked()
+        // Admit in request order, keeping each only while the trial
+        // bounds stay clear of foreign groups and loose panes.
+        let gid = GroupID()
+        var admitted = [PaneID]()
+        for id in wanted {
+            let trial = GroupMeta(id: gid, members: admitted + [id])
+            var trialGroups = groups
+            trialGroups[gid] = trial
+            guard let grown = GroupLayout.bounds(
+                groups: trialGroups, panes: rects)[gid] else { continue }
+            let liveBounds = GroupLayout.bounds(groups: groups, panes: rects)
+            var clash = liveBounds.contains {
+                Overlap.overlaps(grown, $0.value)
+            }
+            if !clash {
+                let inside = Set(admitted + [id])
+                clash = rects.contains {
+                    $0.key != id && !inside.contains($0.key)
+                        && Overlap.overlaps(grown, $0.value)
+                }
+            }
+            if !clash { admitted.append(id) }
+        }
+        let fresh = Set(admitted)
+        for (id, var other) in groups {
+            let before = other.members.count
+            other.members.removeAll { fresh.contains($0) }
+            if other.members.count != before {
+                groups[id] = other
+                let m = other
+                broadcastLocked(tag: .groupMeta, json: m)
+            }
+        }
+        let g = GroupMeta(id: gid,
+                          name: GroupStyle.sanitizedName(name),
+                          color: GroupStyle.sanitizedColor(color)
+                            ?? GroupStyle.palette[groups.count % GroupStyle.palette.count],
+                          members: admitted)
+        groups[g.id] = g
+        return g
+    }
+
+    // Drop a dead pane from every group; returns touched groups for
+    // broadcast.
+    @discardableResult
+    private func prunePaneLocked(_ id: PaneID) -> [GroupMeta] {
+        var touched = [GroupMeta]()
+        for (gid, var g) in groups where g.members.contains(id) {
+            g.members.removeAll { $0 == id }
+            groups[gid] = g
+            touched.append(g)
+        }
+        return touched
+    }
+
+    private func broadcastLocked(tag: MsgTag, json: some Codable & Sendable) {
+        for r in remotes { _ = r.conn.send(tag: tag, json: json) }
+    }
+
+    // Rigid group move: shift every member by the same delta; the block
+    // SLIDES along foreign collisions (static world — shoving only ever
+    // happens canvas-side under allow-mouse-drag-to-push, persisted per
+    // pane before the moveGroup lands, so this resolve is idempotent).
+    // Members broadcast individually; clients apply as-is.
+    private func moveGroup(_ req: MoveGroup) {
+        lock.lock()
+        guard let g = groups[req.id] else { lock.unlock(); return }
+        let members = g.members.filter { panes[$0] != nil }
+        guard !members.isEmpty else { lock.unlock(); return }
+        let rects = paneRectsLocked()
+        let metas = groupMetasLocked()
+        let frames = members.compactMap { rects[$0] }
+        guard let b = GroupGeometry.bounds(frames: frames) else {
+            lock.unlock(); return
+        }
+        let obstacles = GroupLayout.blockObstacles(
+            moving: req.id, panes: rects, groups: metas)
+        let target = Rect(x: b.x + req.dx, y: b.y + req.dy, w: b.w, h: b.h)
+        let clean = Overlap.resolve(target, obstacles: obstacles)
+        let dx = clean.x - b.x, dy = clean.y - b.y
+        var updated = [PaneMeta]()
+        for id in members {
+            guard let pane = panes[id] else { continue }
+            var r = pane.meta.rect
+            r.x += dx; r.y += dy
+            pane.meta.rect = r
+            updated.append(pane.meta)
+        }
+        let saved = snapshotLocked()
+        let targetsRemotes = remotes
+        lock.unlock()
+        for m in updated {
+            for r in targetsRemotes { _ = r.conn.send(tag: .paneMeta, json: m) }
+        }
+        state.scheduleSave(saved)
     }
 
     private func createPane(_ requester: Conn, _ req: CreatePane) {
+        // New panes are groupless: group bounds always block, even when
+        // the client allows overlap.
+        lock.lock()
+        let rects = paneRectsLocked()
+        let metas = groupMetasLocked()
+        let rect: Rect = {
+            let obstacles = GroupLayout.creationObstacles(
+                panes: req.allowOverlap ? [] : Array(rects.values),
+                groups: metas, paneRects: rects,
+                allowOverlap: req.allowOverlap)
+            // allowOverlap + no groups = untouched fast path.
+            guard !obstacles.isEmpty else { return req.rect }
+            return Overlap.resolve(req.rect, obstacles: obstacles)
+        }()
+        lock.unlock()
         let cwd = req.cwd ?? NSHomeDirectory()
-        let meta = PaneMeta(id: PaneID(), rect: req.rect, name: req.name,
+        let meta = PaneMeta(id: PaneID(), rect: rect, name: req.name,
                             cwd: cwd, host: "local", title: nil, exited: false)
         let pane = Pane(meta: meta, command: req.command)
         do {
@@ -289,8 +549,11 @@ final class Server {
 
         lock.lock()
         panes.removeValue(forKey: pane.id)
+        let pruned = prunePaneLocked(pane.id)
+        let saved = snapshotLocked()
         lock.unlock()
-        scheduleSaveLocked()
+        for g in pruned { broadcast(tag: .groupMeta, json: g) }
+        state.scheduleSave(saved)
     }
 
     private func broadcast(tag: MsgTag, json: some Codable & Sendable) {
@@ -299,8 +562,7 @@ final class Server {
     }
 
     private func scheduleSaveLocked() {
-        let metas = panes.values.map(\.meta)
-        state.scheduleSave(metas)
+        state.scheduleSave(snapshotLocked())
     }
 
     private func housekeep() {
@@ -316,9 +578,9 @@ final class Server {
                 for r in remotes { _ = r.conn.send(tag: .paneMeta, json: pane.meta) }
             }
         }
-        let metas = panes.values.map(\.meta)
+        let saved = snapshotLocked()
         lock.unlock()
-        if dirty { state.scheduleSave(metas) }
+        if dirty { state.scheduleSave(saved) }
     }
 
     func shutdown() {
