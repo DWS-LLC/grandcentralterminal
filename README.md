@@ -13,8 +13,10 @@ and everything reattaches, scrollback replayed.
 
 ## What's implemented
 
-- Infinite canvas: drag empty space to pan, scroll to zoom (0.03–1.0×,
-  native-size text stays crisp), `⌘0` fits all panes.
+- Infinite canvas: drag empty space or two-finger scroll to pan; pinch,
+  mouse wheel, or ctrl+scroll to zoom toward the cursor (0.03–1.0×,
+  native-size text stays crisp); two-finger double-tap toggles actual
+  size vs fit-all; `⌘0` fits all panes.
   - drag the titlebar to move, edges/corners to resize (live PTY reflow)
   - click to focus; `⌘H/J/K/L` moves focus to the nearest pane in that
     direction (camera centers + zooms to fit it — both configurable);
@@ -143,7 +145,10 @@ arrive via `resize_callback` and go to the daemon as `TIOCSWINSZ`. See
 | `⌘⌃⇧H/J/K/L` | shrink focused pane from that edge |
 | `⌘P` | pane switcher (type to filter, ⏎ to jump) |
 | `⌘0` | fit all panes |
-| scroll | zoom canvas (toward cursor) |
+| two-finger scroll | pan canvas |
+| pinch | zoom canvas (toward cursor) |
+| two-finger double-tap | toggle actual size / fit all |
+| mouse wheel, ctrl+scroll | zoom canvas (toward cursor) |
 | shift+scroll | scroll the terminal under the cursor |
 | drag empty space | pan |
 | right-drag empty space | rubber-band panes into a group |

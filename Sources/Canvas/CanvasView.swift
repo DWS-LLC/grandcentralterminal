@@ -776,6 +776,23 @@ final class CanvasView: NSView {
     }
 
     override func scrollWheel(with event: NSEvent) {
+        // Trackpad / Magic Mouse (precise deltas) with no modifiers:
+        // two-finger panning. Any modifier falls through to the wheel
+        // behavior below (shift = terminal scrollback, else zoom), so
+        // modified scrolls act the same on every device. Deltas already
+        // honor the user's scroll-direction preference: the viewport
+        // follows the gesture, so the camera offset moves opposite.
+        // Momentum-phase events take the same path, giving inertial
+        // pans for free.
+        if event.hasPreciseScrollingDeltas
+            && event.modifierFlags.intersection([.shift, .control, .option, .command]).isEmpty {
+            cancelCameraAnim()
+            camera.offset.x -= event.scrollingDeltaX
+            camera.offset.y -= event.scrollingDeltaY
+            rebasePanDrag(around: viewPoint(event))
+            applyCamera()
+            return
+        }
         // Shift+wheel (or horizontal) = terminal scrollback; plain wheel zooms.
         if abs(event.scrollingDeltaX) > abs(event.scrollingDeltaY) {
             let pane = topPane(at: worldPoint(event)) ?? focusedID.flatMap { panes[$0] }
@@ -789,9 +806,51 @@ final class CanvasView: NSView {
             pane?.host?.mouseScroll(x: 0, y: dy, precision: event.hasPreciseScrollingDeltas)
             return
         }
-        let factor = exp(-event.scrollingDeltaY / 400)
-        camera.zoom(at: viewPoint(event), factor: factor)
+        cancelCameraAnim()
+        let p = viewPoint(event)
+        camera.zoom(at: p, factor: exp(-event.scrollingDeltaY / 400))
+        rebasePanDrag(around: p)
         applyCamera()
+    }
+
+    // Pinch: zoom anchored at the cursor. Per-event magnification is a
+    // delta since the last event, so 1+m composes into the full gesture.
+    override func magnify(with event: NSEvent) {
+        cancelCameraAnim()
+        let p = viewPoint(event)
+        camera.zoom(at: p, factor: 1 + event.magnification)
+        rebasePanDrag(around: p)
+        applyCamera()
+    }
+
+    // Two-finger double-tap: toggle actual size at the tap vs fit-all.
+    override func smartMagnify(with event: NSEvent) {
+        if camera.scale >= Camera.maxScale - 0.001 {
+            fitAll()
+            return
+        }
+        var target = camera
+        target.zoom(at: viewPoint(event),
+                    factor: Camera.maxScale / camera.scale)
+        animateCamera(to: target)
+    }
+
+    // Manual camera input cancels an in-flight focus/fit animation so the
+    // gesture owns the camera immediately instead of fighting the timer.
+    private func cancelCameraAnim() {
+        cameraAnim?.0.invalidate()
+        cameraAnim = nil
+    }
+
+    // Gestures move the camera outside the left-drag pan math; rebase an
+    // in-progress pan so the next mouseDragged continues from the new
+    // camera instead of snapping back to the drag start.
+    private func rebasePanDrag(around p: CGPoint) {
+        if case .pan(let start, _) = drag {
+            drag = .pan(start: start, offset0: CGPoint(
+                x: camera.offset.x - (p.x - start.x),
+                y: camera.offset.y - (p.y - start.y)))
+        }
     }
 
     private func paneLocal(_ pane: PaneView, _ world: CGPoint) -> CGPoint {
