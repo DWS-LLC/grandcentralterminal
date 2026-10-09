@@ -193,4 +193,20 @@ final class PaneView: NSView {
     func containsWorld(_ worldPoint: CGPoint, grab: CGFloat = 0) -> Bool {
         frame.insetBy(dx: -grab, dy: -grab).contains(worldPoint)
     }
+    // World -> ghostty surface coords: top-left origin, points, chrome
+    // excluded. Ghostty's own SurfaceView sends (x, height - y) relative
+    // to its nsview; our manual routing must do the same or clicks and
+    // selections land offset (border/titlebar) and vertically mirrored.
+    func surfacePoint(at worldPoint: CGPoint) -> CGPoint {
+        let lx = worldPoint.x - frame.minX - surfaceHostView.frame.minX
+        let by = worldPoint.y - frame.minY - surfaceHostView.frame.minY
+        return CGPoint(x: lx, y: surfaceHostView.bounds.height - by)
+    }
+
+    func surfaceContains(_ worldPoint: CGPoint) -> Bool {
+        let p = surfacePoint(at: worldPoint)
+        return p.x >= 0 && p.y >= 0
+            && p.x <= surfaceHostView.bounds.width
+            && p.y <= surfaceHostView.bounds.height
+    }
 }

@@ -18,6 +18,25 @@ func GhosttyMods(_ flags: NSEvent.ModifierFlags) -> ghostty_input_mods_e {
     if raw & UInt(NX_DEVICERCTLKEYMASK) != 0 { mods |= GHOSTTY_MODS_CTRL_RIGHT.rawValue }
     if raw & UInt(NX_DEVICERALTKEYMASK) != 0 { mods |= GHOSTTY_MODS_ALT_RIGHT.rawValue }
     if raw & UInt(NX_DEVICERCMDKEYMASK) != 0 { mods |= GHOSTTY_MODS_SUPER_RIGHT.rawValue }
-
     return ghostty_input_mods_e(mods)
+}
+
+// NSEvent scroll phases -> ghostty's packed scroll-mods int: bit 0 =
+// precision, bits 1-3 = momentum (matches src/input/mouse.zig
+// ScrollMods/Momentum and Ghostty.Input.ScrollMods).
+func GhosttyScrollMods(_ event: NSEvent) -> ghostty_input_scroll_mods_t {
+    var v: Int32 = 0
+    if event.hasPreciseScrollingDeltas { v |= 0b0000_0001 }
+    let m: Int32
+    switch event.momentumPhase {
+    case .began: m = 1
+    case .stationary: m = 2
+    case .changed: m = 3
+    case .ended: m = 4
+    case .cancelled: m = 5
+    case .mayBegin: m = 6
+    default: m = 0
+    }
+    v |= m << 1
+    return v
 }

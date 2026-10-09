@@ -148,11 +148,9 @@ final class SurfaceHost: @unchecked Sendable {
         ghostty_surface_mouse_pos(s, x, y, mods)
     }
 
-    func mouseScroll(x: Double, y: Double, precision: Bool) {
+    func mouseScroll(x: Double, y: Double, mods: ghostty_input_scroll_mods_t) {
         assert(Thread.isMainThread)
         guard let s = surfaceIfOpen() else { return }
-        var mods: ghostty_input_scroll_mods_t = 0
-        if precision { mods |= 0b1 }
         ghostty_surface_mouse_scroll(s, x, y, mods)
     }
 

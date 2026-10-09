@@ -277,9 +277,15 @@ struct GCTConfig {
     var moveFocusOnNewWindow = true
     // Directional focus moves (cmd+h/j/k/l): center the newly focused
     // pane, and/or zoom to fit it. Independent; both default true (fit
-    // implies centered, so both true just zooms to fit).
     var cameraFollowsFocusMove = true
     var cameraFitsFocusMove = true
+    // Hover behavior: focus-follows-mouse focuses the pane under the
+    // cursor on motion (same name as ghostty); scroll-on-terminal-hover
+    // routes wheel/trackpad scroll to the hovered terminal, else zoom.
+    // Both default true: scroll over a terminal scrolls it, scroll over
+    // empty canvas zooms.
+    var focusFollowsMouse = false
+    var scrollOnTerminalHover = true
     // Screen-space overlay bar of xbar-compatible plugin components.
     // Off by default; top/bottom edge; components lists plugin
     // basenames with `gap` spacers absorbing leftover width.
@@ -348,6 +354,12 @@ struct GCTConfig {
         }
         if let v = root["camera-fits-focus-move"] {
             cfg.cameraFitsFocusMove = v.lowercased() == "true"
+        }
+        if let v = root["focus-follows-mouse"] {
+            cfg.focusFollowsMouse = v.lowercased() == "true"
+        }
+        if let v = root["scroll-on-terminal-hover"] {
+            cfg.scrollOnTerminalHover = v.lowercased() == "true"
         }
         let sb = t["statusbar"] ?? [:]
         if let v = sb["enabled"] {
@@ -487,6 +499,14 @@ struct GCTConfig {
     # implies centered, so both true just zooms to fit).
     camera-follows-focus-move = true
     camera-fits-focus-move = true
+    # Focus the pane under the cursor on mouse motion (same name as
+    # ghostty's focus-follows-mouse). Off by default: click to focus.
+    focus-follows-mouse = false
+    # Scroll (wheel or trackpad) over a terminal scrolls the terminal;
+    # scroll over empty canvas zooms at the cursor. Set false for the old
+    # behavior: trackpad pans, shift+scroll goes to the terminal, wheel
+    # zooms.
+    scroll-on-terminal-hover = true
 
     [background]
     # Canvas background per mode. Hex like "#1a1b26" (alpha 1), or with

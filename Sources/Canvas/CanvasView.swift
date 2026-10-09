@@ -261,6 +261,12 @@ final class CanvasView: NSView {
     }
 
     func focusPane(_ id: PaneID) {
+        focusPane(id, raise: true)
+    }
+
+    // raise=false: focus without restacking. Hover focus must not churn
+    // z-order on every mouse sweep; click/keyboard focus still raises.
+    func focusPane(_ id: PaneID, raise: Bool) {
         guard panes[id] != nil else { return }
         if let old = focusedID, old != id {
             panes[old]?.host?.setFocus(false)
@@ -273,11 +279,10 @@ final class CanvasView: NSView {
             pane.host?.setFocus(true)
             window?.makeFirstResponder(self)
         }
-        bringToFront(id)
+        if raise { bringToFront(id) }
     }
 
     // MARK: Mouse
-
     override func mouseDown(with event: NSEvent) {
         window?.makeFirstResponder(self)
         let world = worldPoint(event)
@@ -295,10 +300,14 @@ final class CanvasView: NSView {
                 return
             }
             // Terminal surface click.
-            let local = paneLocal(pane, world)
+            let local = pane.surfacePoint(at: world)
             let mods = GhosttyMods(event.modifierFlags)
             let button: ghostty_input_mouse_button_e =
-                event.buttonNumber == 1 ? GHOSTTY_MOUSE_RIGHT : GHOSTTY_MOUSE_LEFT
+                switch event.buttonNumber {
+                case 1: GHOSTTY_MOUSE_RIGHT
+                case 2: GHOSTTY_MOUSE_MIDDLE
+                default: GHOSTTY_MOUSE_LEFT
+                }
             pane.host?.mousePos(x: local.x, y: local.y, mods: mods)
             pane.host?.mouseButton(GHOSTTY_MOUSE_PRESS, button, mods)
             drag = .surfaceClick(id: pane.id, button: button)
@@ -541,15 +550,23 @@ final class CanvasView: NSView {
             pane.setRect(rect, notifySurface: true)
             refreshGroupViews()
             refreshOcclusion()
-        case .surfaceClick, .none:
+        case .surfaceClick(let id, _):
+            // Selection/drag inside the terminal: keep ghostty's mouse
+            // position current while the button is held. Without this the
+            // core only ever sees press + release, so selections never
+            // extend and mouse-drag tracking never fires.
+            guard let pane = panes[id] else { return }
+            let local = pane.surfacePoint(at: worldPoint(event))
+            pane.host?.mousePos(x: local.x, y: local.y,
+                                mods: GhosttyMods(event.modifierFlags))
+        case .none:
             break
         }
     }
 
     override func mouseUp(with event: NSEvent) {
         if case .surfaceClick(let id, let button) = drag, let pane = panes[id] {
-            let world = worldPoint(event)
-            let local = paneLocal(pane, world)
+            let local = pane.surfacePoint(at: worldPoint(event))
             let mods = GhosttyMods(event.modifierFlags)
             pane.host?.mousePos(x: local.x, y: local.y, mods: mods)
             pane.host?.mouseButton(GHOSTTY_MOUSE_RELEASE, button, mods)
@@ -589,7 +606,7 @@ final class CanvasView: NSView {
         // tmux expect right-click). No drag state: mouseUp ignores it.
         if let pane = topPane(at: world) {
             focusPane(pane.id)
-            let local = paneLocal(pane, world)
+            let local = pane.surfacePoint(at: world)
             let mods = GhosttyMods(event.modifierFlags)
             pane.host?.mousePos(x: local.x, y: local.y, mods: mods)
             pane.host?.mouseButton(GHOSTTY_MOUSE_PRESS, GHOSTTY_MOUSE_RIGHT,
@@ -613,6 +630,15 @@ final class CanvasView: NSView {
         if case .select(let anchor) = drag {
             selectionBand = (anchor: anchor, current: worldPoint(event))
             showSelectionBand()
+            return
+        }
+        // Right-press started on a terminal: same selection/drag forwarding
+        // as left (AppKit sends these to rightMouseDragged, not
+        // mouseDragged).
+        if case .surfaceClick(let id, _) = drag, let pane = panes[id] {
+            let local = pane.surfacePoint(at: worldPoint(event))
+            pane.host?.mousePos(x: local.x, y: local.y,
+                                mods: GhosttyMods(event.modifierFlags))
             return
         }
         // Group background + right drag = same whole-group move as left.
@@ -642,7 +668,7 @@ final class CanvasView: NSView {
         // Release of a terminal right-click: forward the release.
         if case .surfaceClick(let id, let button) = drag,
            let pane = panes[id] {
-            let local = paneLocal(pane, world)
+            let local = pane.surfacePoint(at: world)
             let mods = GhosttyMods(event.modifierFlags)
             pane.host?.mousePos(x: local.x, y: local.y, mods: mods)
             pane.host?.mouseButton(GHOSTTY_MOUSE_RELEASE, button, mods)
@@ -769,21 +795,64 @@ final class CanvasView: NSView {
     }
 
     override func mouseMoved(with event: NSEvent) {
-        guard let id = focusedID, let pane = panes[id] else { return }
+        // Hover routing: the pane under the cursor gets position updates
+        // (link highlighting, hover shapes), not just the focused pane.
+        // Ghostty treats (-1,-1) as "left the viewport", so tell the old
+        // focus it left when the cursor moves onto another pane/empty.
         let world = worldPoint(event)
-        let local = paneLocal(pane, world)
-        pane.host?.mousePos(x: local.x, y: local.y, mods: GhosttyMods(event.modifierFlags))
+        let mods = GhosttyMods(event.modifierFlags)
+        let hovered = topPane(at: world)
+        if GCTConfig.current.focusFollowsMouse, let h = hovered,
+           h.id != focusedID, !isResizingOrMoving {
+            focusPane(h.id, raise: false)
+        }
+        if let h = hovered {
+            let local = h.surfacePoint(at: world)
+            h.host?.mousePos(x: local.x, y: local.y, mods: mods)
+        }
+        if let id = focusedID, id != hovered?.id,
+           let pane = panes[id] {
+            pane.host?.mousePos(x: -1, y: -1, mods: mods)
+        }
+    }
+
+    // A resize/move drag owns the cursor: focus-follows-mouse must not
+    // steal focus mid-gesture.
+    private var isResizingOrMoving: Bool {
+        switch drag {
+        case .resize, .move, .groupMove: return true
+        default: return false
+        }
     }
 
     override func scrollWheel(with event: NSEvent) {
-        // Trackpad / Magic Mouse (precise deltas) with no modifiers:
-        // two-finger panning. Any modifier falls through to the wheel
-        // behavior below (shift = terminal scrollback, else zoom), so
-        // modified scrolls act the same on every device. Deltas already
-        // honor the user's scroll-direction preference: the viewport
-        // follows the gesture, so the camera offset moves opposite.
-        // Momentum-phase events take the same path, giving inertial
-        // pans for free.
+        // Hover routes the scroll: over a terminal surface it goes to the
+        // terminal (scrollback, alt-screen, mouse reporting — the core
+        // decides), anywhere else it zooms the canvas at the cursor. No
+        // modifier needed, wheel and trackpad alike. Deltas already honor
+        // the user's scroll-direction preference; momentum-phase events
+        // take the same path, giving inertial scroll/zoom for free.
+        // Shape mirrors Ghostty's own SurfaceView: raw deltas (2x for
+        // precise devices), precision+momentum packed into scroll mods.
+        if GCTConfig.current.scrollOnTerminalHover {
+            let world = worldPoint(event)
+            if let pane = topPane(at: world), pane.surfaceContains(world) {
+                let m = event.hasPreciseScrollingDeltas ? 2.0 : 1.0
+                pane.host?.mouseScroll(x: event.scrollingDeltaX * m,
+                                       y: event.scrollingDeltaY * m,
+                                       mods: GhosttyScrollMods(event))
+                return
+            }
+            cancelCameraAnim()
+            let p = viewPoint(event)
+            camera.zoom(at: p, factor: exp(-event.scrollingDeltaY / 400))
+            rebasePanDrag(around: p)
+            applyCamera()
+            return
+        }
+        // Legacy path (scroll-on-terminal-hover = false): precise
+        // two-finger scroll pans, shift+wheel (which macOS delivers as a
+        // horizontal scroll) goes to the terminal, plain wheel zooms.
         if event.hasPreciseScrollingDeltas
             && event.modifierFlags.intersection([.shift, .control, .option, .command]).isEmpty {
             cancelCameraAnim()
@@ -793,17 +862,12 @@ final class CanvasView: NSView {
             applyCamera()
             return
         }
-        // Shift+wheel (or horizontal) = terminal scrollback; plain wheel zooms.
-        if abs(event.scrollingDeltaX) > abs(event.scrollingDeltaY) {
+        if abs(event.scrollingDeltaX) > abs(event.scrollingDeltaY)
+            || event.modifierFlags.contains(.shift) {
             let pane = topPane(at: worldPoint(event)) ?? focusedID.flatMap { panes[$0] }
-            let dx = event.scrollingDeltaX * (event.hasPreciseScrollingDeltas ? 2 : 12)
-            pane?.host?.mouseScroll(x: -dx, y: 0, precision: event.hasPreciseScrollingDeltas)
-            return
-        }
-        if event.modifierFlags.contains(.shift) {
-            let pane = topPane(at: worldPoint(event)) ?? focusedID.flatMap { panes[$0] }
-            let dy = event.scrollingDeltaY * (event.hasPreciseScrollingDeltas ? 2 : 12)
-            pane?.host?.mouseScroll(x: 0, y: dy, precision: event.hasPreciseScrollingDeltas)
+            pane?.host?.mouseScroll(x: event.scrollingDeltaX,
+                                    y: event.scrollingDeltaY,
+                                    mods: GhosttyScrollMods(event))
             return
         }
         cancelCameraAnim()
@@ -851,10 +915,6 @@ final class CanvasView: NSView {
                 x: camera.offset.x - (p.x - start.x),
                 y: camera.offset.y - (p.y - start.y)))
         }
-    }
-
-    private func paneLocal(_ pane: PaneView, _ world: CGPoint) -> CGPoint {
-        CGPoint(x: world.x - pane.frame.minX, y: world.y - pane.frame.minY)
     }
 
     // MARK: Keyboard

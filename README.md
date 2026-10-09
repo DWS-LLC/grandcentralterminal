@@ -13,14 +13,17 @@ and everything reattaches, scrollback replayed.
 
 ## What's implemented
 
-- Infinite canvas: drag empty space or two-finger scroll to pan; pinch,
-  mouse wheel, or ctrl+scroll to zoom toward the cursor (0.03–1.0×,
-  native-size text stays crisp); two-finger double-tap toggles actual
-  size vs fit-all; `⌘0` fits all panes.
+- Infinite canvas: drag empty space to pan; scroll over a terminal scrolls
+  the terminal (wheel or trackpad, no modifier — `scroll-on-terminal-hover`,
+  default true), scroll over empty canvas zooms toward the cursor; pinch
+  also zooms (0.03–1.0×, native-size text stays crisp); two-finger
+  double-tap toggles actual size vs fit-all; `⌘0` fits all panes.
   - drag the titlebar to move, edges/corners to resize (live PTY reflow)
-  - click to focus; `⌘H/J/K/L` moves focus to the nearest pane in that
-    direction (camera centers + zooms to fit it — both configurable);
-    `⌘P` opens a type-to-filter switcher and jumps the camera the same way
+  - click to focus (`focus-follows-mouse = true` focuses on hover instead);
+    click-drag inside a terminal selects text; `⌘H/J/K/L` moves focus to the
+    nearest pane in that direction (camera centers + zooms to fit it — both
+    configurable); `⌘P` opens a type-to-filter switcher and jumps the
+    camera the same way
   - `⌘T` new pane (opens beside the focused pane — direction and size are
     configurable — and focuses + centers it; inherits the focused pane's
     cwd), `⌘W` close, `⌘R` rename (the `✻`-style named panes in the
@@ -145,11 +148,11 @@ arrive via `resize_callback` and go to the daemon as `TIOCSWINSZ`. See
 | `⌘⌃⇧H/J/K/L` | shrink focused pane from that edge |
 | `⌘P` | pane switcher (type to filter, ⏎ to jump) |
 | `⌘0` | fit all panes |
-| two-finger scroll | pan canvas |
+| scroll over terminal | scroll the terminal (wheel or trackpad) |
+| scroll over empty canvas | zoom canvas (toward cursor) |
+| click-drag inside terminal | select text (`⌘C` copies) |
 | pinch | zoom canvas (toward cursor) |
 | two-finger double-tap | toggle actual size / fit all |
-| mouse wheel, ctrl+scroll | zoom canvas (toward cursor) |
-| shift+scroll | scroll the terminal under the cursor |
 | drag empty space | pan |
 | right-drag empty space | rubber-band panes into a group |
 | right-click group background | rename / color / ungroup menu |
@@ -194,6 +197,13 @@ move-focus-on-new-window = true
 # centered, so both true just zooms to fit).
 camera-follows-focus-move = true
 camera-fits-focus-move = true
+# Focus the pane under the cursor on mouse motion (same name as ghostty's
+# focus-follows-mouse). Off by default: click to focus.
+focus-follows-mouse = false
+# Scroll (wheel or trackpad) over a terminal scrolls the terminal; scroll
+# over empty canvas zooms at the cursor. Set false for the old behavior:
+# trackpad pans, shift+scroll goes to the terminal, wheel zooms.
+scroll-on-terminal-hover = true
 
 # Canvas background per mode. Hex like "#1a1b26" (alpha 1), or with alpha
 # like "#1a1b2680" / "#1234" — alpha < 1 makes the canvas transparent,
