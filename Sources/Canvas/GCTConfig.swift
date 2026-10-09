@@ -238,6 +238,8 @@ enum GCTAction: String, CaseIterable {
     case groupSelection = "group-selection"
     case ungroup = "ungroup"
     case toggleFloating = "toggle-floating"
+    case togglePaneSelection = "toggle-pane-selection"
+    case clearPaneSelection = "clear-pane-selection"
 }
 // MARK: - Config
 
@@ -464,6 +466,8 @@ struct GCTConfig {
             .groupSelection: GCTKeybind("cmd+g")!,
             .ungroup: GCTKeybind("cmd+shift+g")!,
             .toggleFloating: GCTKeybind("cmd+f")!,
+            .togglePaneSelection: GCTKeybind("cmd+d")!,
+            .clearPaneSelection: GCTKeybind("cmd+shift+d")!,
         ]
     }
 
@@ -599,6 +603,12 @@ struct GCTConfig {
     # allowed); right-click the background for rename/color/ungroup.
     group-selection = "cmd+g"
     ungroup = "cmd+shift+g"
+    # Multi-select: right-drag stages a selection WITHOUT grouping
+    # (right-click acts on it: group / close / clear). Shift+click a
+    # titlebar toggles that pane; move any selected titlebar to drag
+    # the whole selection; close-pane closes every selected pane.
+    toggle-pane-selection = "cmd+d"
+    clear-pane-selection = "cmd+shift+d"
     # Floating: the focused pane floats above same-scope windows (ignores
     # the overlap rule; foreign group bounds still block). With overlap
     # allowed every window already overlaps, so toggling only changes the

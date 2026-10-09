@@ -26,15 +26,23 @@ and everything reattaches, scrollback replayed.
     camera the same way
   - `⌘T` new pane (opens beside the focused pane — direction and size are
     configurable — and focuses + centers it; inherits the focused pane's
-    cwd and `cmd-+/-` zoom), `⌘W` close, `⌘R` rename (the `✻`-style named
-    panes in the titlebar; on a grouped pane it renames the GROUP instead).
+    cwd and `cmd-+/-` zoom; a directional split from a grouped pane joins
+    that group — loose panes in the way are shoved aside along the split
+    axis, cascading, while foreign groups still refuse the join), `⌘W`
+    close, `⌘R` rename (the `✻`-style named panes in the titlebar; on a
+    grouped pane it renames the GROUP instead).
     `⌘⇧H/J/K/L` opens a new pane on that fixed side with the
-    same size/focus/camera rules
+    same size/focus/camera rules (joins the focused pane's group too)
     Mouse drags never shove anything aside — they slide along collisions
     and hold when wedged (only keyboard grow shoves;
     `allow-mouse-drag-to-push = true` opts mouse drags back into shoving).
-    Right-click the background for rename / color / ungroup; `⌘G` renames
-    the focused pane's group, `⌘⇧G` dissolves it (panes stay).
+    Multi-select (no grouping until asked): right-drag empty space stages
+    a selection, `⇧`-click a titlebar toggles one pane, `⌘D` toggles the
+    focused pane, `⌘⇧D` clears; drag a selected titlebar to move the block
+    (rigid, slides along collisions), `⌘W` closes every selected pane,
+    `⌘G` groups the selection. Right-click anywhere off-pane always pops
+    one menu: selection actions when live, group actions on a group
+    background, plus "New pane here".
     Floating windows (`⌘F`, `toggle-floating`): a floated pane ignores the
     overlap rule within its own scope — a grouped pane floats over its
     siblings, an ungrouped one over every other ungrouped pane — and
@@ -142,9 +150,11 @@ arrive via `resize_callback` and go to the daemon as `TIOCSWINSZ`. See
 | Key | Action |
 | --- | --- |
 | `⌘T` | new pane |
-| `⌘W` | close focused pane |
+| `⌘W` | close focused pane (or every selected pane when focused is selected) |
 | `⌘R` | rename focused pane (or its group) |
-| `⌘G` | rename focused pane's group |
+| `⌘G` | group staged selection (else rename focused pane's group) |
+| `⌘D` | toggle focused pane in multi-select |
+| `⌘⇧D` | clear multi-select |
 | `⌘F` | float / re-tile focused pane |
 | `⌘⌃H/J/K/L` | grow focused pane toward left/down/up/right (shoves blockers) |
 | `⌘⌃⇧H/J/K/L` | shrink focused pane from that edge |
@@ -156,14 +166,14 @@ arrive via `resize_callback` and go to the daemon as `TIOCSWINSZ`. See
 | pinch | zoom canvas (toward cursor) |
 | two-finger double-tap | toggle actual size / fit all |
 | drag empty space | pan |
-| right-drag empty space | rubber-band panes into a group |
-| right-click group background | rename / color / ungroup menu |
-| right-click empty space | new pane here |
+| right-drag empty space | rubber-band panes into a staged multi-select (no grouping yet) |
+| right-click canvas/group background | one menu, always: selection actions (when live) + group actions (on background) + new pane here |
+| shift+click titlebar | toggle pane in multi-select |
+| drag selected titlebar | move the whole selection as a rigid block |
 | drag titlebar | move pane |
 | drag group background | move every member together |
 | drag edges/corners | resize pane |
 
-## Configuration
 
 `~/.config/gct/config.toml` — created with defaults on first launch; every key
 is optional and malformed values fall back to their defaults. Takes effect on
@@ -284,14 +294,20 @@ switcher = "cmd+p"
 fit-all = "cmd+0"
 copy = "cmd+c"
 paste = "cmd+v"
-# Groups: right-drag empty space makes one; drag the background to move
-# it; right-click it for rename/color/ungroup; rename-pane (cmd+r)
+# Multi-select (staged, NOT a group): right-drag selects, shift+click a
+# titlebar toggles, toggle-pane-selection flips the focused pane;
+# drag a selected titlebar moves the block; close-pane closes the block
+# when focused is selected; group-selection groups it; right-click with
+# a live selection offers group / close / clear.
+toggle-pane-selection = "cmd+d"
+clear-pane-selection = "cmd+shift+d"
+# Groups: group-selection (cmd+g) on a 2+ staged selection makes one
+# (colored background, blocks non-members even when overlap is allowed);
+# otherwise it renames the focused pane's group. Drag the background to
+# move it; right-click it for rename/color/ungroup; rename-pane (cmd+r)
 # targets the group when the focused pane has one.
 group-selection = "cmd+g"
 ungroup = "cmd+shift+g"
-# Floating: the focused pane floats above same-scope windows (see above);
-# re-press re-tiles it. With overlap allowed, only stacking + marker.
-toggle-floating = "cmd+f"
 ```
 
 Terminal settings (inside panes) are ghostty's domain and come from your

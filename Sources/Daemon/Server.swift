@@ -522,21 +522,34 @@ final class Server {
     }
 
     private func createPane(_ requester: Conn, _ req: CreatePane) {
-        // New panes are groupless: group bounds always block, even when
-        // the client allows overlap.
+        // New panes are groupless unless joinGroup asks for admission
+        // (directional split from a grouped pane). Joiners land FLUSH at
+        // the requested rect — only foreign group bounds deflect
+        // placement; loose panes in the way are shoved aside along the
+        // split axis at admit time (cascade included). Foreign-group
+        // clash still refuses the join (groupless pane, no error).
         lock.lock()
         let rects = paneRectsLocked()
         let metas = groupMetasLocked()
-        let rect: Rect = {
+        let floating = floatingLocked()
+        let rect: Rect
+        if req.joinGroup != nil {
+            var obstacles = [Rect]()
+            for (gid, b) in GroupLayout.bounds(groups: metas, panes: rects)
+                where gid != req.joinGroup {
+                obstacles.append(b)
+            }
+            rect = obstacles.isEmpty ? req.rect
+                : Overlap.resolve(req.rect, obstacles: obstacles)
+        } else {
             let obstacles = GroupLayout.creationObstacles(
                 paneRects: rects,
                 groups: metas,
                 allowOverlap: req.allowOverlap,
-                floating: floatingLocked())
-            // allowOverlap + no groups = untouched fast path.
-            guard !obstacles.isEmpty else { return req.rect }
-            return Overlap.resolve(req.rect, obstacles: obstacles)
-        }()
+                floating: floating)
+            rect = obstacles.isEmpty ? req.rect
+                : Overlap.resolve(req.rect, obstacles: obstacles)
+        }
         lock.unlock()
         let cwd = req.cwd ?? NSHomeDirectory()
         let meta = PaneMeta(id: PaneID(), rect: rect, name: req.name,
@@ -553,11 +566,101 @@ final class Server {
 
         lock.lock()
         panes[pane.id] = pane
+        // joinGroup: admit into the parent's group. Loose panes in the
+        // grown path get SHOVED aside along the split axis first (same
+        // axis/sign as keyboard grow); foreign groups never shove —
+        // their clash still refuses the join (groupless pane, no error).
+        // Every moved pane broadcasts its new frame.
+        var joined: GroupMeta?
+        var shoved = [PaneID: Rect]()
+        if let join = req.joinGroup, var g = groups[join],
+           !g.members.contains(pane.id) {
+            var trialGroups = groups
+            var trial = g
+            trial.members.append(pane.id)
+            trialGroups[join] = trial
+            var withNew = paneRectsLocked()
+            withNew[pane.id] = rect
+            if let grown = GroupLayout.bounds(groups: trialGroups, panes: withNew)[join] {
+                if !admitClearLocked(group: join, grown: grown, newMember: pane.id,
+                                     panes: withNew),
+                   let axis = joinAxis(req.joinDirection) {
+                    // Shove LOOSE panes only: foreign groups are not
+                    // shoveable (their bounds clash = refusal). Filter
+                    // the shove result to ungrouped panes.
+                    let moves = GroupLayout.shoveAside(
+                        grown: grown, moving: pane.id, memberOf: Set([join]),
+                        panes: withNew, groups: groups,
+                        axis: axis.0, sign: axis.1,
+                        // Join-shove always behaves disallowed-style:
+                        // the grown block is exclusive, allowOverlap
+                        // must not exempt loose panes from the push.
+                        allowOverlap: false,
+                        floating: floatingLocked())
+                    let grouped = Set(groups.values.flatMap(\.members))
+                    for (pid, r) in moves where !grouped.contains(pid) {
+                        withNew[pid] = r
+                        shoved[pid] = r
+                    }
+                }
+                if admitClearLocked(group: join, grown: GroupLayout.bounds(
+                    groups: trialGroups, panes: withNew)[join] ?? grown,
+                    newMember: pane.id, panes: withNew) {
+                    g.members.append(pane.id)
+                    groups[join] = g
+                    joined = g
+                } else {
+                    shoved.removeAll()
+                }
+            }
+        }
+        for (pid, r) in shoved {
+            panes[pid]?.meta.rect = r
+        }
+        var movedMetas = [PaneMeta]()
+        for pid in shoved.keys {
+            if let m = panes[pid]?.meta { movedMetas.append(m) }
+        }
+        let saved = snapshotLocked()
+        let targets = remotes
         lock.unlock()
         startPaneThreads(pane)
 
         broadcast(tag: .paneCreated, json: PaneCreated(meta: pane.meta))
-        scheduleSaveLocked()
+        for m in movedMetas {
+            broadcast(tag: .paneMeta, json: m)
+        }
+        if let joined {
+            for r in targets { _ = r.conn.send(tag: .groupMeta, json: joined) }
+        }
+        state.scheduleSave(saved)
+    }
+
+    // Split direction -> shove axis/sign (same convention as keyboard
+    // grow: new pane on the left pushes blockers left, etc.).
+    private func joinAxis(_ raw: String?) -> (Overlap.Axis, Int)? {
+        switch raw?.lowercased() {
+        case "right": return (.horizontal, 1)
+        case "left": return (.horizontal, -1)
+        case "above": return (.vertical, 1)
+        case "below": return (.vertical, -1)
+        default: return nil
+        }
+    }
+
+    // Shared grown-bounds admission: grown must clear foreign group
+    // bounds and every non-member pane frame. Caller holds `lock`.
+    private func admitClearLocked(group: GroupID, grown: Rect, newMember: PaneID,
+                                  panes: [PaneID: Rect]) -> Bool {
+        for (gid, b) in GroupLayout.bounds(groups: groups, panes: panes)
+            where gid != group {
+            if Overlap.overlaps(grown, b) { return false }
+        }
+        let inside = Set((groups[group]?.members ?? []) + [newMember])
+        for (pid, r) in panes where !inside.contains(pid) {
+            if Overlap.overlaps(grown, r) { return false }
+        }
+        return true
     }
 
     private func startPaneThreads(_ pane: Pane) {

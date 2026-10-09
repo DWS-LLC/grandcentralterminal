@@ -145,8 +145,10 @@ extension CanvasView {
                height: abs(band.current.y - band.anchor.y))
     }
 
-    // Panes fully inside the finished band (titlebar included). Prompts
-    // for a name, then creates (daemon assigns the color + broadcasts).
+    // Panes fully inside the finished band (titlebar included). Stages
+    // a multi-selection WITHOUT grouping: right-click acts on it (group
+    // / close / clear), the group keybind groups it, dragging a member
+    // moves the whole block.
     func finishSelectionBand() {
         defer { selectionBand = nil }
         guard let band = selectionBand else { return }
@@ -156,12 +158,80 @@ extension CanvasView {
         for (id, pane) in panes where rect.contains(pane.frame) {
             picked.append(id)
         }
-        guard picked.count >= 2 else { return }
-        let ids = picked
-        promptName(title: "New group (\(ids.count) panes)",
-                   initial: "Group \(groupMetas.count + 1)") { [weak self] name in
-            self?.createGroup(members: ids, name: name)
+        guard !picked.isEmpty else { return }
+        setSelected(Set(picked))
+    }
+
+    // MARK: Multi-select (staged, no daemon group)
+
+    // Live members (drop panes that exited since staging).
+    func liveSelected() -> [PaneID] {
+        selectedIDs.filter { panes[$0] != nil }
+    }
+
+    func setSelected(_ ids: Set<PaneID>) {
+        let live = ids.filter { panes[$0] != nil }
+        let removed = selectedIDs.subtracting(live)
+        let added = live.subtracting(selectedIDs)
+        selectedIDs = live
+        for id in removed { panes[id]?.isSelected = false }
+        for id in added { panes[id]?.isSelected = true }
+        // Focus follows the selection so keybinds act on the block: keep
+        // focus when it is inside, else focus the topmost selected pane.
+        // No selection + no focus is fine (empty canvas); otherwise keep
+        // the existing focus.
+        if live.isEmpty { return }
+        if let f = focusedID, live.contains(f) { return }
+        if let top = live.max(by: { zIndex(of: $0) < zIndex(of: $1) }) {
+            focusPane(top)
         }
+    }
+
+    func toggleSelected(_ id: PaneID) {
+        guard panes[id] != nil else { return }
+        var next = selectedIDs
+        if next.contains(id) { next.remove(id) } else { next.insert(id) }
+        setSelected(next)
+    }
+
+    func clearSelection() {
+        guard !selectedIDs.isEmpty else { return }
+        for id in selectedIDs { panes[id]?.isSelected = false }
+        selectedIDs.removeAll()
+    }
+
+    // z-order rank for deterministic block ordering (front = larger).
+    func zIndex(of id: PaneID) -> Int {
+        zOrder.firstIndex(of: id) ?? -1
+    }
+
+    // Group keybind on a staged selection: prompt for a name and create
+    // the daemon group (clears the staging). Falls back to renaming the
+    // focused pane's group when nothing is staged.
+    func groupStagedSelection() {
+        let ids = liveSelected()
+        guard ids.count >= 2 else {
+            promptGroupSelection()
+            return
+        }
+        let sorted = ids.sorted { zIndex(of: $0) < zIndex(of: $1) }
+        promptName(title: "New group (\(sorted.count) panes)",
+                   initial: "Group \(groupMetas.count + 1)") { [weak self] name in
+            self?.createGroup(members: sorted, name: name)
+            self?.clearSelection()
+        }
+    }
+
+    // Close keybind with a staged selection: close every selected pane
+    // when the focused pane is part of it, else just the focused pane.
+    func closeSelectedOrFocused() {
+        if let f = focusedID, selectedIDs.contains(f), selectedIDs.count >= 2 {
+            let ids = liveSelected()
+            clearSelection()
+            for id in ids { closePane(id) }
+            return
+        }
+        if let id = focusedID { closePane(id) }
     }
 }
 

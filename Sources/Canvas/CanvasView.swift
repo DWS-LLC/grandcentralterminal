@@ -12,6 +12,10 @@ final class CanvasView: NSView {
     var panes = [PaneID: PaneView]()
     var zOrder = [PaneID]()
     private(set) var focusedID: PaneID?
+    // Multi-select: staged pane ids (right-drag, shift+click, cmd+d)
+    // that act as a unit for move/close/group WITHOUT being a daemon
+    // group. Cleared on empty clicks, close, and explicit clear.
+    var selectedIDs = Set<PaneID>()
     // Terminal groups: daemon-owned membership, local background views.
     var groupMetas = [GroupID: GroupMeta]()
     var groupViews = [GroupID: GroupView]()
@@ -29,7 +33,9 @@ final class CanvasView: NSView {
     // A grid-sized pane created on an empty canvas got a provisional frame
     // (nothing to measure yet); corrected once its surface reports metrics.
     private var pendingGridFixup: (cols: Int, rows: Int)?
-
+    // Directional split from a grouped pane joins it via CreatePane.joinGroup
+    // (daemon places inside own bounds + admits; groupMeta broadcast
+    // updates views). No client-side pending state.
     var conn: CanvasConn?
     private(set) var ghosttyApp: GhosttyApp?
 
@@ -40,8 +46,12 @@ final class CanvasView: NSView {
         case move(id: PaneID, grabDelta: CGPoint)
         case resize(id: PaneID, zone: PaneView.ResizeZone, rect0: NSRect)
         case surfaceClick(id: PaneID, button: ghostty_input_mouse_button_e)
-        // Rubber-band: right-drag on empty space selects panes for grouping.
+        // Rubber-band: right-drag on empty space stages a multi-select
+        // (no grouping until the user asks via keybind or menu).
         case select(anchor: CGPoint)
+        // Multi-select move: every selected member at grab-time offsets.
+        case multiMove(members: [PaneID], rects0: [PaneID: NSRect],
+                       anchor: CGPoint)
         // Whole-group move: id plus the member offsets at grab time.
         case groupMove(id: GroupID, grabDelta: CGPoint,
                        members: [PaneID], rects0: [PaneID: NSRect])
@@ -321,13 +331,39 @@ final class CanvasView: NSView {
         window?.makeFirstResponder(self)
         let world = worldPoint(event)
         if let pane = topPane(at: world, grab: camera.screenToWorldDistance(5)) {
+            // Shift+click on chrome (titlebar/border, NOT the terminal
+            // surface) toggles multi-select; terminal-area shift+click
+            // keeps extending text selection. Resize zones still resize.
+            if event.modifierFlags.contains(.shift) && !pane.surfaceContains(world),
+               pane.resizeZone(at: world, screenTolerance: camera.screenToWorldDistance(5)) == nil {
+                focusPane(pane.id)
+                toggleSelected(pane.id)
+                drag = .none
+                return
+            }
             focusPane(pane.id)
+            // Plain click on an unselected pane drops the staging (the
+            // titlebar drag path above keeps it for block moves).
+            if !event.modifierFlags.contains(.shift), !selectedIDs.contains(pane.id) {
+                clearSelection()
+            }
             if let zone = pane.resizeZone(at: world,
                                           screenTolerance: camera.screenToWorldDistance(5)) {
                 drag = .resize(id: pane.id, zone: zone, rect0: pane.frame)
                 return
             }
             if pane.isInTitlebar(world) {
+                // Dragging a selected pane's titlebar moves the whole
+                // selection as a rigid block.
+                if selectedIDs.contains(pane.id), selectedIDs.count >= 2 {
+                    var rects = [PaneID: NSRect]()
+                    for m in selectedIDs {
+                        if let p = panes[m] { rects[m] = p.frame }
+                    }
+                    drag = .multiMove(members: Array(rects.keys), rects0: rects,
+                                      anchor: world)
+                    return
+                }
                 drag = .move(id: pane.id,
                              grabDelta: CGPoint(x: world.x - pane.frame.minX,
                                                 y: world.y - pane.frame.minY))
@@ -363,6 +399,9 @@ final class CanvasView: NSView {
 
         // Plain drag on empty space pans the camera. (Rubber-band grouping
         // is on the right button; group menus too — see rightMouseDown.)
+        // A plain left press (no shift) clears the multi-select; the drag
+        // still pans.
+        if !event.modifierFlags.contains(.shift) { clearSelection() }
         drag = .pan(start: viewPoint(event), offset0: camera.offset)
     }
 
@@ -452,6 +491,42 @@ final class CanvasView: NSView {
                 guard let pane = panes[m], let r0 = rects0[m] else { continue }
                 pane.setRect(NSRect(x: r0.minX + dx, y: r0.minY + dy,
                                     width: r0.width, height: r0.height),
+                             notifySurface: false)
+            }
+            refreshGroupViews()
+            refreshOcclusion()
+        case .multiMove(let members, let rects0, let anchor):
+            let world = worldPoint(event)
+            let dx = world.x - anchor.x, dy = world.y - anchor.y
+            // Rigid block: shift grab-time frames by the cursor delta,
+            // drop panes that no longer exist. The whole SELECTION
+            // resolves as one union rect against foreign obstacles (same
+            // static-world rule as group drags: slide, never shove), so
+            // relative offsets survive and the block never shears.
+            var targets = [PaneID: NSRect]()
+            for m in members {
+                guard let r0 = rects0[m], panes[m] != nil else { continue }
+                targets[m] = NSRect(x: r0.minX + dx, y: r0.minY + dy,
+                                    width: r0.width, height: r0.height)
+            }
+            guard !targets.isEmpty,
+                  let union1 = groupBoundsFrom(targets) else { return }
+            let rects = paneRects()
+            let floating = floatingPanes()
+            var foreign = [Rect]()
+            for (id, r) in rects where targets[id] == nil && !floating.contains(id) {
+                foreign.append(r)
+            }
+            for (_, b) in GroupLayout.bounds(groups: groupMetas, panes: rects) {
+                foreign.append(b)
+            }
+            let clean = Overlap.resolve(NSRectOverlap.from(union1), obstacles: foreign)
+            let sdx = clean.x - Double(union1.minX)
+            let sdy = clean.y - Double(union1.minY)
+            for (m, want) in targets {
+                guard let pane = panes[m] else { continue }
+                pane.setRect(NSRect(x: want.minX + sdx, y: want.minY + sdy,
+                                    width: want.width, height: want.height),
                              notifySurface: false)
             }
             refreshGroupViews()
@@ -621,6 +696,13 @@ final class CanvasView: NSView {
             conn?.movePane(MovePane(id: id, rect: pane.meta.rect,
                             allowOverlap: GCTConfig.current.allowWindowOverlap))
         }
+        if case .multiMove(let members, _, _) = drag {
+            for m in members {
+                guard let pane = panes[m] else { continue }
+                conn?.movePane(MovePane(id: m, rect: pane.meta.rect,
+                                allowOverlap: GCTConfig.current.allowWindowOverlap))
+            }
+        }
         if case .groupMove(let id, _, _, let rects0) = drag,
            let b0 = groupBoundsFrom(rects0),
            let b1 = groupBounds(id) {
@@ -637,14 +719,16 @@ final class CanvasView: NSView {
         hideSelectionBand()
     }
 
-    // MARK: Right button — groups live here
+    // MARK: Right button — selection + groups live here
     //
     // Left-click drags on empty space pan; the right button is free (no
     // rightMouseDown override existed, and surface clicks only forward
     // left/right presses that START on a pane). So: right-drag on empty
-    // space rubber-bands panes into a group; right-click on a group
-    // background pops its menu (rename, color, ungroup); right-click on
-    // empty space pans nothing and shows the canvas menu (new pane here).
+    // space rubber-bands panes into a STAGED MULTI-SELECT (no grouping
+    // until asked); right-click with a live selection pops the selection
+    // menu (group / close / clear); right-click on a group background
+    // pops its menu (rename, color, ungroup); right-click on empty space
+    // pans nothing and shows the canvas menu (new pane here).
     override func rightMouseDown(with event: NSEvent) {
         window?.makeFirstResponder(self)
         let world = worldPoint(event)
@@ -721,70 +805,118 @@ final class CanvasView: NSView {
             drag = .none
             return
         }
-        // End of a rubber-band or group move: shared finish path.
+        // End of a rubber-band or group move: shared finish path. A tiny
+        // band is a plain right-click (empty canvas starts the band on
+        // press, so release always lands here): clear it and fall through
+        // to the menu. Real drags stage the selection instead.
         if case .select = drag {
-            mouseUp(with: event)
-            return
+            if let band = selectionBand {
+                let r = selectionRect(band)
+                if r.width <= 8 || r.height <= 8 {
+                    drag = .none
+                    hideSelectionBand()
+                } else {
+                    mouseUp(with: event)
+                    return
+                }
+            } else {
+                drag = .none
+            }
         }
         if case .groupMove = drag {
             mouseUp(with: event)
             return
         }
-        // Plain right-click: group menu on background, canvas menu on
-        // empty space.
+        // Plain right-click: one unified menu on any non-pane click
+        // (empty space or group background) — selection actions when a
+        // selection is live, group actions on its background, always
+        // with "New pane here". Right-clicks ON a pane still go to the
+        // terminal (vim / tmux expect them).
         pendingRightGroup = nil
-        if let g = topGroup(at: world) {
-            showGroupMenu(g.id, at: event)
-        } else if topPane(at: world) == nil {
+        if topPane(at: world) == nil {
             showCanvasMenu(at: event, world: world)
         }
     }
-
-    // Right-click on a group background: rename, recolor, ungroup.
+    // Group menu construction now lives in showCanvasMenu (unified menu).
+    // Kept as a redirect so any external callers still land correctly.
     func showGroupMenu(_ id: GroupID, at event: NSEvent) {
-        guard let meta = groupMetas[id] else { return }
-        let menu = NSMenu()
-        let title = NSMenuItem(title: meta.name ?? "Group", action: nil,
-                               keyEquivalent: "")
-        title.isEnabled = false
-        menu.addItem(title)
-        menu.addItem(.separator())
-
-        let rename = NSMenuItem(title: "Rename…", action: #selector(renameGroupFromMenu(_:)),
-                                keyEquivalent: "")
-        rename.target = self
-        rename.representedObject = id.uuid.uuidString
-        menu.addItem(rename)
-
-        let colors = NSMenuItem(title: "Color", action: nil, keyEquivalent: "")
-        let palette = NSMenu(title: "Color")
-        for hex in GroupStyle.palette {
-            let item = NSMenuItem(title: hex, action: #selector(recolorGroupFromMenu(_:)),
-                                  keyEquivalent: "")
-            item.target = self
-            // "id|hex" — representedObject is Any?.
-            item.representedObject = id.uuid.uuidString + "|" + hex
-            item.attributedTitle = NSAttributedString(
-                string: "  \(hex)",
-                attributes: [.foregroundColor: NSColor(gctHex: hex) ?? .labelColor])
-            palette.addItem(item)
-        }
-        colors.submenu = palette
-        menu.addItem(colors)
-
-        menu.addItem(.separator())
-        let ungroup = NSMenuItem(title: "Ungroup", action: #selector(ungroupFromMenu(_:)),
-                                 keyEquivalent: "")
-        ungroup.target = self
-        ungroup.representedObject = id.uuid.uuidString
-        menu.addItem(ungroup)
-
-        NSMenu.popUpContextMenu(menu, with: event, for: self)
+        guard let b = groupBounds(id) else { return }
+        showCanvasMenu(at: event, world: CGPoint(x: b.midX, y: b.midY))
     }
-
-    // Right-click on empty canvas: quick actions at that point.
+    // Right-click on non-pane canvas: ONE menu, always. Group background
+    // adds rename/color/ungroup; a live selection adds group/close/
+    // clear; "New pane here" is always present.
     func showCanvasMenu(at event: NSEvent, world: CGPoint) {
         let menu = NSMenu()
+        let groupBG = topGroup(at: world)
+        let sel = liveSelected()
+
+        if !sel.isEmpty {
+            let title = NSMenuItem(title: "\(sel.count) panes selected",
+                                   action: nil, keyEquivalent: "")
+            title.isEnabled = false
+            menu.addItem(title)
+
+            let group = NSMenuItem(title: "Group selection…",
+                                   action: #selector(groupSelectionFromMenu(_:)),
+                                   keyEquivalent: "")
+            group.target = self
+            menu.addItem(group)
+
+            let close = NSMenuItem(title: "Close \(sel.count) panes",
+                                   action: #selector(closeSelectionFromMenu(_:)),
+                                   keyEquivalent: "")
+            close.target = self
+            menu.addItem(close)
+
+            let clear = NSMenuItem(title: "Clear selection",
+                                   action: #selector(clearSelectionFromMenu(_:)),
+                                   keyEquivalent: "")
+            clear.target = self
+            menu.addItem(clear)
+            menu.addItem(.separator())
+        }
+
+        if let g = groupBG, let meta = groupMetas[g.id] {
+            let id = g.id
+            let title = NSMenuItem(title: meta.name ?? "Group", action: nil,
+                                   keyEquivalent: "")
+            title.isEnabled = false
+            menu.addItem(title)
+
+            let rename = NSMenuItem(title: "Rename group…",
+                                    action: #selector(renameGroupFromMenu(_:)),
+                                    keyEquivalent: "")
+            rename.target = self
+            rename.representedObject = id.uuid.uuidString
+            menu.addItem(rename)
+
+            let colors = NSMenuItem(title: "Group color", action: nil, keyEquivalent: "")
+            let palette = NSMenu(title: "Group color")
+            for hex in GroupStyle.palette {
+                let item = NSMenuItem(title: hex,
+                                      action: #selector(recolorGroupFromMenu(_:)),
+                                      keyEquivalent: "")
+                item.target = self
+                // "id|hex" — representedObject is Any?.
+                item.representedObject = id.uuid.uuidString + "|" + hex
+                item.attributedTitle = NSAttributedString(
+                    string: "  \(hex)",
+                    attributes: [.foregroundColor: NSColor(gctHex: hex) ?? .labelColor])
+                palette.addItem(item)
+            }
+            colors.submenu = palette
+            menu.addItem(colors)
+
+            let ungroup = NSMenuItem(title: "Ungroup",
+                                     action: #selector(ungroupFromMenu(_:)),
+                                     keyEquivalent: "")
+            ungroup.target = self
+            ungroup.representedObject = id.uuid.uuidString
+            menu.addItem(ungroup)
+            menu.addItem(.separator())
+        }
+
         let here = NSMenuItem(title: "New pane here",
                               action: #selector(newPaneHereFromMenu(_:)),
                               keyEquivalent: "")
@@ -792,6 +924,20 @@ final class CanvasView: NSView {
         here.representedObject = NSStringFromPoint(world)
         menu.addItem(here)
         NSMenu.popUpContextMenu(menu, with: event, for: self)
+    }
+    @objc func groupSelectionFromMenu(_ sender: NSMenuItem) {
+        groupStagedSelection()
+    }
+
+    @objc func closeSelectionFromMenu(_ sender: NSMenuItem) {
+        let ids = liveSelected()
+        guard !ids.isEmpty else { return }
+        clearSelection()
+        for id in ids { closePane(id) }
+    }
+
+    @objc func clearSelectionFromMenu(_ sender: NSMenuItem) {
+        clearSelection()
     }
 
     @objc func renameGroupFromMenu(_ sender: NSMenuItem) {
@@ -867,7 +1013,7 @@ final class CanvasView: NSView {
     // steal focus mid-gesture.
     private var isResizingOrMoving: Bool {
         switch drag {
-        case .resize, .move, .groupMove: return true
+        case .resize, .move, .multiMove, .groupMove: return true
         default: return false
         }
     }
@@ -986,7 +1132,7 @@ final class CanvasView: NSView {
     private func perform(_ action: GCTAction) {
         switch action {
         case .newPane: newPane()
-        case .closePane: if let id = focusedID { closePane(id) }
+        case .closePane: closeSelectedOrFocused()
         case .renamePane: renameFocusedOrGroup()
         case .moveFocusAbove: moveFocus(.above)
         case .moveFocusBelow: moveFocus(.below)
@@ -1008,10 +1154,13 @@ final class CanvasView: NSView {
         case .fitAll: fitAll()
         case .copy: copyFromFocused()
         case .paste: pasteIntoFocused()
-        case .groupSelection: promptGroupSelection()
+        case .groupSelection: groupStagedSelection()
         case .ungroup:
             if let id = focusedID, let gid = groupOf(id) { ungroup(gid) }
         case .toggleFloating: toggleFloating()
+        case .togglePaneSelection:
+            if let id = focusedID { toggleSelected(id) }
+        case .clearPaneSelection: clearSelection()
         }
     }
 
@@ -1025,8 +1174,9 @@ final class CanvasView: NSView {
         }
     }
 
-    // cmd+g renames the focused pane's group (no group = no-op).
-    // Making groups is the rubber-band's job: shift+drag empty space.
+    // cmd+g with no staged selection renames the focused pane's group
+    // (no group = no-op). With a 2+ staged selection, groupStagedSelection
+    // (the perform path) creates the group instead.
     func promptGroupSelection() {
         if let id = focusedID, let gid = groupOf(id) {
             promptRenameGroup(gid)
@@ -1345,14 +1495,21 @@ final class CanvasView: NSView {
     // Directional open-new-window-*: same size rule and overlap handling
     // as cmd+t, on the action's fixed side. Focus/camera follow only via
     // move-focus-on-new-window (center) and camera-follows/fits-focus-move
-    // (center/fit on arrival) — see connPaneCreated.
+    // (center/fit on arrival) — see connPaneCreated. From a grouped pane
+    // the split joins that group via CreatePane.joinGroup (daemon-side).
     func newPane(direction: GCTNewWindowDirection) {
+        // Inherit the focused pane's group: the daemon places the split
+        // inside the own group's bounds, shoves loose blockers aside
+        // along the split axis when the grown bounds demand it, and
+        // admits it (refusal = groupless pane).
         let cwd = focusedID.flatMap { panes[$0]?.meta.cwd }
-        let r = newPaneRect(direction: direction)
+        let inheritGroup = focusedID.flatMap { groupOf($0) }
+        let r = newPaneRect(direction: direction, ignoringGroup: inheritGroup)
         conn?.createPane(CreatePane(
             rect: Rect(x: r.minX, y: r.minY, w: r.width, h: r.height),
             cwd: cwd,
-            allowOverlap: GCTConfig.current.allowWindowOverlap))
+            allowOverlap: GCTConfig.current.allowWindowOverlap,
+            joinGroup: inheritGroup, joinDirection: direction.rawValue))
     }
 
     // New-pane placement: flush against the focused pane on the given
@@ -1360,7 +1517,8 @@ final class CanvasView: NSView {
     // passes its fixed side), sized per config (focused pane's size, a
     // fixed grid, or a standard 80x24 terminal when nothing is focused).
     // With overlap disallowed the rect is pushed clear of every other pane.
-    func newPaneRect(direction: GCTNewWindowDirection? = nil) -> NSRect {
+    func newPaneRect(direction: GCTNewWindowDirection? = nil,
+                     ignoringGroup: GroupID? = nil) -> NSRect {
         let cfg = GCTConfig.current
         let dir = direction ?? cfg.newWindowDirection
         let focused = focusedID.flatMap { panes[$0] }
@@ -1401,12 +1559,18 @@ final class CanvasView: NSView {
         var rect = NSRect(origin: origin, size: size)
         // Group bounds always block new panes, even when overlap is
         // allowed; pane frames follow the overlap policy. Floating
-        // panes never block.
-        let obstacles = GroupLayout.creationObstacles(
+        // panes never block. A group-inheriting split ignores its OWN
+        // group's bounds (flush sibling lands inside them) — foreign
+        // groups still block, and the daemon admits on arrival.
+        var obstacles = GroupLayout.creationObstacles(
             paneRects: paneRects(),
             groups: groupMetas,
             allowOverlap: cfg.allowWindowOverlap,
             floating: floatingPanes())
+        if let own = ignoringGroup,
+           let b = GroupLayout.bounds(groups: groupMetas, panes: paneRects())[own] {
+            obstacles.removeAll { $0 == b }
+        }
         if !cfg.allowWindowOverlap || !obstacles.isEmpty {
             if cfg.allowWindowOverlap {
                 let clean = Overlap.resolve(NSRectOverlap.from(rect),
@@ -1467,6 +1631,7 @@ final class CanvasView: NSView {
         pane.removeFromSuperview()
         panes.removeValue(forKey: id)
         zOrder.removeAll { $0 == id }
+        selectedIDs.remove(id)
         if focusedID == id {
             focusedID = nil
             if let last = zOrder.last { focusPane(last) }

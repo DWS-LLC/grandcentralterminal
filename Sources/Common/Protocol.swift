@@ -91,13 +91,23 @@ public struct CreatePane: Codable, Sendable {
     public var command: String?   // e.g. "ssh host" for remote panes; nil = default shell
     // Same policy as MovePane; decodes missing (old clients) as false.
     public var allowOverlap: Bool
+    // Directional split from a grouped pane: admit into this group on
+    // create (daemon trials the grown-bounds rule). Nil = groupless.
+    // Decodes missing (old clients) as nil.
+    public var joinGroup: GroupID?
+    // Split axis for joinGroup shove: "left"/"right" push horizontally,
+    // "above"/"below" vertically. Nil = no shove (plain admit trial).
+    // Decodes missing as nil.
+    public var joinDirection: String?
     public init(rect: Rect, cwd: String? = nil, name: String? = nil,
-                command: String? = nil, allowOverlap: Bool = false) {
+                command: String? = nil, allowOverlap: Bool = false,
+                joinGroup: GroupID? = nil, joinDirection: String? = nil) {
         self.rect = rect; self.cwd = cwd; self.name = name
         self.command = command; self.allowOverlap = allowOverlap
+        self.joinGroup = joinGroup; self.joinDirection = joinDirection
     }
     enum CodingKeys: String, CodingKey {
-        case rect, cwd, name, command, allowOverlap
+        case rect, cwd, name, command, allowOverlap, joinGroup, joinDirection
     }
     public init(from decoder: any Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -106,6 +116,8 @@ public struct CreatePane: Codable, Sendable {
         name = try c.decodeIfPresent(String.self, forKey: .name)
         command = try c.decodeIfPresent(String.self, forKey: .command)
         allowOverlap = try c.decodeIfPresent(Bool.self, forKey: .allowOverlap) ?? false
+        joinGroup = try c.decodeIfPresent(GroupID.self, forKey: .joinGroup)
+        joinDirection = try c.decodeIfPresent(String.self, forKey: .joinDirection)
     }
 }
 

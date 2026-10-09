@@ -16,6 +16,10 @@ final class PaneView: NSView {
     private let titleLabel = CATextLayer()
 
     var isFocused = false { didSet { applyChrome() } }
+    // Multi-select: staged by right-drag/shift+click, acts as a unit for
+    // move/close/group. Rendered with the accent color so it reads apart
+    // from single-pane focus.
+    var isSelected = false { didSet { if isSelected != oldValue { applyChrome() } } }
 
     init(meta: PaneMeta) {
         self.id = meta.id
@@ -128,10 +132,14 @@ final class PaneView: NSView {
         let t = GCTTheme.current
         layer?.borderWidth = 0
         layer?.borderColor = nil
+        // Multi-select beats focus: selected panes wear accent chrome so a
+        // 2+ selection reads apart from the single focused pane. A
+        // focused-but-unselected pane keeps the normal focused look.
+        let accent = isSelected
         // Fill the pane behind the terminal with the titlebar color: the
         // inset terminal leaves the side/bottom border visible.
         layer?.backgroundColor =
-            (isFocused ? t.borderFocused : t.borderUnfocused).cgColor
+            (accent ? NSColor.systemBlue : isFocused ? t.borderFocused : t.borderUnfocused).cgColor
         // Floating reads at a glance: deeper shadow lifts it off the
         // canvas; plain titlebar otherwise.
         layer?.shadowOpacity = meta.floating ? min(1, t.shadowOpacity + 0.25) : t.shadowOpacity
@@ -140,7 +148,7 @@ final class PaneView: NSView {
         layer?.shadowColor = NSColor.black.cgColor
 
         titlebar.layer?.backgroundColor =
-            (isFocused ? t.titlebarBackgroundFocused : t.titlebarBackgroundUnfocused).cgColor
+            (accent ? NSColor.systemBlue : isFocused ? t.titlebarBackgroundFocused : t.titlebarBackgroundUnfocused).cgColor
 
         titleLabel.string = titleText
         titleLabel.foregroundColor =
