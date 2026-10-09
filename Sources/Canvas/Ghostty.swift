@@ -31,9 +31,11 @@ final class GhosttyApp: @unchecked Sendable {
         _ = ghostty_init(0, nil)
 
         let cfg = ghostty_config_new()
-        // Base look first, then the user's own ghostty config wins.
+        // Base look first, then the user's own ghostty config wins on
+        // every key it sets (config-file includes included below).
         ghostty_config_load_file(cfg, GhosttyApp.baseConfigPath())
         ghostty_config_load_default_files(cfg)
+        ghostty_config_load_recursive_files(cfg)
         ghostty_config_finalize(cfg)
         config = UnsafeMutableRawPointer(cfg)
 

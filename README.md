@@ -26,8 +26,8 @@ and everything reattaches, scrollback replayed.
     camera the same way
   - `⌘T` new pane (opens beside the focused pane — direction and size are
     configurable — and focuses + centers it; inherits the focused pane's
-    cwd), `⌘W` close, `⌘R` rename (the `✻`-style named panes in the
-    titlebar; on a grouped pane it renames the GROUP instead).
+    cwd and `cmd-+/-` zoom), `⌘W` close, `⌘R` rename (the `✻`-style named
+    panes in the titlebar; on a grouped pane it renames the GROUP instead).
     `⌘⇧H/J/K/L` opens a new pane on that fixed side with the
     same size/focus/camera rules
     Mouse drags never shove anything aside — they slide along collisions
@@ -294,6 +294,10 @@ ungroup = "cmd+shift+g"
 toggle-floating = "cmd+f"
 ```
 
-Terminal colors (inside panes) are ghostty's domain and come from your ghostty
-config as usual; the `background.dark`/`light` value `"ghostty"` makes the
-canvas follow whatever background your ghostty config resolves to.
+Terminal settings (inside panes) are ghostty's domain and come from your
+ghostty config as usual (`~/.config/ghostty/config`, App Support override,
+`config-file` includes included); GCT's built-in defaults only fill keys
+your config leaves unset. `cmd-+/-` zoom is per-pane and carries to new
+panes (off via ghostty's `window-inherit-font-size = false`).
+The `background.dark`/`light` value `"ghostty"` makes the canvas follow
+whatever background your ghostty config resolves to.

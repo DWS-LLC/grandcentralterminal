@@ -20,8 +20,11 @@ final class SurfaceHost: @unchecked Sendable {
     // serialized per surface. All feeds go through here.
     private let feedQueue = DispatchQueue(label: "gct.surface.feed")
 
+    // fontSize: inherited zoom in points (0 = config default). Pass the
+    // focused surface's ghostty_surface_inherited_config(...).font_size
+    // so cmd-+/- zoom carries to new panes.
     init(paneID: PaneID, hostView: NSView, scale: Double, app: UnsafeMutableRawPointer?,
-         delegate: any GhosttyAppDelegate) {
+         delegate: any GhosttyAppDelegate, fontSize: Float = 0) {
         self.paneID = paneID
         self.delegate = delegate
         self.scale = scale
@@ -31,6 +34,7 @@ final class SurfaceHost: @unchecked Sendable {
         cfg.platform.macos.nsview = Unmanaged.passUnretained(hostView).toOpaque()
         cfg.userdata = Unmanaged.passUnretained(self).toOpaque()
         cfg.scale_factor = scale
+        cfg.font_size = fontSize
         cfg.backend_type = GHOSTTY_BACKEND_EXTERNAL
         cfg.write_callback = { surface, data, len in
             guard let surface, let data, len > 0,

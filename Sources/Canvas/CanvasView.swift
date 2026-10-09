@@ -1479,9 +1479,14 @@ final class CanvasView: NSView {
         let pane = PaneView(meta: meta)
         let scale = window?.backingScaleFactor
             ?? NSScreen.main?.backingScaleFactor ?? 2
+        // cmd-+/- zoom lives per-surface: new panes inherit the focused
+        // pane's size (0 = config default when window-inherit-font-size
+        // is off or nothing is focused).
+        let fontSize: Float = focusedID.flatMap { panes[$0]?.host?.surfaceIfOpen() }
+            .map { ghostty_surface_inherited_config($0, GHOSTTY_SURFACE_CONTEXT_WINDOW).font_size } ?? 0
         let host = SurfaceHost(paneID: meta.id, hostView: pane.surfaceHostView,
                                scale: scale, app: ghosttyApp!.app,
-                               delegate: self)
+                               delegate: self, fontSize: fontSize)
         host.connSend = { [weak self] id, data in
             self?.conn?.sendInput(id, data)
         }
