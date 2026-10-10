@@ -149,13 +149,16 @@ extension NSColor {
 struct GCTKeybind {
     let mods: NSEvent.ModifierFlags
     let key: String
+    // Virtual keycode on a US layout, for RegisterEventHotKey. Nil when
+    // the key has no known code (matches() still works for single chars).
+    let carbonKeyCode: UInt32?
 
     init?(_ spec: String) {
         var mods: NSEvent.ModifierFlags = []
         var parts = spec.lowercased().split(separator: "+").map(String.init)
         guard !parts.isEmpty else { return nil }
-        let key = parts.removeLast()
-        guard key.count == 1, !key.isEmpty else { return nil }
+        let name = parts.removeLast()
+        guard !name.isEmpty else { return nil }
         for part in parts {
             switch part {
             case "cmd", "super": mods.insert(.command)
@@ -166,7 +169,15 @@ struct GCTKeybind {
             }
         }
         self.mods = mods
-        self.key = key
+        if let named = Self.namedKeys[name] {
+            key = named.match
+            carbonKeyCode = named.code
+        } else if name.count == 1 {
+            key = name
+            carbonKeyCode = Self.usKeyCode(for: name)
+        } else {
+            return nil
+        }
     }
 
     // Exact modifier-set match, so cmd+k doesn't fire on cmd+shift+k.
@@ -175,6 +186,90 @@ struct GCTKeybind {
         guard event.modifierFlags.intersection(relevant) == mods.intersection(relevant),
               let chars = event.charactersIgnoringModifiers?.lowercased() else { return false }
         return chars == key
+    }
+
+    // Carbon modifiers for RegisterEventHotKey (HIToolbox values:
+    // cmdKey 1<<8, shiftKey 1<<9, optionKey 1<<11, controlKey 1<<12).
+    var carbonModifiers: UInt32 {
+        var m: UInt32 = 0
+        if mods.contains(.command) { m |= 1 << 8 }
+        if mods.contains(.shift) { m |= 1 << 9 }
+        if mods.contains(.option) { m |= 1 << 11 }
+        if mods.contains(.control) { m |= 1 << 12 }
+        return m
+    }
+
+    // Named non-character keys: match string for matches() ("" never
+    // matches locally; these are Carbon-only) + US virtual keycode.
+    private static let namedKeys: [String: (match: String, code: UInt32)] = [
+        "space": (" ", 49),
+        "tab": ("\t", 48),
+        "return": ("\r", 36),
+        "enter": ("\r", 36),
+        "escape": ("\u{1b}", 53),
+        "esc": ("\u{1b}", 53),
+        "delete": ("\u{7f}", 51),
+        "backspace": ("\u{7f}", 51),
+        "f1": ("", 122), "f2": ("", 120),
+        "f3": ("", 99), "f4": ("", 118),
+        "f5": ("", 96), "f6": ("", 97),
+        "f7": ("", 98), "f8": ("", 100),
+        "f9": ("", 101), "f10": ("", 109),
+        "f11": ("", 103), "f12": ("", 111),
+    ]
+
+    // US ANSI layout: single character -> virtual keycode.
+    private static func usKeyCode(for key: String) -> UInt32? {
+        switch key {
+        case "a": return 0
+        case "s": return 1
+        case "d": return 2
+        case "f": return 3
+        case "h": return 4
+        case "g": return 5
+        case "z": return 6
+        case "x": return 7
+        case "c": return 8
+        case "v": return 9
+        case "b": return 11
+        case "q": return 12
+        case "w": return 13
+        case "e": return 14
+        case "r": return 15
+        case "y": return 16
+        case "t": return 17
+        case "1": return 18
+        case "2": return 19
+        case "3": return 20
+        case "4": return 21
+        case "6": return 22
+        case "5": return 23
+        case "=": return 24
+        case "9": return 25
+        case "7": return 26
+        case "-": return 27
+        case "8": return 28
+        case "0": return 29
+        case "]": return 30
+        case "o": return 31
+        case "u": return 32
+        case "[": return 33
+        case "i": return 34
+        case "p": return 35
+        case "l": return 37
+        case "j": return 38
+        case "'": return 39
+        case "k": return 40
+        case ";": return 41
+        case "\\": return 42
+        case ",": return 43
+        case "/": return 44
+        case "n": return 45
+        case "m": return 46
+        case ".": return 47
+        case "`": return 50
+        default: return nil
+        }
     }
 }
 
@@ -214,6 +309,29 @@ enum GCTNewWindowDim: Equatable {
 // Screen-space status bar edge.
 enum GCTStatusbarPosition: String {
     case top, bottom
+}
+
+// Doom mode: show/hide animation for the summoned canvas.
+enum DoomAnimation: String {
+    case slide, fade
+}
+
+// Which screen a summoned doom window appears on.
+enum DoomScreen: String {
+    case mouse, main, menubar
+}
+
+// [doom] section: on by default — GCT is a background daemon app and the
+// global hotkey summons it. Hotkey-only visibility: panning the canvas
+// never hides it.
+struct GCTDoom {
+    var enabled = true
+    var toggle: GCTKeybind? = GCTKeybind("ctrl+space")
+    var animation = DoomAnimation.fade
+    var animationDuration = 0.2
+    var screen = DoomScreen.mouse
+    var startHidden = true
+    var launchAtLogin = false
 }
 
 enum GCTAction: String, CaseIterable {
@@ -326,6 +444,7 @@ struct GCTConfig {
     var statusbarFont: String?
     var statusbarFontSize: CGFloat = 12
     var statusbarOpacity: CGFloat = 1
+    var doom = GCTDoom()
 
     static let path: String = (NSHomeDirectory() as NSString)
         .appendingPathComponent(".config/gct/config.toml")
@@ -344,7 +463,7 @@ struct GCTConfig {
         return parse(template)
     }
 
-    private static func parse(_ text: String) -> GCTConfig {
+    static func parse(_ text: String) -> GCTConfig {
         var cfg = GCTConfig()
         let t = TOML.parse(text)
         let root = t[""] ?? [:]
@@ -456,6 +575,32 @@ struct GCTConfig {
         }
         if let s = tb["shadow-radius"], let n = Double(s), (0.0...64.0).contains(n) {
             cfg.shadowRadius = CGFloat(n)
+        }
+
+        let dm = t["doom"] ?? [:]
+        if let v = dm["enabled"] {
+            cfg.doom.enabled = v.lowercased() == "true"
+        }
+        if let v = dm["toggle"], let b = GCTKeybind(v) {
+            cfg.doom.toggle = b
+        }
+        if let v = dm["animation"],
+           let a = DoomAnimation(rawValue: v.lowercased()) {
+            cfg.doom.animation = a
+        }
+        if let s = dm["animation-duration"], let n = Double(s),
+           (0.0...1.0).contains(n) {
+            cfg.doom.animationDuration = n
+        }
+        if let v = dm["screen"],
+           let s = DoomScreen(rawValue: v.lowercased()) {
+            cfg.doom.screen = s
+        }
+        if let v = dm["start-hidden"] {
+            cfg.doom.startHidden = v.lowercased() == "true"
+        }
+        if let v = dm["launch-at-login"] {
+            cfg.doom.launchAtLogin = v.lowercased() == "true"
         }
 
         var binds = defaultKeybinds
@@ -620,6 +765,30 @@ struct GCTConfig {
     font-size = 12
     # Overall opacity 0-1 (multiplies the background alpha).
     opacity = 1
+
+    [doom]
+    # Global-hotkey dropdown: the fullscreen canvas fades in (or slides
+    # down from the top) on `toggle`; the same hotkey hides it again.
+    # On by default — GCT sits hidden until summoned. Needs a relaunch.
+    enabled = true
+    # System-wide hotkey (Carbon, no Accessibility permission needed).
+    # Named keys work here: space, tab, return, enter, escape, delete,
+    # f1-f12, e.g. toggle = "ctrl+f12". WARNING: the combo is eaten
+    # system-wide while GCT runs (shells can't see it), and stock macOS
+    # binds ctrl+space to input-source switching — free it in Settings
+    # or pick another bind.
+    toggle = "ctrl+space"
+    # Show/hide animation: "fade" (default) or "slide" (down from the top).
+    animation = "fade"  # fade | slide
+    # Animation length in seconds (0-1).
+    animation-duration = 0.2
+    # Which screen to summon the fullscreen canvas on: mouse (the screen
+    # under the cursor), main, or menubar (the screen holding the menubar).
+    screen = "mouse"  # mouse | main | menubar
+    # Launch ordered-out (hotkey summons); false = visible on launch.
+    start-hidden = true
+    # Register as a login item (also visible in system Settings).
+    launch-at-login = false
 
     [keybinds]
     # App shortcuts. Modifiers cmd, ctrl, alt, shift joined with "+"; the

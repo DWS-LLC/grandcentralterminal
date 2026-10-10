@@ -492,7 +492,11 @@ final class CanvasView: NSView {
     // change; panes created visible by default (makePaneView refreshes).
     func refreshOcclusion() {
         assert(Thread.isMainThread)
-        let windowVisible = !(window?.isMiniaturized ?? false)
+        // Ordered-out (doom-hidden) or miniaturized: no surface can
+        // present, so pause every DisplayLink. VT keeps flowing; the
+        // ring replays on show. Without this, doom-hidden burns GPU on
+        // a window nobody can see.
+        let windowVisible = (window?.isVisible ?? false) && !(window?.isMiniaturized ?? false)
         let viewBounds = bounds
         for pane in panes.values {
             guard let host = pane.host else { continue }
@@ -1528,6 +1532,17 @@ final class CanvasView: NSView {
     // MARK: Keyboard
 
     override func keyDown(with event: NSEvent) {
+        // Doom fallback: the toggle combo works locally while frontmost.
+        // When Carbon registration succeeded, the system eats the combo
+        // before it reaches us, so this only fires when the global
+        // hotkey failed (or doom is off and a stale config still names
+        // the toggle). Posts a notification; the DoomController toggles.
+        if GCTConfig.current.doom.enabled,
+           let t = GCTConfig.current.doom.toggle,
+           t.matches(event) || t.matchesKeyCode(event) {
+            NotificationCenter.default.post(name: .gctToggleDoom, object: nil)
+            return
+        }
         // App shortcuts first, from the config's keybinds.
         if let action = GCTAction.allCases.first(where: {
             GCTConfig.current.keybinds[$0]?.matches(event) ?? false

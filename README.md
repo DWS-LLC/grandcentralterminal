@@ -123,6 +123,33 @@ job control) don't work. The pane environment pins `TERM=xterm-256color`,
 launchd's sparse env, which degrades htop et al. to monochrome), and strips
 `NO_COLOR` (tool harnesses set it; panes are new terminals and should color).
 
+## Doom mode
+
+Quake-style dropdown: a system-wide hotkey (Carbon, no Accessibility
+permission) summons the fullscreen canvas with a slide-down or fade
+animation; the same hotkey hides it and restores the previous app. The
+PTYs keep running while hidden — only the window hides. Hotkey only:
+panning the canvas never dismisses it.
+
+```toml
+[doom]
+enabled = true
+toggle = "ctrl+space"   # global; named keys work (space, f1-f12...)
+animation = "fade"       # fade | slide
+animation-duration = 0.2
+screen = "mouse"        # mouse | main | menubar
+start-hidden = true     # launch ordered-out; hotkey summons
+launch-at-login = false # login item (also in system Settings)
+```
+
+Notes: the combo is eaten system-wide while GCT runs (shells never see
+it); stock macOS binds `ctrl+space` to input-source switching, so free
+it in Settings or pick another bind. Hotkey registration failure is
+loud (log + stay visible) — a silent failure would strand a hidden
+window with the Dock as the only way back. Validation: hidden launch,
+`ctrl+space` round-trip (frontmost flips GCT → previous app), typing
+in a summoned pane (`⌘T`, `echo`), both animations.
+
 ## How the external backend works
 
 Upstream libghostty surfaces always spawn their own PTY. This project needs
@@ -141,6 +168,8 @@ arrive via `resize_callback` and go to the daemon as `TIOCSWINSZ`. See
 - Remote/ssh panes are not wired into the UI yet — the daemon supports a
   `command` per pane, but the app only spawns local shells.
 - Panes render live at every zoom level; many heavy panes will cost GPU.
+- Doom-hidden windows pause every pane renderer (ordered-out presents
+  nothing); VT keeps flowing and replays on show.
 - macOS quirk: `read()` on a pty master never returns when the shell dies
   (unlike Linux's EIO), so dead panes are detected by the daemon's reaper
   and can linger briefly as a frozen frame before cleanup.
@@ -239,7 +268,9 @@ scroll-on-terminal-hover = true
 # Canvas background per mode. Hex like "#1a1b26" (alpha 1), or with alpha
 # like "#1a1b2680" / "#1234" — alpha < 1 makes the canvas transparent,
 # showing the desktop behind it. "ghostty" reuses the background color
-# from your ghostty config.
+# from your ghostty config. Transparent canvas is look-but-don't-touch:
+# empty space stops receiving mouse events (no pan, no opt-drag), while
+# panes (opaque views on top) keep working.
 dark = "#000000"
 light = "#ffffff"
 

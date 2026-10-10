@@ -13,6 +13,7 @@ final class CanvasWindow: NSWindow {
 final class AppDelegate: NSObject, NSApplicationDelegate {
     var window: NSWindow!
     var canvas: CanvasView!
+    var doom: DoomController?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Visible frame, not full frame: the borderless window sits below
@@ -49,7 +50,42 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Theme last: the "ghostty" canvas background needs ghostty's
         // resolved config. Applied before the window is shown.
         view.applyTheme()
-        win.makeKeyAndOrderFront(nil)
+
+        // Doom mode: login item sync is unconditional (also unregisters a
+        // stale item when the key flips off); hotkey + hidden launch only
+        // when enabled.
+        DoomController.syncLoginItem()
+        let doom = DoomController(window: win, canvas: view)
+        self.doom = doom
+        if GCTConfig.current.doom.enabled {
+            // Follows the window across Spaces + over fullscreen apps,
+            // like Ghostty's quick-terminal space behavior.
+            win.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .ignoresCycle]
+            if let bind = GCTConfig.current.doom.toggle, doom.registerHotkey(bind: bind) {
+                if GCTConfig.current.doom.startHidden {
+                    // Visible-first: applyTheme/layout need a realized
+                    // window for one tick, then order out.
+                    win.makeKeyAndOrderFront(nil)
+                    view.refreshOcclusion()
+                    // Order out on the next tick, then pause every
+                    // renderer: nothing can present while ordered-out.
+                    DispatchQueue.main.async {
+                        win.orderOut(nil)
+                        view.refreshOcclusion()
+                    }
+                } else {
+                    win.makeKeyAndOrderFront(nil)
+                }
+            } else {
+                // Loud failure: a silent hotkey strands a hidden window
+                // with the Dock as the only way back. Stay visible and
+                // keep a local fallback (toggle works while frontmost).
+                NSLog("[gct] doom: global hotkey registration FAILED — staying visible, local fallback only")
+                win.makeKeyAndOrderFront(nil)
+            }
+        } else {
+            win.makeKeyAndOrderFront(nil)
+        }
 
         // Menubar/Dock autohide changes the visible frame live — follow
         // it without a restart. Fires on menubar show/hide, Dock
@@ -59,7 +95,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             object: nil, queue: .main) { [weak self] _ in
             self?.conformToVisibleFrame()
         }
-        NSApp.activate(ignoringOtherApps: true)
+        // Launch-hidden doom: don't steal focus; the hotkey summons.
+        let doomHidden = GCTConfig.current.doom.enabled
+            && GCTConfig.current.doom.startHidden && doom.hotkeyArmed
+        if !doomHidden {
+            NSApp.activate(ignoringOtherApps: true)
+        }
     }
 
     /// Re-fit the window to the screen's visible frame (below the
@@ -69,6 +110,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
               let vf = win.screen?.visibleFrame ?? NSScreen.main?.visibleFrame else { return }
         // Skip while minimized — never fight the user.
         guard !win.isMiniaturized else { return }
+        // Doom-hidden: no frame to conform; show() re-targets the screen.
+        guard win.isVisible else { return }
         if win.frame != vf {
             win.setFrame(vf, display: true, animate: true)
         }
