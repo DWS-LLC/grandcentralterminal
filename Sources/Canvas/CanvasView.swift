@@ -411,6 +411,38 @@ final class CanvasView: NSView {
         if !GCTConfig.current.snapping { hideSnapGuides() }
     }
 
+    // Re-read config.toml and apply live: theme/chrome, keybinds (next
+    // keyDown reads the new table), snapping/overlap policy (read per
+    // gesture, nothing re-laid-out), the status bar (rebuild when the
+    // enabled flag flips, else re-theme), and the doom hotkey toggle.
+    // Doom structural keys (enabled, start-hidden, launch-at-login) and
+    // the window's collection behavior still need a relaunch.
+    func reloadConfig() {
+        let oldDoomToggle = GCTConfig.current.doom.toggle
+        GCTConfig.current = GCTConfig.load()
+        applyTheme()
+        syncStatusBarToConfig()
+        if GCTConfig.current.doom.toggle?.key != oldDoomToggle?.key ||
+            GCTConfig.current.doom.toggle?.mods != oldDoomToggle?.mods {
+            NotificationCenter.default.post(name: .gctDoomHotkeyChanged, object: nil)
+        }
+        NSLog("[gct] config reloaded from \(GCTConfig.path)")
+    }
+
+    // Match the status bar's existence to the (possibly reloaded) flag:
+    // enabling builds it, disabling tears it down, otherwise re-theme.
+    private func syncStatusBarToConfig() {
+        if GCTConfig.current.statusbarEnabled, statusBar == nil {
+            setupStatusBar()
+        } else if !GCTConfig.current.statusbarEnabled, let bar = statusBar {
+            bar.removeFromSuperview()
+            statusBar = nil
+        } else {
+            statusBar?.applyTheme()
+            layoutStatusBar()
+        }
+    }
+
     private var isIdleDrag: Bool {
         if case .none = drag { return true }
         return false
@@ -1592,6 +1624,7 @@ final class CanvasView: NSView {
             if let id = focusedID { toggleSelected(id) }
         case .clearPaneSelection: clearSelection()
         case .toggleSnapping: toggleSnapping()
+        case .reloadConfig: reloadConfig()
         }
     }
 

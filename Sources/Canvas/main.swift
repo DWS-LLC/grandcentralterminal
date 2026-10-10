@@ -57,6 +57,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         DoomController.syncLoginItem()
         let doom = DoomController(window: win, canvas: view)
         self.doom = doom
+        // Config reload re-arms the global hotkey when [doom] toggle
+        // changes (no relaunch). Structural keys still need one.
+        NotificationCenter.default.addObserver(
+            forName: .gctDoomHotkeyChanged, object: nil, queue: .main) { [weak doom] _ in
+            doom?.reregisterHotkey(bind: GCTConfig.current.doom.toggle)
+        }
         if GCTConfig.current.doom.enabled {
             // Follows the window across Spaces + over fullscreen apps,
             // like Ghostty's quick-terminal space behavior.

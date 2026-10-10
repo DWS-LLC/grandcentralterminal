@@ -45,4 +45,8 @@ echo "built $APP"
 mkdir -p "$SUPPORT/bin"
 cp "$BIN/gctd" "$SUPPORT/bin/gctd"
 cp "$BIN/ptyexec" "$SUPPORT/bin/ptyexec"
+# 6. Stage the agent skill beside the daemon: `gctd agent-setup`
+# installs it into harness skill dirs from disk (no network).
+mkdir -p "$SUPPORT/skills/gct"
+cp SKILL.md "$SUPPORT/skills/gct/SKILL.md"
 echo "ready: $APP (daemon staged in $SUPPORT/bin)"

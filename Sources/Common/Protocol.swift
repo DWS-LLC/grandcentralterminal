@@ -27,6 +27,8 @@ public enum MsgTag: UInt8 {
     case deleteGroup = 15 // JSON GroupRef
     case moveGroup   = 16 // JSON MoveGroup
     case setFloating = 17 // JSON SetFloating
+    case dumpPane    = 18 // JSON DumpPane (read-only ring snapshot)
+    case focusPane   = 19 // JSON PaneRef (agent asks canvas to focus)
 
     // daemon -> client
     case welcome     = 64 // JSON Welcome
@@ -39,6 +41,8 @@ public enum MsgTag: UInt8 {
     case groupCreated  = 71 // JSON GroupCreated
     case groupMeta     = 72 // JSON GroupMeta (updates: name/color/members)
     case groupExit     = 73 // JSON GroupRef
+    case paneDump      = 74 // JSON PaneDump (reply to dumpPane)
+    case paneFocus     = 75 // JSON PaneRef (daemon -> canvas: focus this)
 }
 
 public struct PaneID: Hashable, Sendable, CustomStringConvertible {
@@ -361,5 +365,32 @@ public struct SetFloating: Codable, Sendable {
         id = try c.decode(PaneID.self, forKey: .id)
         floating = try c.decode(Bool.self, forKey: .floating)
         allowOverlap = try c.decodeIfPresent(Bool.self, forKey: .allowOverlap) ?? false
+    }
+}
+
+// Read-only scrollback snapshot: the last `limit` bytes of the pane's ring
+// (`limit` <= 0 = whole ring, capped at the ring size). `stripANSI` is a
+// requester-side hint; the daemon always ships raw VT (it must not
+// interpret the stream — the CLI/scrubber owns that).
+public struct DumpPane: Codable, Sendable {
+    public var id: PaneID
+    public var limit: Int
+    public var stripANSI: Bool
+    public init(id: PaneID, limit: Int = 0, stripANSI: Bool = false) {
+        self.id = id; self.limit = limit; self.stripANSI = stripANSI
+    }
+}
+
+public struct PaneDump: Codable, Sendable {
+    public var id: PaneID
+    public var bytes: Int       // bytes actually returned
+    public var truncated: Bool  // ring held more than `limit` asked for
+    public var dropped: UInt64  // ring bytes evicted before this snapshot
+    public var data: String     // raw VT (base64 when not clean UTF-8)
+    public var base64: Bool
+    public init(id: PaneID, bytes: Int, truncated: Bool, dropped: UInt64,
+                data: String, base64: Bool) {
+        self.id = id; self.bytes = bytes; self.truncated = truncated
+        self.dropped = dropped; self.data = data; self.base64 = base64
     }
 }

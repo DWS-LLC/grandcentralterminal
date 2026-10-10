@@ -2,8 +2,9 @@
 //
 // Created with defaults on first launch. Unknown keys are ignored so older
 // builds keep working against newer configs; malformed values fall back to
-// their defaults. Parsed once at launch — changes need a relaunch.
-
+// their defaults. Most keys apply live via the reload-config action
+// (cmd+shift+r); doom's structural keys (enabled, start-hidden,
+// launch-at-login) need a relaunch.
 import AppKit
 
 // MARK: - Minimal TOML
@@ -366,6 +367,7 @@ enum GCTAction: String, CaseIterable {
     case togglePaneSelection = "toggle-pane-selection"
     case clearPaneSelection = "clear-pane-selection"
     case toggleSnapping = "toggle-snapping"
+    case reloadConfig = "reload-config"
 }
 // MARK: - Config
 
@@ -653,6 +655,7 @@ struct GCTConfig {
             .togglePaneSelection: GCTKeybind("cmd+d")!,
             .clearPaneSelection: GCTKeybind("cmd+shift+d")!,
             .toggleSnapping: GCTKeybind("cmd+shift+s")!,
+            .reloadConfig: GCTKeybind("cmd+shift+r")!,
         ]
     }
 
@@ -744,7 +747,7 @@ struct GCTConfig {
     # Overlay bar of xbar-compatible plugin components: executables in
     # ~/.config/gct/statusbar/ named {name}.{interval}.{ext} (e.g.
     # clock.10s.sh). New plugins are picked up live — no recompile, no
-    # restart. These keys need a relaunch.
+    # restart. Flip `enabled` (or any key here) then reload-config.
     enabled = false
     # Bar edge: "top" or "bottom". Always above panes on its own layer;
     # panes slide under it, never collide with it.
@@ -769,7 +772,9 @@ struct GCTConfig {
     [doom]
     # Global-hotkey dropdown: the fullscreen canvas fades in (or slides
     # down from the top) on `toggle`; the same hotkey hides it again.
-    # On by default — GCT sits hidden until summoned. Needs a relaunch.
+    # On by default — GCT sits hidden until summoned. `toggle` re-arms
+    # live via reload-config; enabled/start-hidden/launch-at-login need
+    # a relaunch.
     enabled = true
     # System-wide hotkey (Carbon, no Accessibility permission needed).
     # Named keys work here: space, tab, return, enter, escape, delete,
@@ -842,6 +847,10 @@ struct GCTConfig {
     # never moves already-placed panes). Default bind below; rebind or
     # delete to unbind.
     toggle-snapping = "cmd+shift+s"
+    # Config: re-read config.toml and apply live (theme, keybinds,
+    # snapping/overlap policy, doom hotkey). Doom structural keys
+    # (enabled, start-hidden, launch-at-login) need a relaunch.
+    reload-config = "cmd+shift+r"
     """
 }
 // MARK: - Appearance + resolved theme

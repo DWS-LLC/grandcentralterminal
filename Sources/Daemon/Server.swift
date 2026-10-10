@@ -277,6 +277,12 @@ final class Server {
             let current = g.members.filter { live.contains($0) }
             var admitted = [PaneID]()
             var admittedSet = Set<PaneID>()
+            // Panes in `wanted` are joining, not foreign: the trial grown
+            // bounds must clear everything EXCEPT the full wanted set
+            // (checking against admitted-so-far would refuse any two
+            // panes whose padding overhangs touch — i.e. every adjacent
+            // pair, the normal grouping case).
+            let joining = Set(wanted)
             func clearAdding(_ id: PaneID) -> Bool {
                 var trial = g
                 trial.members = admitted + [id]
@@ -292,7 +298,7 @@ final class Server {
                     if Overlap.overlaps(grown, b) { return false }
                 }
                 for (pid, r) in rects
-                    where pid != id && !admittedSet.contains(pid) {
+                    where pid != id && !joining.contains(pid) {
                     if Overlap.overlaps(grown, r) { return false }
                 }
                 return true
@@ -381,6 +387,53 @@ final class Server {
             lock.unlock()
             broadcast(tag: .paneMeta, json: meta)
             state.scheduleSave(saved)
+
+        case .dumpPane:
+            // Read-only ring snapshot. Never subscribes, never resizes:
+            // agents poll this for background-task inspection.
+            guard let req: DumpPane = frame.decode() else { return }
+            lock.lock()
+            guard let pane = panes[req.id] else {
+                lock.unlock()
+                _ = remote.conn.send(tag: .errorReply,
+                                     json: ErrorReply(message: "no such pane"))
+                return
+            }
+            let snap = pane.ring.snapshot()
+            let dropped = pane.ring.dropped
+            lock.unlock()
+            let total = snap.count
+            let want = req.limit <= 0 ? total : min(req.limit, total)
+            let truncated = want < total
+            let tail = want == total ? snap : snap.subdata(in: (total - want)..<total)
+            let text = String(data: tail, encoding: .utf8)
+            let reply: PaneDump
+            if let text {
+                reply = PaneDump(id: req.id, bytes: tail.count,
+                                 truncated: truncated, dropped: dropped,
+                                 data: text, base64: false)
+            } else {
+                reply = PaneDump(id: req.id, bytes: tail.count,
+                                 truncated: truncated, dropped: dropped,
+                                 data: tail.base64EncodedString(), base64: true)
+            }
+            _ = remote.conn.send(tag: .paneDump, json: reply)
+
+        case .focusPane:
+            // Agent asks the canvas to focus a pane (raise + center).
+            // Daemon validates + broadcasts; the canvas honors it like a
+            // local focus move (honoring its camera-follows/fits flags).
+            guard let req: PaneRef = frame.decode() else { return }
+            lock.lock()
+            guard panes[req.id] != nil else {
+                lock.unlock()
+                _ = remote.conn.send(tag: .errorReply,
+                                     json: ErrorReply(message: "no such pane"))
+                return
+            }
+            lock.unlock()
+            broadcast(tag: .paneFocus, json: req)
+
         default:
             break
         }
@@ -424,8 +477,12 @@ final class Server {
         let wanted = members.filter { live.contains($0) }
         let rects = paneRectsLocked()
         // Admit in request order, keeping each only while the trial
-        // bounds stay clear of foreign groups and loose panes.
+        // bounds stay clear of foreign groups and non-joining panes.
+        // `wanted` panes are joining, not foreign (same fix as
+        // updateGroup: padding overhangs of adjacent joiners must not
+        // refuse each other).
         let gid = GroupID()
+        let joining = Set(wanted)
         var admitted = [PaneID]()
         for id in wanted {
             let trial = GroupMeta(id: gid, members: admitted + [id])
@@ -438,9 +495,8 @@ final class Server {
                 Overlap.overlaps(grown, $0.value)
             }
             if !clash {
-                let inside = Set(admitted + [id])
                 clash = rects.contains {
-                    $0.key != id && !inside.contains($0.key)
+                    $0.key != id && !joining.contains($0.key)
                         && Overlap.overlaps(grown, $0.value)
                 }
             }

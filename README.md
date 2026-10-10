@@ -88,23 +88,26 @@ Sources/Common/          wire protocol + framed unix-socket connection
 Sources/Daemon/          gctd: PTYs, panes, scrollback, persistence
 Sources/PtyExec/         setsid + TIOCSCTTY + exec helper (per-pane child)
 Sources/Canvas/          the AppKit app: camera, panes, switcher, input
-scripts/build.sh         builds everything into build/Grand Central Terminal.app
+Makefile                 build/sign/install/uninstall/clean
 scripts/fetch-ghostty.sh clones + patches the vendored ghostty
 ```
 
 ## Build
 
 ```sh
-scripts/fetch-ghostty.sh     # once: clone ghostty at the pinned commit + patch
-scripts/build.sh             # libghostty (zig 0.16, incremental) + daemon + app
-open "build/Grand Central Terminal.app"
+scripts/fetch-ghostty.sh  # once: clone ghostty at the pinned commit + patch
+make build                # libghostty (zig 0.16, incremental) + app bundle
+make install              # sign (Developer ID) + /Applications +
+                          # /usr/local/bin/gctd + harness skill install
+make uninstall clean      # remove /Applications copy; drop artifacts
 ```
 
 Prereqs: Xcode (macOS SDK), [zig 0.16.0](https://ziglang.org/download/) on
 `PATH` (or `ZIG=/path/to/zig`), Metal Toolchain
 (`xcodebuild -downloadComponent MetalToolchain`, one-time).
+`SIGN_IDENTITY=` overrides the Developer ID signer.
 
-`scripts/build.sh` stages the daemon at
+`make build` stages the daemon at
 `~/Library/Application Support/Grand Central Terminal/bin/gctd`; the app
 auto-starts it if it isn't running.
 
@@ -114,6 +117,48 @@ auto-starts it if it isn't running.
 gctd status     # list panes
 gctd stop       # kill daemon + panes
 ```
+
+## Agents (harness control surface)
+
+`gctd` doubles as the agent/harness CLI against the running daemon —
+prefer GCT panes for background tasks (grouped, no time limits,
+user-inspectable on the canvas). Full prompt in `SKILL.md`.
+
+```sh
+gctd open name=build cmd="make -j8"  # pane beside the working one, prints id
+gctd list                            # panes + groups
+gctd dump $ID limit=4000 --strip-ansi # scrollback tail as readable text
+gctd send $ID "make test"            # type into the pane (+ newline)
+gctd rename $ID name=server
+gctd group $A $B name=feat color=#3b82f6
+gctd focus $ID                       # focus + center on the canvas
+gctd close $ID
+```
+
+Panes are addressed by uuid prefix, exact name, or `self` (the calling
+pane's `$GCT_PANE_ID`). `dump` reads the daemon's 8 MiB VT ring read-only
+— poll it to follow a task; `--strip-ansi` scrubs escapes for reading.
+`cmd=` runs through the login shell (real syntax: `&&`, pipes, quotes);
+the pane exits when the command does (`; exec zsh` keeps it open).
+Group correlated windows (`group $A $B name=feat`), tail subagents in
+small grouped panes, and close task panes when the work lands.
+
+### How an agent finds out: `agent-setup`
+
+```sh
+gctd agent-setup install --hooks --yes   # skill into every harness dir + Claude hook
+gctd agent-setup print                  # targets + skill text (manual installs)
+gctd agent-setup context                # live pane state (what the hook emits)
+```
+
+`install` copies `SKILL.md` (staged beside the daemon by `make build`, no
+network) into the Claude, Codex, opencode, Cursor, and Cursor-agents skill
+dirs (`--harness=` narrows it; dry-run without `--yes`). `--hooks` merges
+a Claude `SessionStart` hook (via `/usr/local/bin/gctd`, no spaces) that
+injects live pane state every session — that's the discovery path: the
+agent learns GCT exists plus what's currently on the canvas, before the
+first prompt. The hook fails open (daemon down = empty context, never
+blocks start). Codex also needs `[features] skills=true` in its config.
 
 Each pane's shell runs via `ptyexec`, which takes a fresh session, claims
 the slave pty as its controlling terminal, and execs the shell — without
@@ -186,6 +231,7 @@ arrive via `resize_callback` and go to the daemon as `TIOCSWINSZ`. See
 | `⌘⇧D` | clear multi-select |
 | `⌘F` | float / re-tile focused pane |
 | `⌘⇧S` | toggle window snapping (session-only, never moves panes) |
+| `⌘⇧R` | reload config.toml (live: theme, keybinds, snapping, doom hotkey) |
 | `⌘⌃H/J/K/L` | grow focused pane toward left/down/up/right (shoves blockers) |
 | `⌘⌃⇧H/J/K/L` | shrink focused pane from that edge |
 | `⌘P` | pane switcher (type to filter, ⏎ to jump) |
@@ -207,10 +253,12 @@ arrive via `resize_callback` and go to the daemon as `TIOCSWINSZ`. See
 
 
 `~/.config/gct/config.toml` — created with defaults on first launch; every key
-is optional and malformed values fall back to their defaults. Takes effect on
-relaunch. Root-level keys (like `appearance` and the placement keys below)
-must appear before the first `[table]` header — after one, they belong to
-that table.
+is optional and malformed values fall back to their defaults. `⌘⇧R`
+(reload-config) re-reads it live — theme, keybinds, snapping/overlap
+policy, status bar, doom hotkey; only doom's structural keys (enabled,
+start-hidden, launch-at-login) need a relaunch. Root-level keys (like
+`appearance` and the placement keys below) must appear before the first
+`[table]` header — after one, they belong to that table.
 
 ```toml
 # Light/dark mode: "light", "dark", or "system" (follow macOS).
@@ -295,8 +343,8 @@ light = "#ffffff"
     [statusbar]
     # Overlay bar of xbar-compatible executables in
     # ~/.config/gct/statusbar/ ({name}.{interval}.{ext}, e.g.
-    # clock.10s.sh — picked up live, no recompile/restart). Needs a
-    # relaunch for these keys.
+    # clock.10s.sh — picked up live, no recompile/restart). Flip
+    # `enabled` (or any key here) then reload-config.
     enabled = false
     # Bar edge: "top" or "bottom". Always above panes on its own layer.
     position = "bottom"
@@ -361,6 +409,10 @@ ungroup = "cmd+shift+g"
 # Snapping: flip magnetic window snapping at runtime (session-only;
 # never moves already-placed panes).
 toggle-snapping = "cmd+shift+s"
+# Config: re-read config.toml and apply live (theme, keybinds,
+# snapping/overlap policy, doom hotkey). Doom structural keys
+# (enabled, start-hidden, launch-at-login) need a relaunch.
+reload-config = "cmd+shift+r"
 
 Terminal settings (inside panes) are ghostty's domain and come from your
 ghostty config as usual (`~/.config/ghostty/config`, App Support override,

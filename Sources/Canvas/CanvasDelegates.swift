@@ -74,11 +74,23 @@ extension CanvasView: CanvasConnDelegate {
     }
 
     func connGroupExit(_ id: GroupID) {
-        groupMetas.removeValue(forKey: id)
         groupViews[id]?.removeFromSuperview()
         groupViews.removeValue(forKey: id)
+        groupMetas.removeValue(forKey: id)
     }
 
+    // Agent/harness asked for this pane (gctd focus): focus + raise like
+    // a local move, camera honoring the focus-move flags (fit wins).
+    func connFocusPane(_ id: PaneID) {
+        guard panes[id] != nil else { return }
+        focusPane(id, raise: true)
+        let cfg = GCTConfig.current
+        if cfg.cameraFitsFocusMove {
+            zoomToPane(id)
+        } else if cfg.cameraFollowsFocusMove {
+            centerOnPane(id)
+        }
+    }
     func connClosed() {
         // Daemon died: try to restart it and reconnect.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in

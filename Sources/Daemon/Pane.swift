@@ -30,10 +30,14 @@ final class Pane {
     }
 
     var spawnArgs: [String] {
-        if let cmd = spawnCommand, !cmd.isEmpty {
-            return cmd.split(separator: " ").map(String.init)
-        }
+        // One-shot commands run through the user's login shell, not split
+        // on spaces: agents pass real shell syntax (`&&`, quotes, pipes).
+        // Empty = interactive login shell. Either way the pane exits when
+        // the command does (tmux-like); `send` drives a live shell instead.
         let shell = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
+        if let cmd = spawnCommand, !cmd.isEmpty {
+            return [shell, "-l", "-c", cmd]
+        }
         return [shell, "-l"]
     }
 
@@ -98,12 +102,31 @@ final class Pane {
         env["TERM"] = "xterm-256color"
         env["COLORTERM"] = "truecolor"
         env["TERM_PROGRAM"] = "GrandCentralTerminal"
+        // Agent/harness hooks: GCT_PANE_ID lets a shell know which pane it
+        // is (for `gctd dump $GCT_PANE_ID` self-inspection); GCT_SOCK
+        // points gctd's own CLI at this daemon (test/bench isolation
+        // overrides flow through instead of hitting the live socket).
+        env["GCT_PANE_ID"] = id.uuid.uuidString
+        env["GCT_SOCK"] = Pane.sockPathForChildren()
         // GUI-launched daemons inherit launchd's sparse env: no locale,
         // which degrades htop et al. to ASCII/monochrome output.
         if env["LANG"] == nil || env["LANG"]?.hasSuffix("UTF-8") != true {
             env["LANG"] = "en_US.UTF-8"
         }
         return env
+    }
+
+    // Socket path the daemon is serving on, passed down so in-pane
+    // `gctd` CLI calls reach THIS daemon. Spawned early (before the
+    // socket binds), so read the same env override the server used.
+    private static func sockPathForChildren() -> String {
+        if let p = ProcessInfo.processInfo.environment["GCT_SOCK"],
+           !p.isEmpty {
+            return p
+        }
+        return (NSHomeDirectory() as NSString)
+            .appendingPathComponent(
+                "Library/Application Support/Grand Central Terminal/daemon.sock")
     }
 
     // Blocking reader: runs on its own thread per pane. Owns closing the

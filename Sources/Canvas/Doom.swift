@@ -16,6 +16,10 @@ extension Notification.Name {
     /// but the window is frontmost). Carbon eats registered combos
     /// system-wide, so this never double-fires with the hotkey.
     static let gctToggleDoom = Notification.Name("dev.dubey.gct.toggleDoom")
+    /// Config reload changed [doom] toggle: the app delegate re-registers
+    /// the global hotkey (Carbon has no rebind — register the new combo,
+    /// keep the old one if the new combo is taken).
+    static let gctDoomHotkeyChanged = Notification.Name("dev.dubey.gct.doomHotkeyChanged")
 }
 
 // MARK: - GCTKeybind doom matching
@@ -142,6 +146,26 @@ final class DoomController {
         hotkeyArmed = true
         NSLog("[gct] doom: global hotkey armed")
         return true
+    }
+
+    /// Config reload: bind the new toggle combo. Carbon has no rebind, so
+    /// this registers the new combo and swaps it in; when the new combo
+    /// is taken the old hotkey stays (deinit unregisters the failed one).
+    /// A nil bind (unbound toggle) keeps the old hotkey — an unbound
+    /// global toggle would strand a hidden window with no way back.
+    func reregisterHotkey(bind: GCTKeybind?) {
+        guard let bind else {
+            NSLog("[gct] doom: toggle unbound in config — keeping current hotkey")
+            return
+        }
+        let hk = DoomHotkey { [weak self] in self?.toggle() }
+        guard hk.register(bind: bind) else {
+            NSLog("[gct] doom: hotkey re-register FAILED — keeping current hotkey")
+            return
+        }
+        hotkey = hk
+        hotkeyArmed = true
+        NSLog("[gct] doom: global hotkey re-armed")
     }
 
     // MARK: Toggle
