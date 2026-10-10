@@ -156,6 +156,7 @@ arrive via `resize_callback` and go to the daemon as `TIOCSWINSZ`. See
 | `⌘D` | toggle focused pane in multi-select |
 | `⌘⇧D` | clear multi-select |
 | `⌘F` | float / re-tile focused pane |
+| `⌘⇧S` | toggle window snapping (session-only, never moves panes) |
 | `⌘⌃H/J/K/L` | grow focused pane toward left/down/up/right (shoves blockers) |
 | `⌘⌃⇧H/J/K/L` | shrink focused pane from that edge |
 | `⌘P` | pane switcher (type to filter, ⏎ to jump) |
@@ -166,13 +167,14 @@ arrive via `resize_callback` and go to the daemon as `TIOCSWINSZ`. See
 | pinch | zoom canvas (toward cursor) |
 | two-finger double-tap | toggle actual size / fit all |
 | drag empty space | pan |
+| opt-drag empty space | draw a new pane (free corner snaps, live cols×rows pill) |
 | right-drag empty space | rubber-band panes into a staged multi-select (no grouping yet) |
-| right-click canvas/group background | one menu, always: selection actions (when live) + group actions (on background) + new pane here |
+| right-click canvas/group background | one menu, always: selection actions (when live) + group actions (on background) + new pane here + snapping on/off |
 | shift+click titlebar | toggle pane in multi-select |
 | drag selected titlebar | move the whole selection as a rigid block |
-| drag titlebar | move pane |
+| drag titlebar | move pane (edges/center snap within the radius, guides light) |
 | drag group background | move every member together |
-| drag edges/corners | resize pane |
+| drag edges/corners | resize pane (moving edges snap, guides light) |
 
 
 `~/.config/gct/config.toml` — created with defaults on first launch; every key
@@ -188,6 +190,23 @@ appearance = "system"
 # Window placement. Panes are kept from overlapping unless you allow it:
 # new panes, moves, and resizes all resolve collisions.
 allow-window-overlap = false
+# Magnetic window snapping (on, edges): drags/resizes within
+# snap-radius pull flush with nearby panes + light full-canvas guides
+# (fast fade in/out). snapping-type picks the anchors: edges (min/max,
+# default), center (mid), or all. Scope: grouped panes (even solo) snap
+# only to siblings in the same group — never outside; whole-group drags
+# snap the group border to ungrouped panes and foreign group borders;
+# ungrouped panes snap to ungrouped panes and group borders (never into
+# grouped members).
+snapping = true
+snapping-type = "edges"  # edges | center | all
+# Snap radius in screen points (constant feel at any zoom).
+snap-radius = 16
+# Guide lines: false hides them; snap-guide-color tints them (hex like
+# "#ff453a", "default" for translucent silver, "none" to hide — the
+# snap still applies).
+show-snap-guides = true
+snap-guide-color = "default"
 # Mouse drags never shove anything aside (they slide or hold); keyboard
 # grow always shoves. Set true to let mouse drags shove too.
 allow-mouse-drag-to-push = false
@@ -308,7 +327,9 @@ clear-pane-selection = "cmd+shift+d"
 # targets the group when the focused pane has one.
 group-selection = "cmd+g"
 ungroup = "cmd+shift+g"
-```
+# Snapping: flip magnetic window snapping at runtime (session-only;
+# never moves already-placed panes).
+toggle-snapping = "cmd+shift+s"
 
 Terminal settings (inside panes) are ghostty's domain and come from your
 ghostty config as usual (`~/.config/ghostty/config`, App Support override,

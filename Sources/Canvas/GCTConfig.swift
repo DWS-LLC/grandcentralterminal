@@ -183,6 +183,13 @@ enum GCTNewWindowDirection: String {
     case above, below, left, right
 }
 
+// Which anchors window snapping locks: edges (min/max), centers (mid),
+// or all of them. Resize always uses the moving edge; this picks the
+// foreign anchors it can land on (and the move anchors).
+enum GCTSnapType: String {
+    case all, center, edges
+}
+
 // Size of new panes: follows the focused pane, or a fixed terminal grid.
 enum GCTNewWindowDim: Equatable {
     case follows
@@ -240,6 +247,7 @@ enum GCTAction: String, CaseIterable {
     case toggleFloating = "toggle-floating"
     case togglePaneSelection = "toggle-pane-selection"
     case clearPaneSelection = "clear-pane-selection"
+    case toggleSnapping = "toggle-snapping"
 }
 // MARK: - Config
 
@@ -267,6 +275,22 @@ struct GCTConfig {
     // Mouse drags never shove other panes/groups out of the way (they
     // slide around or hold instead). Keyboard grow always shoves.
     var allowMouseDragToPush = false
+    // Magnetic window snapping: dragging or resizing a pane within
+    // snap-radius pulls it flush with nearby panes and lights
+    // full-canvas guide lines. On by default; the toggle-snapping
+    // keybind flips it at runtime (never re-lays-out existing panes).
+    var snapping = true
+    // Which anchors lock: edges (min/max, default), center (mid), or
+    // all. Resize always uses the moving edge; this picks the foreign
+    // anchors it (and moves) can land on.
+    var snappingType = GCTSnapType.edges
+    // Snap radius in screen points (constant feel at any zoom).
+    var snapRadius: CGFloat = 16
+    // Guide lines: show-snap-guides = false hides them; snap-guide-color
+    // tints them (hex like "#ff453a", "default" for translucent silver,
+    // "none" to hide).
+    var showSnapGuides = true
+    var snapGuideColor: String?
     var newWindowDirection = GCTNewWindowDirection.right
     // Size of new panes: focused pane's size, or a fixed cols x rows grid
     // (80x24 when the canvas is empty).
@@ -335,6 +359,21 @@ struct GCTConfig {
         if let v = root["allow-mouse-drag-to-push"] {
             cfg.allowMouseDragToPush = v.lowercased() == "true"
         }
+        if let v = root["snapping"] {
+            cfg.snapping = v.lowercased() == "true"
+        }
+        if let v = root["snapping-type"],
+           let t = GCTSnapType(rawValue: v.lowercased()) {
+            cfg.snappingType = t
+        }
+        if let s = root["snap-radius"], let n = Double(s),
+           (2.0...128.0).contains(n) {
+            cfg.snapRadius = CGFloat(n)
+        }
+        if let v = root["show-snap-guides"] {
+            cfg.showSnapGuides = v.lowercased() == "true"
+        }
+        cfg.snapGuideColor = colorSpec(root["snap-guide-color"])
         if let v = root["new-window-open-direction"],
            let d = GCTNewWindowDirection(rawValue: v.lowercased()) {
             cfg.newWindowDirection = d
@@ -468,6 +507,7 @@ struct GCTConfig {
             .toggleFloating: GCTKeybind("cmd+f")!,
             .togglePaneSelection: GCTKeybind("cmd+d")!,
             .clearPaneSelection: GCTKeybind("cmd+shift+d")!,
+            .toggleSnapping: GCTKeybind("cmd+shift+s")!,
         ]
     }
 
@@ -481,11 +521,26 @@ struct GCTConfig {
     # Window placement. Panes are kept from overlapping unless you allow
     # it: new panes, moves, and resizes all resolve collisions.
     allow-window-overlap = false
-    # Mouse drags slide around (or hold against) other panes/groups —
-    # they never shove anything out of the way. Keyboard grow always
-    # shoves. Set true to let mouse drags shove too.
-    allow-mouse-drag-to-push = false
-    # Side of the focused pane that cmd+t opens on.
+    # Magnetic window snapping (on by default): dragging or resizing a
+    # pane within snap-radius pulls it flush with nearby panes and
+    # lights full-canvas guide lines (fast fade in/out). Toggling only
+    # affects future drags — already-placed panes never jump.
+    # Scope: grouped panes (even solo) snap only to siblings in the same
+    # group — never outside; whole-group drags snap the group border to
+    # ungrouped panes and foreign group borders; ungrouped panes snap to
+    # ungrouped panes and group borders (never into grouped members).
+    snapping = true
+    # Which anchors lock: edges (default), center, or all. Resize always
+    # uses the moving edge; this picks the foreign anchors it (and
+    # moves) can land on.
+    snapping-type = "edges"  # edges | center | all
+    # Snap radius in screen points (constant feel at any zoom).
+    snap-radius = 16
+    # Guide lines: set false to hide them; snap-guide-color tints them
+    # (hex like "#ff453a", "default" for translucent silver, "none" to
+    # hide — the snap still applies).
+    show-snap-guides = true
+    snap-guide-color = "default"
     new-window-open-direction = "right"  # above | below | left | right
     # New pane size: "follows" copies the focused pane, or fix a terminal
     # grid as "cols,rows" (e.g. "80,30"). With no panes on the canvas, a
@@ -614,9 +669,12 @@ struct GCTConfig {
     # allowed every window already overlaps, so toggling only changes the
     # stacking + marker. Re-press re-tiles into the layout.
     toggle-floating = "cmd+f"
+    # Snapping: flip magnetic window snapping at runtime (session-only;
+    # never moves already-placed panes). Default bind below; rebind or
+    # delete to unbind.
+    toggle-snapping = "cmd+shift+s"
     """
 }
-
 // MARK: - Appearance + resolved theme
 
 enum GCTAppearance: String {

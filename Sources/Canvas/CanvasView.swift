@@ -55,9 +55,18 @@ final class CanvasView: NSView {
         // Whole-group move: id plus the member offsets at grab time.
         case groupMove(id: GroupID, grabDelta: CGPoint,
                        members: [PaneID], rects0: [PaneID: NSRect])
+        // Drag-to-create (opt-drag on empty space): the anchor stays put,
+        // the free corner snaps; release opens a pane at the drawn rect.
+        case create(anchor: CGPoint)
     }
     private var drag = Drag.none
-
+    // Window snapping: guide overlay + drag-create state. Overlay views
+    // are created lazily (first snap event) so startup stays identical.
+    private var snapOverlay: SnapOverlay?
+    private var snapSizeLabel: SnapSizeLabel?
+    // Opt-drag on empty space arms a drag-to-create pane (confirmed as
+    // .create once the pointer moves past the click threshold).
+    private var pendingCreate: CGPoint?
     // Weak: removeFromSuperview drops the last strong reference, so the
     // property self-clears after dismissal.
     private weak var switcher: SwitcherView?
@@ -213,6 +222,258 @@ final class CanvasView: NSView {
     override func layout() {
         super.layout()
         layoutStatusBar()
+    }
+
+    // MARK: Window snapping (helpers; drag call sites below)
+
+    // Config snapping-type -> engine anchors.
+    private var snapMode: SnapEngine.Mode {
+        switch GCTConfig.current.snappingType {
+        case .all: return .all
+        case .center: return .center
+        case .edges: return .edges
+        }
+    }
+
+    // Snap scope. Three rules, one place:
+    // - a pane IN a group (even solo) snaps only to its siblings'
+    //   frames: nothing outside the group, not even its own border
+    //   (a solo member has no targets and never snaps);
+    // - a whole-group drag snaps the BORDER union to ungrouped panes
+    //   and foreign GROUP BORDERS (never into another group's members —
+    //   those ride inside their own border);
+    // - an ungrouped pane snaps to ungrouped sibling frames and foreign
+    //   group borders (never into grouped members).
+    // Group borders still collide (Overlap) — this only scopes the
+    // magnetic targets + guides.
+
+    // Foreign targets for moving `moving`: sibling frames when grouped
+    // (empty when solo), else ungrouped frames + foreign group borders.
+    private func snapTargetsForPane(moving: PaneID) -> [NSRect] {
+        if let own = groupOf(moving) {
+            let siblings = groupMetas[own]?.members ?? []
+            return siblings.compactMap { m in
+                m == moving ? nil : panes[m]?.frame
+            }
+        }
+        return snapTargetsForUngrouped(excluding: Set([moving]))
+    }
+
+    // Foreign targets for outsiders (ungrouped panes, drag-to-create):
+    // ungrouped frames + every foreign group border.
+    private func snapTargetsForUngrouped(excluding: Set<PaneID>) -> [NSRect] {
+        var out = [NSRect]()
+        let grouped = Set(groupMetas.values.flatMap(\.members))
+        for (id, pane) in panes
+            where !excluding.contains(id) && !grouped.contains(id) {
+            out.append(pane.frame)
+        }
+        for (_, b) in GroupLayout.bounds(groups: groupMetas, panes: paneRects()) {
+            out.append(NSRectOverlap.to(b))
+        }
+        return out
+    }
+
+    // Foreign targets for a whole-group/block drag of `ids`: ungrouped
+    // frames (never grouped members) + foreign group borders (never
+    // the dragged groups' own).
+    private func snapTargetsForBlock(ids: Set<PaneID>) -> [NSRect] {
+        var out = [NSRect]()
+        let grouped = Set(groupMetas.values.flatMap(\.members))
+        for (id, pane) in panes
+            where !ids.contains(id) && !grouped.contains(id) {
+            out.append(pane.frame)
+        }
+        for (gid, b) in GroupLayout.bounds(groups: groupMetas, panes: paneRects()) {
+            if let gm = groupMetas[gid]?.members,
+               gm.contains(where: { ids.contains($0) }) { continue }
+            out.append(NSRectOverlap.to(b))
+        }
+        return out
+    }
+
+    // Snap the moving rect against every same-scope pane anchor, then
+    // redraw guides. Returns the (maybe shifted) rect. Runs AFTER
+    // the collision resolve: snapping is a drag-time nudge, never a pass
+    // through other windows, and over-eager snaps that the resolve
+    // pushed back drop their guides (the rect no longer sits on them).
+    private func snapMovedRect(_ rect: NSRect,
+                               moving: PaneID) -> NSRect {
+        guard GCTConfig.current.snapping else { hideSnapGuides(); return rect }
+        let radius = camera.screenToWorldDistance(GCTConfig.current.snapRadius)
+        // Grouped (even solo): siblings only — empty means no snap, no
+        // guides. Ungrouped: ungrouped frames + group borders. Never
+        // into grouped members from outside.
+        let others = snapTargetsForPane(moving: moving)
+        let r = SnapEngine.snapMove(rect, others: others, radius: radius,
+                                    mode: snapMode)
+        showSnapGuides(x: r.guidesX, y: r.guidesY, near: r.rect)
+        return r.rect
+    }
+
+    // Whole-group/block drag: snap the BORDER UNION (post-resolve
+    // member frames -> padded bounds, mirroring GroupGeometry) to
+    // ungrouped frames + foreign group borders. Members ride the
+    // border delta rigidly. Guides sit on the border's snapped edges.
+    // Callers resolve first, then pass the post-resolve frames here.
+    private func snapBlockDelta(members: [PaneID: NSRect],
+                                ids: Set<PaneID>) -> CGPoint {
+        guard GCTConfig.current.snapping else { hideSnapGuides(); return .zero }
+        guard let union = groupBoundsFrom(members) else { return .zero }
+        let radius = camera.screenToWorldDistance(GCTConfig.current.snapRadius)
+        // Never into another group's members: ungrouped frames +
+        // foreign borders only.
+        let others = snapTargetsForBlock(ids: ids)
+        let r = SnapEngine.snapMove(union, others: others, radius: radius,
+                                    mode: snapMode)
+        showSnapGuides(x: r.guidesX, y: r.guidesY, near: r.rect)
+        return CGPoint(x: r.rect.minX - union.minX, y: r.rect.minY - union.minY)
+    }
+
+    // Resize-side snap: only the zone's moving edges pull. Runs BEFORE
+    // the collision clamp so growing into a snapped neighbor still holds
+    // at the shared edge instead of punching through.
+    private func snapResizedRect(_ rect: NSRect, rect0: NSRect,
+                                 zone: PaneView.ResizeZone,
+                                 moving: PaneID) -> (rect: NSRect,
+                                                     guidesX: [CGFloat],
+                                                     guidesY: [CGFloat]) {
+        guard GCTConfig.current.snapping else { hideSnapGuides(); return (rect, [], []) }
+        let radius = camera.screenToWorldDistance(GCTConfig.current.snapRadius)
+        // Same scope as moves: siblings when grouped (empty when solo:
+        // no snap, no guides), else ungrouped frames + foreign borders.
+        let others = snapTargetsForPane(moving: moving)
+        let r = SnapEngine.snapResize(
+            rect, west: zone.resizesW, east: zone.resizesE,
+            south: zone.resizesS, north: zone.resizesN,
+            others: others, radius: radius,
+            minSize: CGSize(width: 160, height: 120), mode: snapMode)
+        showSnapGuides(x: r.guidesX, y: r.guidesY, near: r.rect)
+        return (r.rect, r.guidesX, r.guidesY)
+    }
+
+    // Guide lines that survive the collision resolve stay lit; others
+    // (an over-eager snap the blocker pushed back) drop.
+    private func keepSnapGuides(x: [CGFloat], y: [CGFloat], on rect: NSRect) {
+        let kx = x.filter { gx in
+            [rect.minX, rect.midX, rect.maxX].contains { abs($0 - gx) <= 0.5 }
+        }
+        let ky = y.filter { gy in
+            [rect.minY, rect.midY, rect.maxY].contains { abs($0 - gy) <= 0.5 }
+        }
+        if kx.isEmpty, ky.isEmpty { hideSnapGuides() } else { showSnapGuides(x: kx, y: ky, near: rect) }
+    }
+
+    // Paint world-space guides, or clear when nothing aligned. Color
+    // from snap-guide-color ("none"/show-snap-guides=false = no paint,
+    // only the snap still applies). "default" is translucent silver.
+    // Span covers every pane + the rect.
+    private func showSnapGuides(x: [CGFloat], y: [CGFloat], near rect: NSRect) {
+        guard !x.isEmpty || !y.isEmpty else { hideSnapGuides(); return }
+        guard GCTConfig.current.showSnapGuides else { return }
+        let spec = GCTConfig.current.snapGuideColor ?? "default"
+        guard spec.lowercased() != "none" else { return }
+        let color = NSColor(gctHex: spec)
+            ?? NSColor(white: 0.75, alpha: 0.55)
+        showSnapGuidesRaw(x: x, y: y, near: rect, color: color)
+    }
+
+    private func showSnapGuidesRaw(x: [CGFloat], y: [CGFloat], near rect: NSRect,
+                                   color: NSColor) {
+        if snapOverlay == nil { snapOverlay = SnapOverlay(host: worldView) }
+        var span = rect
+        for pane in panes.values { span = span.union(pane.frame) }
+        let m: CGFloat = 4000
+        span = span.insetBy(dx: -m, dy: -m)
+        snapOverlay?.show(x: x, y: y, span: span,
+                          color: color, scale: camera.scale)
+    }
+
+    private func hideSnapGuides() { snapOverlay?.hide() }
+
+    // cols×rows under the pointer for the drag-create rect. Mirrors
+    // frameForGrid (titlebar + border included) so the pill reads the
+    // terminal size the pane will actually open at.
+    private func gridSizeText(for rect: NSRect) -> String {
+        guard let cell = cellSize, cell.width > 0, cell.height > 0 else {
+            return "\(Int(rect.width))×\(Int(rect.height))pt"
+        }
+        let bw = GCTTheme.current.borderWidth
+        let cols = max(1, Int(round((rect.width - bw * 2) / cell.width)))
+        let rows = max(1, Int(round(
+            (rect.height - PaneView.titleBarHeight - bw) / cell.height)))
+        return "\(cols)×\(rows)"
+    }
+    // Session-only flip (never moves panes). Guides clear when turning
+    // off mid-drag; turning on just arms future drags.
+    func toggleSnapping() {
+        GCTConfig.current.snapping.toggle()
+        if !GCTConfig.current.snapping { hideSnapGuides() }
+    }
+
+    private var isIdleDrag: Bool {
+        if case .none = drag { return true }
+        return false
+    }
+    // Drag-to-create band: reuse the blue selection styling, but draw
+    // the SNAPPED rect so the box matches the pane that will open. The
+    // size pill reads cols×rows from the same box.
+    private func showCreateBand(at world: CGPoint) {
+        guard case .create(let anchor) = drag else { return }
+        let drawn = snappedCreateRect(anchor: anchor, free: world)
+        selectionBand = (anchor: CGPoint(x: drawn.rect.minX, y: drawn.rect.minY),
+                         current: CGPoint(x: drawn.rect.maxX, y: drawn.rect.maxY))
+        showSelectionBand()
+        if snapSizeLabel == nil { snapSizeLabel = SnapSizeLabel(host: self) }
+        snapSizeLabel?.show(gridSizeText(for: drawn.rect),
+                            near: convert(NSEvent.mouseLocation, from: nil),
+                            in: self)
+        if drawn.guideX == nil, drawn.guideY == nil {
+            hideSnapGuides()
+        } else {
+            showSnapGuides(x: drawn.guideX.map { [$0] } ?? [],
+                           y: drawn.guideY.map { [$0] } ?? [],
+                           near: drawn.rect)
+        }
+    }
+
+    // Free corner snapped to nearby edges (when snapping is on); press
+    // anchor fixed. Enforces the 160×120 minimum so the pill and the
+    // created pane agree.
+    private func snappedCreateRect(anchor: CGPoint, free: CGPoint)
+        -> (rect: NSRect, guideX: CGFloat?, guideY: CGFloat?) {
+        var corner = free
+        var gx: CGFloat?; var gy: CGFloat?
+        if GCTConfig.current.snapping {
+            // A drawn pane opens ungrouped: ungrouped frames + group
+            // borders (never into grouped members).
+            let others = snapTargetsForUngrouped(excluding: [])
+            let s = SnapEngine.snapPoint(
+                free, others: others,
+                radius: camera.screenToWorldDistance(GCTConfig.current.snapRadius),
+                mode: snapMode)
+            corner = s.point; gx = s.guideX; gy = s.guideY
+        }
+        var rect = NSRect(
+            x: min(anchor.x, corner.x), y: min(anchor.y, corner.y),
+            width: abs(corner.x - anchor.x), height: abs(corner.y - anchor.y))
+        if rect.width < 160 {
+            rect.origin.x = corner.x >= anchor.x ? anchor.x : anchor.x - 160
+            rect.size.width = 160
+            if corner.x >= anchor.x, gx != nil,
+               abs(anchor.x + 160 - gx!) > 0.5 { gx = nil }
+            if corner.x < anchor.x, gx != nil,
+               abs(anchor.x - 160 - gx!) > 0.5 { gx = nil }
+        }
+        if rect.height < 120 {
+            rect.origin.y = corner.y >= anchor.y ? anchor.y : anchor.y - 120
+            rect.size.height = 120
+            if corner.y >= anchor.y, gy != nil,
+               abs(anchor.y + 120 - gy!) > 0.5 { gy = nil }
+            if corner.y < anchor.y, gy != nil,
+               abs(anchor.y - 120 - gy!) > 0.5 { gy = nil }
+        }
+        return (rect, gx, gy)
     }
 
     private func applyCamera() {
@@ -384,7 +645,8 @@ final class CanvasView: NSView {
             return
         }
 
-        // Group background (not on a pane): drag moves the whole group.
+        // Group background (not on a pane): drag moves the whole group —
+        // even with opt held (opt-drag creates panes only on EMPTY space).
         if let g = topGroup(at: world), let b = groupBounds(g.id) {
             var rects = [PaneID: NSRect]()
             for m in groupMetas[g.id]?.members ?? [] {
@@ -397,6 +659,14 @@ final class CanvasView: NSView {
             return
         }
 
+        // Opt-drag on empty space draws a new pane (snapped free corner,
+        // live cols×rows pill); plain drag pans. Armed here, confirmed
+        // as .create once the pointer moves past the click threshold.
+        if event.modifierFlags.contains(.option) {
+            pendingCreate = world
+            if !event.modifierFlags.contains(.shift) { clearSelection() }
+            return
+        }
         // Plain drag on empty space pans the camera. (Rubber-band grouping
         // is on the right button; group menus too — see rightMouseDown.)
         // A plain left press (no shift) clears the multi-select; the drag
@@ -406,6 +676,18 @@ final class CanvasView: NSView {
     }
 
     override func mouseDragged(with event: NSEvent) {
+        // Opt-drag armed on empty space: past the click threshold it
+        // becomes a drag-to-create (world-space rect + size pill).
+        if let anchor = pendingCreate, isIdleDrag {
+            let world = worldPoint(event)
+            let tol = camera.screenToWorldDistance(6)
+            if abs(world.x - anchor.x) > tol || abs(world.y - anchor.y) > tol {
+                drag = .create(anchor: anchor)
+                selectionBand = (anchor: anchor, current: world)
+                showCreateBand(at: world)
+            }
+            return
+        }
         switch drag {
         case .pan(let start, let offset0):
             let p = viewPoint(event)
@@ -415,6 +697,8 @@ final class CanvasView: NSView {
         case .select(let anchor):
             selectionBand = (anchor: anchor, current: worldPoint(event))
             showSelectionBand()
+        case .create:
+            showCreateBand(at: worldPoint(event))
         case .groupMove(let id, let grabDelta, let members, let rects0):
             let world = worldPoint(event)
             guard let b0 = groupBoundsFrom(rects0) else { return }
@@ -447,11 +731,23 @@ final class CanvasView: NSView {
                             x: b0.minX + dx, y: b0.minY + dy,
                             width: b0.width, height: b0.height)),
                         obstacles: foreign)
-                    let sdx = clean.x - Double(b0.minX),
-                        sdy = clean.y - Double(b0.minY)
+                    // Snap AFTER the slide resolve (shove path below
+                    // returns early, unsnapped): post-resolve member
+                    // frames, so the snap and guides sit on pane
+                    // edges, not the padded union.
+                    var slid = [PaneID: NSRect]()
+                    let sdx0 = clean.x - Double(b0.minX),
+                        sdy0 = clean.y - Double(b0.minY)
+                    for m in members {
+                        guard let r0 = rects0[m] else { continue }
+                        slid[m] = NSRect(x: r0.minX + sdx0, y: r0.minY + sdy0,
+                                         width: r0.width, height: r0.height)
+                    }
+                    let s = snapBlockDelta(members: slid, ids: Set(members))
                     for m in members {
                         guard let pane = panes[m], let r0 = rects0[m] else { continue }
-                        pane.setRect(NSRect(x: r0.minX + sdx, y: r0.minY + sdy,
+                        pane.setRect(NSRect(x: r0.minX + sdx0 + Double(s.x),
+                                            y: r0.minY + sdy0 + Double(s.y),
                                             width: r0.width, height: r0.height),
                                      notifySurface: false)
                     }
@@ -487,9 +783,19 @@ final class CanvasView: NSView {
                         allowOverlap: GCTConfig.current.allowWindowOverlap))
                 }
             }
+            // Free path: no obstacle contact. Snap MEMBER frames (not
+            // the padded union), ride rigid. refreshGroupViews rides
+            // along so the group background tracks the members live.
+            var free = [PaneID: NSRect]()
+            for m in members {
+                guard let r0 = rects0[m] else { continue }
+                free[m] = NSRect(x: r0.minX + dx, y: r0.minY + dy,
+                                 width: r0.width, height: r0.height)
+            }
+            let s = snapBlockDelta(members: free, ids: Set(members))
             for m in members {
                 guard let pane = panes[m], let r0 = rects0[m] else { continue }
-                pane.setRect(NSRect(x: r0.minX + dx, y: r0.minY + dy,
+                pane.setRect(NSRect(x: r0.minX + dx + s.x, y: r0.minY + dy + s.y,
                                     width: r0.width, height: r0.height),
                              notifySurface: false)
             }
@@ -521,8 +827,63 @@ final class CanvasView: NSView {
                 foreign.append(b)
             }
             let clean = Overlap.resolve(NSRectOverlap.from(union1), obstacles: foreign)
-            let sdx = clean.x - Double(union1.minX)
-            let sdy = clean.y - Double(union1.minY)
+            // Snap AFTER the resolve: post-resolve member frames (not
+            // the union), members ride the final delta rigidly.
+            // Same-group-only selection snaps in-group (siblings); a
+            // mixed/groupless selection uses block scope (ungrouped
+            // frames + foreign borders). snapBlockDelta repaints guides.
+            var slidTargets = [PaneID: NSRect]()
+            let cdx = clean.x - Double(union1.minX),
+                cdy = clean.y - Double(union1.minY)
+            for (m, want) in targets {
+                slidTargets[m] = NSRect(x: want.minX + cdx, y: want.minY + cdy,
+                                        width: want.width, height: want.height)
+            }
+            let selIDs = Set(targets.keys)
+            let selGroups = Set(selIDs.compactMap { groupOf($0) })
+            let s: CGPoint
+            if selGroups.count == 1, let only = selGroups.first,
+               selIDs.isSubset(of: Set(groupMetas[only]?.members ?? [])) {
+                // In-group: snap frames to non-selected siblings.
+                // Sibling frames come from the post-resolve layout
+                // (slidTargets when selected, live frames otherwise) —
+                // stale pre-drag frames would offset every guide.
+                let siblings = (groupMetas[only]?.members ?? []).compactMap { m -> NSRect? in
+                    guard !selIDs.contains(m) else { return nil }
+                    return slidTargets[m] ?? panes[m]?.frame
+                }
+                var sdx2: CGFloat = 0, sdy2: CGFloat = 0
+                let inRadius = camera.screenToWorldDistance(GCTConfig.current.snapRadius)
+                for m in slidTargets.values {
+                    let r = SnapEngine.snapMove(m, others: siblings,
+                                                radius: inRadius, mode: snapMode)
+                    let dx = r.rect.minX - m.minX, dy = r.rect.minY - m.minY
+                    if dx != 0, (sdx2 == 0 || abs(dx) < abs(sdx2)) { sdx2 = dx }
+                    if dy != 0, (sdy2 == 0 || abs(dy) < abs(sdy2)) { sdy2 = dy }
+                }
+                var snapped = union1
+                snapped.origin.x += cdx + Double(sdx2)
+                snapped.origin.y += cdy + Double(sdy2)
+                var gx = [CGFloat](), gy = [CGFloat]()
+                for m in slidTargets.values {
+                    let sx = m.minX + sdx2, mx = m.midX + sdx2, xx = m.maxX + sdx2
+                    let sy = m.minY + sdy2, my = m.midY + sdy2, yy = m.maxY + sdy2
+                    for o in siblings {
+                        for (a, t) in [(sx, o.minX), (sx, o.maxX), (xx, o.minX), (xx, o.maxX)]
+                            where snapMode != .center && abs(a - t) <= 0.5 && !gx.contains(t) { gx.append(t) }
+                        if snapMode != .edges, abs(mx - o.midX) <= 0.5, !gx.contains(o.midX) { gx.append(o.midX) }
+                        for (a, t) in [(sy, o.minY), (sy, o.maxY), (yy, o.minY), (yy, o.maxY)]
+                            where snapMode != .center && abs(a - t) <= 0.5 && !gy.contains(t) { gy.append(t) }
+                        if snapMode != .edges, abs(my - o.midY) <= 0.5, !gy.contains(o.midY) { gy.append(o.midY) }
+                    }
+                }
+                showSnapGuides(x: gx, y: gy, near: snapped)
+                s = CGPoint(x: sdx2, y: sdy2)
+            } else {
+                s = snapBlockDelta(members: slidTargets, ids: selIDs)
+            }
+            let sdx = cdx + Double(s.x)
+            let sdy = cdy + Double(s.y)
             for (m, want) in targets {
                 guard let pane = panes[m] else { continue }
                 pane.setRect(NSRect(x: want.minX + sdx, y: want.minY + sdy,
@@ -582,9 +943,18 @@ final class CanvasView: NSView {
                     rect = NSRectOverlap.to(candidate)
                 }
             }
+            // Snap AFTER the collision resolve: a drag-time nudge within
+            // the radius, never a pass through other windows. Skipped on
+            // the shove path above (that branch returns early).
+            rect = snapMovedRect(rect, moving: id)
             pane.setRect(rect, notifySurface: false)
-            refreshGroupViews()
-            refreshOcclusion()
+            // Grouped member: the background rides live (bounds derive
+            // from frames). Untracked drags leave the pink box behind
+            // until mouse-up.
+            if groupOf(id) != nil {
+                refreshGroupViews()
+                refreshOcclusion()
+            }
         case .resize(let id, let zone, let rect0):
             guard let pane = panes[id] else { return }
             let world = worldPoint(event)
@@ -600,6 +970,13 @@ final class CanvasView: NSView {
                 rect.size.height = rect0.maxY - rect.origin.y
             }
             if zone.resizesN { rect.size.height = max(minH, world.y - rect0.minY) }
+            // Snap the zone's moving edges BEFORE the collision clamp so
+            // growing into a snapped neighbor holds at the shared edge.
+            // Guides re-checked after the clamp (keepSnapGuides): an
+            // over-eager snap the blocker pushed back drops its line.
+            let snapped = snapResizedRect(rect, rect0: rect0, zone: zone,
+                                          moving: id)
+            rect = snapped.rect
             // Group bounds always block, even when overlap is allowed;
             // members additionally avoid loose panes.
             let memberOf: Set<GroupID> = groupOf(id).map { Set([$0]) } ?? []
@@ -669,8 +1046,13 @@ final class CanvasView: NSView {
                 }
             }
             pane.setRect(rect, notifySurface: true)
-            refreshGroupViews()
-            refreshOcclusion()
+            // Guides sit on the frame (siblings-only scope) — keep what
+            // survives the collision clamp.
+            keepSnapGuides(x: snapped.guidesX, y: snapped.guidesY, on: rect)
+            if groupOf(id) != nil {
+                refreshGroupViews()
+                refreshOcclusion()
+            }
         case .surfaceClick(let id, _):
             // Selection/drag inside the terminal: keep ghostty's mouse
             // position current while the button is held. Without this the
@@ -686,6 +1068,27 @@ final class CanvasView: NSView {
     }
 
     override func mouseUp(with event: NSEvent) {
+        // Opt-click (armed, never dragged): clear the arm, no pane.
+        if pendingCreate != nil, isIdleDrag {
+            pendingCreate = nil
+            return
+        }
+        if case .create(let anchor) = drag {
+            pendingCreate = nil
+            let world = worldPoint(event)
+            let drawn = snappedCreateRect(anchor: anchor, free: world)
+            drag = .none
+            hideSelectionBand()
+            hideSnapGuides()
+            snapSizeLabel?.hide()
+            // Tiny box = a click, not a draw: no pane.
+            if drawn.rect.width >= 40, drawn.rect.height >= 40 {
+                createPane(at: drawn.rect)
+            }
+            return
+        }
+        pendingCreate = nil
+        snapSizeLabel?.hide()
         if case .surfaceClick(let id, let button) = drag, let pane = panes[id] {
             let local = pane.surfacePoint(at: worldPoint(event))
             let mods = GhosttyMods(event.modifierFlags)
@@ -717,10 +1120,10 @@ final class CanvasView: NSView {
         }
         drag = .none
         hideSelectionBand()
+        hideSnapGuides()
     }
 
     // MARK: Right button — selection + groups live here
-    //
     // Left-click drags on empty space pan; the right button is free (no
     // rightMouseDown override existed, and surface clicks only forward
     // left/right presses that START on a pane). So: right-drag on empty
@@ -923,7 +1326,15 @@ final class CanvasView: NSView {
         here.target = self
         here.representedObject = NSStringFromPoint(world)
         menu.addItem(here)
-        NSMenu.popUpContextMenu(menu, with: event, for: self)
+        menu.addItem(.separator())
+        let snap = NSMenuItem(
+            title: GCTConfig.current.snapping
+                ? "Snapping: on" : "Snapping: off",
+            action: #selector(toggleSnappingFromMenu(_:)),
+            keyEquivalent: "")
+        snap.target = self
+        snap.state = GCTConfig.current.snapping ? .on : .off
+        menu.addItem(snap)
     }
     @objc func groupSelectionFromMenu(_ sender: NSMenuItem) {
         groupStagedSelection()
@@ -938,6 +1349,10 @@ final class CanvasView: NSView {
 
     @objc func clearSelectionFromMenu(_ sender: NSMenuItem) {
         clearSelection()
+    }
+
+    @objc func toggleSnappingFromMenu(_ sender: NSMenuItem) {
+        toggleSnapping()
     }
 
     @objc func renameGroupFromMenu(_ sender: NSMenuItem) {
@@ -1013,7 +1428,7 @@ final class CanvasView: NSView {
     // steal focus mid-gesture.
     private var isResizingOrMoving: Bool {
         switch drag {
-        case .resize, .move, .multiMove, .groupMove: return true
+        case .resize, .move, .multiMove, .groupMove, .create: return true
         default: return false
         }
     }
@@ -1161,6 +1576,7 @@ final class CanvasView: NSView {
         case .togglePaneSelection:
             if let id = focusedID { toggleSelected(id) }
         case .clearPaneSelection: clearSelection()
+        case .toggleSnapping: toggleSnapping()
         }
     }
 
@@ -1510,6 +1926,26 @@ final class CanvasView: NSView {
             cwd: cwd,
             allowOverlap: GCTConfig.current.allowWindowOverlap,
             joinGroup: inheritGroup, joinDirection: direction.rawValue))
+    }
+
+    // Drag-to-create: open a pane at the drawn rect (already snapped).
+    // Same overlap/group rules as "New pane here", same cwd inheritance.
+    func createPane(at rect: NSRect) {
+        let cwd = focusedID.flatMap { panes[$0]?.meta.cwd }
+        var r = rect
+        let obstacles = GroupLayout.creationObstacles(
+            paneRects: paneRects(),
+            groups: groupMetas,
+            allowOverlap: GCTConfig.current.allowWindowOverlap,
+            floating: floatingPanes())
+        if !GCTConfig.current.allowWindowOverlap || !obstacles.isEmpty {
+            r = NSRectOverlap.to(Overlap.resolve(NSRectOverlap.from(r),
+                                                 obstacles: obstacles))
+        }
+        conn?.createPane(CreatePane(
+            rect: Rect(x: r.minX, y: r.minY, w: r.width, h: r.height),
+            cwd: cwd,
+            allowOverlap: GCTConfig.current.allowWindowOverlap))
     }
 
     // New-pane placement: flush against the focused pane on the given
