@@ -5,7 +5,14 @@
 // this is the agent/harness surface: open a pane next to the working one,
 // send it keys, read its scrollback, group it, close it. GCT_SOCK selects
 // the daemon (panes inherit it, so in-pane `gctd` calls just work);
-// --sock overrides it explicitly.
+// --sock overrides it explicitly. --tcp=host:port + --token=.. target a
+// remote daemon over TCP instead.
+//
+// Cross-platform: serves on macOS (unix socket, .app-bundled) and Linux
+// (unix socket + optional TCP). Paths honor $HOME first (agentHome-style:
+// NSHomeDirectory ignores $HOME), GCT_HOME overrides the base dir
+// outright; on Linux the base is ~/.config/gct (XDG-style), on macOS the
+// Application Support dir.
 
 import Foundation
 import Common
@@ -19,17 +26,56 @@ func die(_ s: String) -> Never {
     exit(1)
 }
 
-let supportDir = (NSHomeDirectory() as NSString)
-    .appendingPathComponent("Library/Application Support/Grand Central Terminal")
+// Portable home: $HOME first (agents/sandboxes override it), passwd
+// fallback. NSHomeDirectory() ignores $HOME.
+func daemonHome() -> String {
+    if let h = ProcessInfo.processInfo.environment["HOME"], !h.isEmpty { return h }
+    return NSHomeDirectory()
+}
+
+// Base dir for daemon state: GCT_HOME wins outright; else platform
+// default (macOS Application Support, Linux ~/.config/gct).
+func daemonBaseDir() -> String {
+    if let b = ProcessInfo.processInfo.environment["GCT_HOME"], !b.isEmpty { return b }
+    let home = daemonHome()
+#if os(Linux)
+    return home + "/.config/gct"
+#else
+    return (home as NSString)
+        .appendingPathComponent("Library/Application Support/Grand Central Terminal")
+#endif
+}
+
+let supportDir = daemonBaseDir()
 // Test/bench isolation: point a daemon at scratch paths without touching the
 // live instance. Unset (normal use) = current defaults.
 let env = ProcessInfo.processInfo.environment
 var sockPath = env["GCT_SOCK"] ?? supportDir + "/daemon.sock"
 let statePath = env["GCT_STATE"] ?? supportDir + "/state.json"
 let pidPath = env["GCT_PID"] ?? supportDir + "/daemon.pid"
+// TCP serve: --port=N (or GCT_PORT) opens a TCP listener alongside the
+// unix socket; --token=.. (or GCT_TOKEN) gates it (empty = open).
+var tcpPort: UInt16? {
+    if let p = env["GCT_PORT"], let n = UInt16(p), n > 0 { return n }
+    return nil
+}
+var tcpToken: String {
+    env["GCT_TOKEN"] ?? ""
+}
+// TCP client target: --tcp=host:port (or GCT_TCP) routes CLI subcommands
+// over TCP instead of the unix socket; --token=.. (or GCT_TOKEN) auths.
+var tcpTarget: String? {
+    env["GCT_TCP"]
+}
 
 var args = Array(CommandLine.arguments.dropFirst())
-// Early --sock=<path> / --sock <path>: applies to every subcommand.
+// Early flags applying to every subcommand (serve + CLI):
+// --sock=<p>|--sock <p>, --tcp=<host:port>|--tcp <host:port>,
+// --token=<t>|--token <t>, --port=<n>|--port <n>.
+var cliToken: String?
+var cliTCPTarget: String? = tcpTarget
+var servePort: UInt16? = tcpPort
+var serveToken: String = tcpToken
 var i = 0
 while i < args.count {
     if args[i] == "--sock", i + 1 < args.count {
@@ -38,24 +84,56 @@ while i < args.count {
     } else if args[i].hasPrefix("--sock=") {
         sockPath = String(args[i].dropFirst("--sock=".count))
         args.remove(at: i)
+    } else if args[i] == "--tcp", i + 1 < args.count {
+        cliTCPTarget = args[i + 1]
+        args.remove(at: i + 1); args.remove(at: i)
+    } else if args[i].hasPrefix("--tcp=") {
+        cliTCPTarget = String(args[i].dropFirst("--tcp=".count))
+        args.remove(at: i)
+    } else if args[i] == "--token", i + 1 < args.count {
+        cliToken = args[i + 1]
+        args.remove(at: i + 1); args.remove(at: i)
+    } else if args[i].hasPrefix("--token=") {
+        cliToken = String(args[i].dropFirst("--token=".count))
+        args.remove(at: i)
+    } else if args[i] == "--port", i + 1 < args.count {
+        servePort = UInt16(args[i + 1])
+        args.remove(at: i + 1); args.remove(at: i)
+    } else if args[i].hasPrefix("--port=") {
+        servePort = UInt16(String(args[i].dropFirst("--port=".count)))
+        args.remove(at: i)
     } else {
         i += 1
     }
 }
+// Serve reads its token from --token/GCT_TOKEN; CLI sends it (flag wins).
+if cliTCPTarget == nil, let t = cliToken { serveToken = t }
+let cliAuthToken: String? = cliToken ?? (env["GCT_TOKEN"]?.isEmpty == false ? env["GCT_TOKEN"] : nil)
 
 // MARK: - CLI client
 
 // One-shot connection: greet (drains the server's eager welcome), run,
 // drain the tagged reply, close. The daemon's serve() always emits a
 // welcome on connect, then answers each request — so every command reads
-// exactly: welcome, answer.
+// exactly: welcome, answer. Routes over TCP (--tcp/GCT_TCP) with the auth
+// token (--token/GCT_TOKEN), else the local unix socket.
 final class GCTClient {
     let conn: Conn
     init?() {
-        let fd = connectUnixSocket(sockPath)
-        guard fd >= 0 else { return nil }
-        conn = Conn(fd: fd)
-        _ = conn.readFrame() // eager welcome
+        if let target = cliTCPTarget, let (host, port) = parseTCP(target) {
+            let fd = connectTCP(host: host, port: port)
+            guard fd >= 0 else { return nil }
+            conn = Conn(fd: fd)
+            // Auth first: wrong/missing token gets errorReply, no welcome.
+            _ = conn.send(tag: .hello, json: Hello(token: cliAuthToken))
+        } else if cliTCPTarget != nil {
+            return nil // malformed --tcp target
+        } else {
+            let fd = connectUnixSocket(sockPath)
+            guard fd >= 0 else { return nil }
+            conn = Conn(fd: fd)
+        }
+        _ = conn.readFrame() // eager welcome (or errorReply on bad token)
     }
     // Next reply frame. Broadcast state updates (paneMeta/groupMeta/...)
     // may arrive first on a busy daemon — skip those; the tagged replies
@@ -73,11 +151,28 @@ final class GCTClient {
         return nil
     }
     func welcome() -> Welcome? {
-        _ = conn.send(tag: .listPanes, json: Hello(version: ProtoVersion))
+        _ = conn.send(tag: .listPanes, json: Hello(version: ProtoVersion, token: cliAuthToken))
         guard let f = nextReply(), f.tag == .welcome || f.tag == .paneList,
               let w: Welcome = f.decode() else { return nil }
         return w
     }
+}
+
+// "host:port" (port optional, default GCTDefaultPort). Bracketed IPv6
+// ("[::1]:7420") and bare hostnames work.
+func parseTCP(_ s: String) -> (String, UInt16)? {
+    var host = s, port = GCTDefaultPort
+    if s.hasPrefix("["), let end = s.firstIndex(of: "]") {
+        host = String(s[s.index(after: s.startIndex)..<end])
+        let rest = s[s.index(after: end)...]
+        if rest.hasPrefix(":"), let n = UInt16(rest.dropFirst()) { port = n }
+        else if !rest.isEmpty { return nil }
+    } else if let colon = s.lastIndex(of: ":"), s[s.index(after: colon)...].allSatisfy(\.isNumber),
+              let n = UInt16(s[s.index(after: colon)...]) {
+        host = String(s[..<colon]); port = n
+    }
+    guard !host.isEmpty else { return nil }
+    return (host, port)
 }
 
 // Resolve a pane by uuid prefix, exact name, or $GCT_PANE_ID shorthand.
@@ -259,7 +354,8 @@ guard let verb = args.first else {
     }
 
     let state = StateStore(path: statePath)
-    let server = Server(state: state, sockPath: sockPath)
+    let server = Server(state: state, sockPath: sockPath,
+                        tcpPort: servePort, token: serveToken)
 
     signal(SIGPIPE, SIG_IGN)
     // On TERM/INT: children get EIO on their pty master once we die and exit.

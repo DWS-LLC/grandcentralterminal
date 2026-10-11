@@ -141,6 +141,9 @@ final class PaneView: NSView {
     // Colors + font come from GCTTheme; re-run on focus and theme changes.
     // Floating panes get a pin marker + heavier shadow so they read at a
     // glance; the border fill stays the theme color.
+    // Remote panes wear their host color: the titlebar text is tinted and
+    // a 3pt host-color strip runs down the left edge (via the border
+    // fill — local panes keep the theme chrome exactly).
     func applyChrome() {
         let t = GCTTheme.current
         layer?.borderWidth = 0
@@ -150,10 +153,18 @@ final class PaneView: NSView {
         // focused-but-unselected pane keeps the normal focused look.
         // Zoomed panes wear it too (same weight as the float pin).
         let accent = isSelected || isZoomed
+        let hostColor = HostStyle.color(for: meta.host)
         // Fill the pane behind the terminal with the titlebar color: the
-        // inset terminal leaves the side/bottom border visible.
-        layer?.backgroundColor =
-            (accent ? NSColor.systemBlue : isFocused ? t.borderFocused : t.borderUnfocused).cgColor
+        // inset terminal leaves the side/bottom border visible. Remote
+        // panes tint the border fill with the host color so the whole
+        // frame reads as foreign at any zoom.
+        if accent {
+            layer?.backgroundColor = NSColor.systemBlue.cgColor
+        } else if let hc = hostColor {
+            layer?.backgroundColor = hc.cgColor
+        } else {
+            layer?.backgroundColor = (isFocused ? t.borderFocused : t.borderUnfocused).cgColor
+        }
         // Floating/zoomed reads at a glance: deeper shadow lifts it off
         // the canvas; plain titlebar otherwise.
         let lifted = meta.floating || isZoomed
@@ -164,21 +175,54 @@ final class PaneView: NSView {
         titlebar.layer?.backgroundColor =
             (accent ? NSColor.systemBlue : isFocused ? t.titlebarBackgroundFocused : t.titlebarBackgroundUnfocused).cgColor
         titleLabel.string = titleText
-        titleLabel.foregroundColor =
-            ((isFocused || isZoomed) ? t.titlebarTextFocused : t.titlebarTextUnfocused).cgColor
+        // Remote host tint on the title text (keeps titlebar grey, adds
+        // the color where the eye lands). Local panes keep theme text.
+        if !accent, let hc = hostColor {
+            titleLabel.foregroundColor = hc.cgColor
+        } else {
+            titleLabel.foregroundColor =
+                ((isFocused || isZoomed) ? t.titlebarTextFocused : t.titlebarTextUnfocused).cgColor
+        }
         titleLabel.font = t.titleFont
         titleLabel.fontSize = t.titleFont.pointSize
         layoutChrome()
     }
 
     private var titleText: String {
-        let host_ = meta.host
+        // Remote panes lead with [host] so the owner reads in the
+        // switcher, screenshots, and anywhere the title goes. Local
+        // panes keep the existing "host – name – cwd" shape ("local"
+        // elided: it was always "local – Terminal – …" before).
         let kind = meta.name ?? "Terminal"
         let pin = meta.floating ? "⬆ " : ""
         let zoom = isZoomed ? "⤢ " : ""
-        return "\(zoom)\(pin)\(host_) – \(kind) – \(meta.cwd)"
+        if meta.host == "local" || meta.host.isEmpty {
+            return "\(zoom)\(pin)\(kind) – \(meta.cwd)"
+        }
+        return "\(zoom)\(pin)[\(meta.host)] \(kind) – \(meta.cwd)"
     }
+}
 
+// Per-host window color: config [host.<name>] color wins, else the
+// group palette by host index (deterministic: sorted host names).
+// "local" returns nil (theme chrome, unchanged).
+enum HostStyle {
+    static func color(for host: String) -> NSColor? {
+        guard host != "local", !host.isEmpty else { return nil }
+        if let h = GCTConfig.current.remotes.first(where: { $0.name == host }),
+           let c = h.color, let nc = NSColor(gctHex: c) {
+            return nc
+        }
+        let names = GCTConfig.current.remotes.map(\.name).sorted()
+        guard let idx = names.firstIndex(of: host) else {
+            // Unknown host (stale pane after config removal): grey it.
+            return NSColor.systemGray
+        }
+        return NSColor(gctHex: GroupStyle.palette[idx % GroupStyle.palette.count])
+    }
+}
+
+extension PaneView {
     // Hit zones for manual routing (world coords).
     enum ResizeZone {
         case n, s, e, w, ne, nw, se, sw

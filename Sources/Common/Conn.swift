@@ -1,8 +1,14 @@
-// Framed connection over a unix socket fd, used by both sides.
+// Framed connection over a socket fd (unix or TCP), used by both sides.
 // One reader thread per connection; writes are serialized.
+//
+// Portable: no Darwin module — Glibc on Linux, Darwin on macOS.
+// Linux has no SO_NOSIGPIPE, so writes use MSG_NOSIGNAL there;
+// unix fds keep SO_NOSIGPIPE where available.
 
 import Foundation
 
+// Default TCP port for remote daemons (config/CLI override per host).
+public let GCTDefaultPort: UInt16 = 7420
 public struct Frame {
     public var tag: MsgTag
     public var paneID: PaneID?
@@ -21,8 +27,10 @@ public final class Conn: @unchecked Sendable {
 
     public init(fd: Int32) {
         self.fd = fd
+#if os(macOS)
         var noSig: Int32 = 1
         setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &noSig, socklen_t(MemoryLayout<Int32>.size))
+#endif
     }
 
     deinit {
@@ -33,7 +41,7 @@ public final class Conn: @unchecked Sendable {
         if !closed {
             closed = true
             FileHandle.standardError.write(Data("[conn] close fd=\(fd)\n".utf8))
-            _ = Darwin.close(fd)
+            _ = closeSocket(fd)
         }
     }
 
@@ -117,7 +125,13 @@ public final class Conn: @unchecked Sendable {
         let result = out.withUnsafeBytes { raw -> Bool in
             var off = 0
             while off < raw.count {
+#if os(Linux)
+                // MSG_NOSIGNAL is plain Int on Glibc; send wants Int32.
+                let n = SwiftGlibc.send(fd, raw.baseAddress! + off,
+                                        raw.count - off, Int32(MSG_NOSIGNAL))
+#else
                 let n = write(fd, raw.baseAddress! + off, raw.count - off)
+#endif
                 if n < 0 {
                     if errno == EINTR { continue }
                     return false
@@ -135,7 +149,7 @@ public final class Conn: @unchecked Sendable {
 }
 
 public func connectUnixSocket(_ path: String) -> Int32 {
-    let fd = socket(AF_UNIX, SOCK_STREAM, 0)
+    let fd = socket(AF_UNIX, sockStream, 0)
     guard fd >= 0 else { return -1 }
     var addr = sockaddr_un()
     addr.sun_family = sa_family_t(AF_UNIX)
@@ -152,8 +166,102 @@ public func connectUnixSocket(_ path: String) -> Int32 {
         }
     }
     if r != 0 {
-        _ = Darwin.close(fd)
+        _ = closeSocket(fd)
         return -1
     }
     return fd
+}
+
+public func connectTCP(host: String, port: UInt16) -> Int32 {
+    var hints = addrinfo()
+    hints.ai_family = AF_UNSPEC
+    hints.ai_socktype = sockStream
+    var res: UnsafeMutablePointer<addrinfo>?
+    let portStr = String(port)
+    let rc = host.withCString { h in
+        portStr.withCString { p in
+            getaddrinfo(h, p, &hints, &res)
+        }
+    }
+    guard rc == 0, let list = res else { return -1 }
+    defer { freeaddrinfo(list) }
+    var fd: Int32 = -1
+    var ai: UnsafeMutablePointer<addrinfo>? = list
+    while let cur = ai {
+        let a = cur.pointee
+        let s = socket(a.ai_family, a.ai_socktype, a.ai_protocol)
+        if s >= 0 {
+            // Short connect timeout so a dead host fails fast, not in 75s.
+            var tv = timeval(tv_sec: 5, tv_usec: 0)
+            setsockopt(s, SOL_SOCKET, SO_SNDTIMEO, &tv,
+                       socklen_t(MemoryLayout<timeval>.size))
+            setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, &tv,
+                       socklen_t(MemoryLayout<timeval>.size))
+            if connect(s, a.ai_addr, a.ai_addrlen) == 0 {
+                // Connected: back to blocking (framing does its own short
+                // write timeouts per frame).
+                tv = timeval(tv_sec: 0, tv_usec: 0)
+                setsockopt(s, SOL_SOCKET, SO_SNDTIMEO, &tv,
+                           socklen_t(MemoryLayout<timeval>.size))
+                setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, &tv,
+                           socklen_t(MemoryLayout<timeval>.size))
+                fd = s
+                break
+            }
+            _ = closeSocket(s)
+        }
+        ai = a.ai_next
+    }
+    return fd
+}
+
+public func listenTCP(port: UInt16) -> Int32 {
+    var hints = addrinfo()
+    hints.ai_family = AF_UNSPEC
+    hints.ai_socktype = sockStream
+    hints.ai_flags = AI_PASSIVE
+    var res: UnsafeMutablePointer<addrinfo>?
+    let portStr = String(port)
+    guard portStr.withCString({ getaddrinfo(nil, $0, &hints, &res) }) == 0,
+          let list = res else { return -1 }
+    defer { freeaddrinfo(list) }
+    var listenFD: Int32 = -1
+    var ai: UnsafeMutablePointer<addrinfo>? = list
+    while let cur = ai {
+        let a = cur.pointee
+        let s = socket(a.ai_family, a.ai_socktype, a.ai_protocol)
+        if s >= 0 {
+            var one: Int32 = 1
+            setsockopt(s, SOL_SOCKET, SO_REUSEADDR, &one,
+                       socklen_t(MemoryLayout<Int32>.size))
+            // Dual-stack: accept v4 on the v6 socket when the OS allows.
+            var v6only: Int32 = 0
+#if os(Linux)
+            // IPPROTO_IPV6 is Int, IPV6_V6ONLY is Int32 on Glibc.
+            setsockopt(s, Int32(IPPROTO_IPV6), IPV6_V6ONLY, &v6only,
+                       socklen_t(MemoryLayout<Int32>.size))
+#else
+            setsockopt(s, IPPROTO_IPV6, IPV6_V6ONLY, &v6only,
+                       socklen_t(MemoryLayout<Int32>.size))
+#endif
+            if bind(s, a.ai_addr, a.ai_addrlen) == 0, listen(s, 8) == 0 {
+                listenFD = s
+                break
+            }
+            _ = closeSocket(s)
+        }
+        ai = a.ai_next
+    }
+    return listenFD
+}
+// SOCK_STREAM is Int32 on Darwin, a typed enum on Glibc — one shim.
+#if os(Linux)
+public let sockStream: Int32 = Int32(SOCK_STREAM.rawValue)
+#else
+public let sockStream: Int32 = SOCK_STREAM
+#endif
+
+// Portable close: Darwin.close vs Glibc.close without importing either.
+public func closeSocket(_ fd: Int32) -> Int32 {
+    close(fd)
 }

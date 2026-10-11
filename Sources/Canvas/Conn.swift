@@ -4,39 +4,67 @@ import Foundation
 import Common
 
 protocol CanvasConnDelegate: AnyObject {
-    func connWelcome(_ panes: [PaneMeta], _ groups: [GroupMeta])
-    func connPaneCreated(_ meta: PaneMeta)
-    func connPaneMeta(_ meta: PaneMeta)
-    func connOutput(_ id: PaneID, _ data: Data)
-    func connPaneExit(_ id: PaneID, _ code: Int32)
-    func connGroupCreated(_ meta: GroupMeta)
-    func connGroupMeta(_ meta: GroupMeta)
-    func connGroupExit(_ id: GroupID)
-    func connFocusPane(_ id: PaneID)
-    func connCanvasCommand(_ cmd: CanvasCommand)
-    func connClosed()
+    func connWelcome(_ panes: [PaneMeta], _ groups: [GroupMeta], owner: String)
+    func connPaneCreated(_ meta: PaneMeta, owner: String)
+    func connPaneMeta(_ meta: PaneMeta, owner: String)
+    func connOutput(_ id: PaneID, _ data: Data, owner: String)
+    func connPaneExit(_ id: PaneID, _ code: Int32, owner: String)
+    func connGroupCreated(_ meta: GroupMeta, owner: String)
+    func connGroupMeta(_ meta: GroupMeta, owner: String)
+    func connGroupExit(_ id: GroupID, owner: String)
+    func connFocusPane(_ id: PaneID, owner: String)
+    func connCanvasCommand(_ cmd: CanvasCommand, owner: String)
+    func connClosed(owner: String)
 }
 
 final class CanvasConn: @unchecked Sendable {
     weak var delegate: CanvasConnDelegate?
     private let conn: Conn
+    // Owner label for pane routing ("local" or the remote host name).
+    // The hub tags every inbound meta with it; see HostHub.
+    let owner: String
 
-    init?(sockPath: String) {
+    init?(sockPath: String, owner: String = "local") {
         let fd = connectUnixSocket(sockPath)
         guard fd >= 0 else { return nil }
         conn = Conn(fd: fd)
+        self.owner = owner
     }
+
+    init?(tcpHost: String, port: UInt16, token: String, owner: String) {
+        let fd = connectTCP(host: tcpHost, port: port)
+        guard fd >= 0 else { return nil }
+        conn = Conn(fd: fd)
+        self.owner = owner
+        _ = conn.send(tag: .hello, json: Hello(token: token.isEmpty ? nil : token))
+        // Gate early: a bad token gets errorReply, never a welcome.
+        // Don't block long — the read thread reports connClosed on drop.
+        if let first = conn.readFrame() {
+            guard first.tag == .welcome || first.tag == .paneList,
+                  let _: Welcome = first.decode() else { return nil }
+            pendingWelcome = first
+        }
+    }
+
+    // First frame already consumed by the TCP gate above; start() emits
+    // it before entering the read loop.
+    private var pendingWelcome: Frame?
 
     func start() {
         _ = conn.send(tag: .hello, json: Hello(version: ProtoVersion))
         Thread(block: { [weak self] in
             guard let self else { return }
+            if let first = self.pendingWelcome {
+                self.pendingWelcome = nil
+                let f = first
+                DispatchQueue.main.async { self.handle(f) }
+            }
             self.conn.readLoop { frame in
                 DispatchQueue.main.async {
                     self.handle(frame)
                 }
             }
-            DispatchQueue.main.async { self.delegate?.connClosed() }
+            DispatchQueue.main.async { [weak self] in guard let self else { return }; self.delegate?.connClosed(owner: self.owner) }
         }).start()
     }
 
@@ -44,28 +72,28 @@ final class CanvasConn: @unchecked Sendable {
         switch frame.tag {
         case .welcome, .paneList:
             if let w: Welcome = frame.decode() {
-                delegate?.connWelcome(w.panes, w.groups)
+                delegate?.connWelcome(w.panes, w.groups, owner: owner)
             }
         case .paneCreated:
-            if let m: PaneCreated = frame.decode() { delegate?.connPaneCreated(m.meta) }
+            if let m: PaneCreated = frame.decode() { delegate?.connPaneCreated(m.meta, owner: owner) }
         case .paneMeta:
-            if let m: PaneMeta = frame.decode() { delegate?.connPaneMeta(m) }
+            if let m: PaneMeta = frame.decode() { delegate?.connPaneMeta(m, owner: owner) }
         case .outputPane:
-            if let id = frame.paneID { delegate?.connOutput(id, frame.data) }
+            if let id = frame.paneID { delegate?.connOutput(id, frame.data, owner: owner) }
         case .paneExit:
-            if let e: PaneExit = frame.decode() { delegate?.connPaneExit(e.id, e.code) }
+            if let e: PaneExit = frame.decode() { delegate?.connPaneExit(e.id, e.code, owner: owner) }
         case .groupCreated:
-            if let m: GroupCreated = frame.decode() { delegate?.connGroupCreated(m.meta) }
+            if let m: GroupCreated = frame.decode() { delegate?.connGroupCreated(m.meta, owner: owner) }
         case .groupMeta:
-            if let m: GroupMeta = frame.decode() { delegate?.connGroupMeta(m) }
+            if let m: GroupMeta = frame.decode() { delegate?.connGroupMeta(m, owner: owner) }
         case .groupExit:
-            if let e: GroupRef = frame.decode() { delegate?.connGroupExit(e.id) }
+            if let e: GroupRef = frame.decode() { delegate?.connGroupExit(e.id, owner: owner) }
         case .paneDump:
             break // agent-CLI only; the canvas never requests dumps
         case .paneFocus:
-            if let r: PaneRef = frame.decode() { delegate?.connFocusPane(r.id) }
+            if let r: PaneRef = frame.decode() { delegate?.connFocusPane(r.id, owner: owner) }
         case .canvasRelay:
-            if let c: CanvasCommand = frame.decode() { delegate?.connCanvasCommand(c) }
+            if let c: CanvasCommand = frame.decode() { delegate?.connCanvasCommand(c, owner: owner) }
         default:
             break
         }

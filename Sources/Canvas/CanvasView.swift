@@ -54,7 +54,12 @@ final class CanvasView: NSView {
     // Directional split from a grouped pane joins it via CreatePane.joinGroup
     // (daemon places inside own bounds + admits; groupMeta broadcast
     // updates views). No client-side pending state.
-    var conn: CanvasConn?
+    // Multi-daemon hub: one CanvasConn per host (local unix + TCP remotes).
+    // All pane/group ids are canvas-side (hub-mapped); outbound requests
+    // route to the owning connection. `conn` stays as a compat shim over
+    // the local host until every call site migrates (see HostHub).
+    let hub = HostHub()
+    var conn: CanvasConn? { hub.conn(forOwner: "local") }
     private(set) var ghosttyApp: GhosttyApp?
 
     // Drag state machine.
@@ -128,9 +133,8 @@ final class CanvasView: NSView {
         window?.acceptsMouseMovedEvents = true
         setupStatusBar()
 
-        conn = CanvasConn(sockPath: CanvasPaths.sockPath)
-        conn?.delegate = self
-        conn?.start()
+        _ = hub.connectLocal(sockPath: CanvasPaths.sockPath, delegate: self)
+        syncRemotes()
         // Window state drives occlusion: miniaturize / un-hide changes
         // which renderers need to run. Camera moves call refresh via
         // applyCamera; creation refreshes in makePaneView.
@@ -215,12 +219,12 @@ final class CanvasView: NSView {
         if cmd.trimmingCharacters(in: .whitespaces).isEmpty {
             cmd = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
         }
-        conn?.createPane(CreatePane(
+        hub.createPane(CreatePane(
             rect: Rect(x: r.minX, y: r.minY, w: r.width, h: r.height),
             cwd: cwd,
             name: exe.split(separator: "/").last.map(String.init),
             command: cmd,
-            allowOverlap: GCTConfig.current.allowWindowOverlap))
+            allowOverlap: GCTConfig.current.allowWindowOverlap), owner: "local")
     }
 
     private func layoutStatusBar() {
@@ -437,10 +441,22 @@ final class CanvasView: NSView {
     // the window's collection behavior still need a relaunch.
     func reloadConfig() {
         let oldDoomToggle = GCTConfig.current.doom.toggle
+        let oldRemotes = GCTConfig.current.remotes
         GCTConfig.current = GCTConfig.load()
         ghosttyApp?.reloadConfig()
         applyTheme()
         syncStatusBarToConfig()
+        // Remote hosts changed: reconnect (new hosts join, removed ones
+        // clear, dropped ones retry). Unchanged: still retry dead ones.
+        if GCTConfig.current.remotes != oldRemotes {
+            syncRemotes()
+        } else {
+            for h in GCTConfig.current.remotes where hub.conn(forOwner: h.name) == nil {
+                syncRemotes()
+                break
+            }
+        }
+        for pane in panes.values { pane.applyChrome() }
         if GCTConfig.current.doom.toggle?.key != oldDoomToggle?.key ||
             GCTConfig.current.doom.toggle?.mods != oldDoomToggle?.mods {
             NotificationCenter.default.post(name: .gctDoomHotkeyChanged, object: nil)
@@ -625,7 +641,7 @@ final class CanvasView: NSView {
         meta.floating = next
         pane.update(meta: meta)
         restackFloating()
-        conn?.setFloating(SetFloating(id: id, floating: next,
+        hub.setFloating(SetFloating(id: id, floating: next,
             allowOverlap: GCTConfig.current.allowWindowOverlap))
     }
     func focusPane(_ id: PaneID) {
@@ -861,7 +877,7 @@ final class CanvasView: NSView {
                     let frame = NSRectOverlap.to(r)
                     guard frame != pane.frame else { continue }
                     pane.setRect(frame, notifySurface: false)
-                    conn?.movePane(MovePane(
+                    hub.movePane(MovePane(
                         id: pid, rect: r,
                         allowOverlap: GCTConfig.current.allowWindowOverlap))
                 }
@@ -1179,20 +1195,20 @@ final class CanvasView: NSView {
             pane.host?.mouseButton(GHOSTTY_MOUSE_RELEASE, button, mods)
         }
         if case .move(let id, _) = drag, let pane = panes[id] {
-            conn?.movePane(MovePane(id: id, rect: pane.meta.rect,
+            hub.movePane(MovePane(id: id, rect: pane.meta.rect,
                             allowOverlap: GCTConfig.current.allowWindowOverlap))
         }
         if case .multiMove(let members, _, _) = drag {
             for m in members {
                 guard let pane = panes[m] else { continue }
-                conn?.movePane(MovePane(id: m, rect: pane.meta.rect,
+                hub.movePane(MovePane(id: m, rect: pane.meta.rect,
                                 allowOverlap: GCTConfig.current.allowWindowOverlap))
             }
         }
         if case .groupMove(let id, _, _, let rects0) = drag,
            let b0 = groupBoundsFrom(rects0),
            let b1 = groupBounds(id) {
-            conn?.moveGroup(MoveGroup(id: id,
+            hub.moveGroup(MoveGroup(id: id,
                                       dx: Double(b1.minX - b0.minX),
                                       dy: Double(b1.minY - b0.minY),
                                       allowOverlap: GCTConfig.current.allowWindowOverlap))
@@ -1413,7 +1429,32 @@ final class CanvasView: NSView {
         here.target = self
         here.representedObject = NSStringFromPoint(world)
         menu.addItem(here)
-        menu.addItem(.separator())
+        // Remote spawn: one item per connected host, same placement as
+        // "New pane here" but created on that daemon (per-host color
+        // chrome on arrival). Unconnected hosts show as disabled.
+        if !GCTConfig.current.remotes.isEmpty {
+            let remote = NSMenuItem(title: "New remote pane", action: nil, keyEquivalent: "")
+            let submenu = NSMenu(title: "New remote pane")
+            for h in GCTConfig.current.remotes {
+                let item = NSMenuItem(title: h.name,
+                                      action: #selector(newRemotePaneFromMenu(_:)),
+                                      keyEquivalent: "")
+                item.target = self
+                // "host|x,y" — world point rides along like "New pane here".
+                item.representedObject = h.name + "|" + NSStringFromPoint(world)
+                if hub.conn(forOwner: h.name) == nil {
+                    item.isEnabled = false
+                }
+                if let c = HostStyle.color(for: h.name) {
+                    item.attributedTitle = NSAttributedString(
+                        string: "  \(h.name)",
+                        attributes: [.foregroundColor: c])
+                }
+                submenu.addItem(item)
+            }
+            remote.submenu = submenu
+            menu.addItem(remote)
+        }
         let snap = NSMenuItem(
             title: GCTConfig.current.snapping
                 ? "Snapping: on" : "Snapping: off",
@@ -1422,7 +1463,10 @@ final class CanvasView: NSView {
         snap.target = self
         snap.state = GCTConfig.current.snapping ? .on : .off
         menu.addItem(snap)
-        NSMenu.popUpContextMenu(menu, with: event, for: self)
+        // popUp (not popUpContextMenu): the contextual path lets AppKit
+        // append system items like AutoFill, which makes no sense here
+        // (same fix as the status-bar menus in StatusBarView).
+        menu.popUp(positioning: nil, at: NSEvent.mouseLocation, in: nil)
     }
     @objc func groupSelectionFromMenu(_ sender: NSMenuItem) {
         groupStagedSelection()
@@ -1459,7 +1503,7 @@ final class CanvasView: NSView {
         g.color = hex
         groupMetas[id] = g
         refreshGroupViews()
-        conn?.updateGroup(UpdateGroup(id: id, name: g.name,
+        hub.updateGroup(UpdateGroup(id: id, name: g.name,
                                       color: g.color, members: g.members))
     }
 
@@ -1484,12 +1528,37 @@ final class CanvasView: NSView {
             r = NSRectOverlap.to(Overlap.resolve(NSRectOverlap.from(r),
                                                  obstacles: obstacles))
         }
-        conn?.createPane(CreatePane(
+        hub.createPane(CreatePane(
             rect: Rect(x: r.minX, y: r.minY, w: r.width, h: r.height),
             cwd: cwd,
-            allowOverlap: GCTConfig.current.allowWindowOverlap))
+            allowOverlap: GCTConfig.current.allowWindowOverlap), owner: "local")
     }
 
+    @objc func newRemotePaneFromMenu(_ sender: NSMenuItem) {
+        guard let s = sender.representedObject as? String else { return }
+        let parts = s.split(separator: "|", maxSplits: 1).map(String.init)
+        guard parts.count == 2 else { return }
+        let owner = parts[0]
+        let p = NSPointFromString(parts[1])
+        guard hub.conn(forOwner: owner) != nil else { return }
+        // Same placement as "New pane here" (union-world resolve: the
+        // canvas arbitrates across ALL hosts; each daemon re-resolves
+        // against its own panes, idempotent on clean rects).
+        var r = newPaneRect()
+        r.origin = CGPoint(x: p.x - r.width / 2, y: p.y - r.height / 2)
+        let obstacles = GroupLayout.creationObstacles(
+            paneRects: paneRects(),
+            groups: groupMetas,
+            allowOverlap: GCTConfig.current.allowWindowOverlap,
+            floating: floatingPanes())
+        if !GCTConfig.current.allowWindowOverlap || !obstacles.isEmpty {
+            r = NSRectOverlap.to(Overlap.resolve(NSRectOverlap.from(r),
+                                                 obstacles: obstacles))
+        }
+        hub.createPane(CreatePane(
+            rect: Rect(x: r.minX, y: r.minY, w: r.width, h: r.height),
+            allowOverlap: GCTConfig.current.allowWindowOverlap), owner: owner)
+    }
     override func mouseMoved(with event: NSEvent) {
         // Hover routing: the pane under the cursor gets position updates
         // (link highlighting, hover shapes), not just the focused pane.
@@ -2028,14 +2097,20 @@ final class CanvasView: NSView {
         // inside the own group's bounds, shoves loose blockers aside
         // along the split axis when the grown bounds demand it, and
         // admits it (refusal = groupless pane).
+        // Owner follows focus: splitting a remote pane opens on that
+        // host (groups are same-host, so the join stays valid).
         let cwd = focusedID.flatMap { panes[$0]?.meta.cwd }
         let inheritGroup = focusedID.flatMap { groupOf($0) }
+        let owner = focusedID.flatMap { hub.owner(of: $0) } ?? "local"
+        // Groups live per-daemon: translate the canvas group id to the
+        // remote one the owning daemon knows (nil = no join).
+        let remoteJoin = inheritGroup.flatMap { hub.remoteGroupID($0, owner: owner) }
         let r = newPaneRect(direction: direction, ignoringGroup: inheritGroup)
-        conn?.createPane(CreatePane(
+        hub.createPane(CreatePane(
             rect: Rect(x: r.minX, y: r.minY, w: r.width, h: r.height),
             cwd: cwd,
             allowOverlap: GCTConfig.current.allowWindowOverlap,
-            joinGroup: inheritGroup, joinDirection: direction.rawValue))
+            joinGroup: remoteJoin, joinDirection: direction.rawValue), owner: owner)
     }
 
     // Drag-to-create: open a pane at the drawn rect (already snapped).
@@ -2052,10 +2127,10 @@ final class CanvasView: NSView {
             r = NSRectOverlap.to(Overlap.resolve(NSRectOverlap.from(r),
                                                  obstacles: obstacles))
         }
-        conn?.createPane(CreatePane(
+        hub.createPane(CreatePane(
             rect: Rect(x: r.minX, y: r.minY, w: r.width, h: r.height),
             cwd: cwd,
-            allowOverlap: GCTConfig.current.allowWindowOverlap))
+            allowOverlap: GCTConfig.current.allowWindowOverlap), owner: "local")
     }
 
     // New-pane placement: flush against the focused pane on the given
@@ -2151,7 +2226,7 @@ final class CanvasView: NSView {
     }
 
     func closePane(_ id: PaneID) {
-        conn?.closePane(id)
+        hub.closePane(id)
     }
 
     func renamePane(_ id: PaneID) {
@@ -2166,7 +2241,7 @@ final class CanvasView: NSView {
         alert.beginSheetModal(for: window) { [weak self] _ in
             guard let self else { return }
             let name = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-            self.conn?.renamePane(RenamePane(id: id, name: name.isEmpty ? nil : name))
+            self.hub.renamePane(RenamePane(id: id, name: name.isEmpty ? nil : name))
         }
     }
 
@@ -2200,7 +2275,7 @@ final class CanvasView: NSView {
                                scale: scale, app: ghosttyApp!.app,
                                delegate: self, fontSize: fontSize)
         host.connSend = { [weak self] id, data in
-            self?.conn?.sendInput(id, data)
+            self?.hub.sendInput(id, data)
         }
         pane.install(host: host)
         refreshCellMetrics(host)
@@ -2212,7 +2287,7 @@ final class CanvasView: NSView {
 
         // Attach after the surface exists; the daemon answers with the
         // scrollback ring, then live output.
-        conn?.attachPane(AttachPane(id: meta.id, cols: 80, rows: 24))
+        hub.attachPane(AttachPane(id: meta.id, cols: 80, rows: 24))
         focusPane(meta.id)
 
         // One layout pass later, push the real pixel size.
@@ -2243,7 +2318,7 @@ final class CanvasView: NSView {
                 || abs(pane.frame.height - target.height) > 0.5 else { return }
         let rect = NSRect(origin: pane.frame.origin, size: target)
         pane.setRect(rect, notifySurface: false)
-        conn?.movePane(MovePane(id: pane.id,
+        hub.movePane(MovePane(id: pane.id,
                                 rect: Rect(x: rect.minX, y: rect.minY,
                                            w: rect.width, h: rect.height),
                                 allowOverlap: GCTConfig.current.allowWindowOverlap))
@@ -2286,7 +2361,7 @@ final class CanvasView: NSView {
                 rect = NSRectOverlap.to(clean)
                 if rect != before {
                     pane.setRect(rect, notifySurface: false)
-                    conn?.movePane(MovePane(
+                    hub.movePane(MovePane(
                         id: id,
                         rect: Rect(x: rect.minX, y: rect.minY,
                                    w: rect.width, h: rect.height),
@@ -2388,7 +2463,7 @@ final class CanvasView: NSView {
             }
         }
         pane.setRect(rect, notifySurface: true)
-        conn?.movePane(MovePane(id: id, rect: Rect(
+        hub.movePane(MovePane(id: id, rect: Rect(
             x: rect.minX, y: rect.minY, w: rect.width, h: rect.height),
             allowOverlap: GCTConfig.current.allowWindowOverlap))
         refreshGroupViews()
@@ -2425,7 +2500,7 @@ final class CanvasView: NSView {
             let frame = NSRectOverlap.to(r)
             guard frame != pane.frame else { continue }
             pane.setRect(frame, notifySurface: false)
-            conn?.movePane(MovePane(id: pid, rect: r,
+            hub.movePane(MovePane(id: pid, rect: r,
                     allowOverlap: GCTConfig.current.allowWindowOverlap))
         }
         refreshGroupViews()
@@ -2542,7 +2617,7 @@ final class CanvasView: NSView {
         pane.isZoomed = true
         bringToFront(id)
         refreshOcclusion()
-        conn?.movePane(MovePane(id: id, rect: Rect(x: r.minX, y: r.minY,
+        hub.movePane(MovePane(id: id, rect: Rect(x: r.minX, y: r.minY,
             w: r.width, h: r.height),
             allowOverlap: true))
     }
@@ -2560,7 +2635,7 @@ final class CanvasView: NSView {
         applyCamera()
         pane.setRect(frame, notifySurface: true)
         refreshOcclusion()
-        conn?.movePane(MovePane(id: id, rect: Rect(x: frame.minX, y: frame.minY,
+        hub.movePane(MovePane(id: id, rect: Rect(x: frame.minX, y: frame.minY,
             w: frame.width, h: frame.height),
             allowOverlap: GCTConfig.current.allowWindowOverlap))
         return true

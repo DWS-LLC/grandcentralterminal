@@ -6,6 +6,7 @@
 // (cmd+shift+r); doom's structural keys (enabled, start-hidden,
 // launch-at-login) need a relaunch.
 import AppKit
+import Common
 
 // MARK: - Minimal TOML
 
@@ -455,6 +456,10 @@ struct GCTConfig {
     var statusbarFontSize: CGFloat = 12
     var statusbarOpacity: CGFloat = 1
     var doom = GCTDoom()
+    // Remote daemons: one [host.<name>] table each (name = canvas label).
+    // host = TCP address, port defaults to 7420, token must match the
+    // daemon's --token/GCT_TOKEN, color tints that host's window chrome.
+    var remotes: [GCTRemoteHost] = []
 
     // GCT_CONFIG_DIR swaps the whole config dir (config.toml + statusbar/)
     // so a demo/test canvas runs beside the live one. Unset = ~/.config/gct.
@@ -635,6 +640,20 @@ struct GCTConfig {
             }
         }
         cfg.keybinds = binds
+        // Remote daemons: every [host.<name>] table with a host key.
+        // Sorted by name so colors + menus are deterministic.
+        var remotes = [GCTRemoteHost]()
+        for (section, vals) in t where section.hasPrefix("host.") {
+            let name = String(section.dropFirst(5)).trimmingCharacters(in: .whitespaces)
+            guard !name.isEmpty, let h = vals["host"]?.trimmingCharacters(in: .whitespaces),
+                  !h.isEmpty else { continue }
+            var port = GCTDefaultPort
+            if let s = vals["port"], let n = UInt16(s), n > 0 { port = n }
+            let token = vals["token"] ?? ""
+            remotes.append(GCTRemoteHost(name: name, host: h, port: port,
+                                         token: token, color: colorSpec(vals["color"])))
+        }
+        cfg.remotes = remotes.sorted { $0.name < $1.name }
         return cfg
     }
 
@@ -885,9 +904,31 @@ struct GCTConfig {
     # snapping/overlap policy, doom hotkey). Doom structural keys
     # (enabled, start-hidden, launch-at-login) need a relaunch.
     reload-config = "cmd+shift+r"
+
+    # Remote daemons: one [host.<name>] table per daemon host.
+    # name = canvas label + window color key; host = TCP address
+    # (ssh-tunnel endpoint works); port defaults to 7420; token must
+    # match the daemon's --token/GCT_TOKEN; color tints that host's
+    # windows (hex like "#f59e0b", "default" = auto from the palette).
+    # Right-click empty canvas for "New remote pane" per host.
+    # Reload-config reconnects when these change.
+    # [host.enterprise]
+    # host = "127.0.0.1"
+    # port = 17421
+    # token = "s3cret"
+    # color = "#f59e0b"
     """
 }
-// MARK: - Appearance + resolved theme
+
+// One remote daemon host from config.
+struct GCTRemoteHost: Equatable {
+    var name: String       // [host.<name>] label (also the fallback color key)
+    var host: String       // TCP address (hostname/IP, ssh-tunnel endpoint ok)
+    var port: UInt16 = GCTDefaultPort
+    var token: String = ""
+    var color: String?     // hex like "#f59e0b"; nil = auto from palette
+}
+ // MARK: - Appearance + resolved theme
 
 enum GCTAppearance: String {
     case light, dark, system

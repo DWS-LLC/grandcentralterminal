@@ -87,7 +87,18 @@ public struct Rect: Codable, Sendable, Equatable {
 
 public struct Hello: Codable, Sendable {
     public var version: UInt16
-    public init(version: UInt16 = ProtoVersion) { self.version = version }
+    // Auth token for TCP remotes; nil = unix socket (trusted) or no auth.
+    // Decodes missing (old peers) as nil; old decoders ignore the key.
+    public var token: String?
+    public init(version: UInt16 = ProtoVersion, token: String? = nil) {
+        self.version = version; self.token = token
+    }
+    enum CodingKeys: String, CodingKey { case version, token }
+    public init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        version = try c.decodeIfPresent(UInt16.self, forKey: .version) ?? ProtoVersion
+        token = try c.decodeIfPresent(String.self, forKey: .token)
+    }
 }
 
 public struct CreatePane: Codable, Sendable {

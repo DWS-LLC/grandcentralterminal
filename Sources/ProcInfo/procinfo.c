@@ -1,5 +1,21 @@
 #include "include/procinfo.h"
 
+#ifdef __linux__
+// Linux: readlink /proc/<pid>/cwd. No libproc here.
+#include <stdio.h>
+#include <unistd.h>
+
+size_t proc_cwd(pid_t pid, char* buf, size_t len) {
+    char path[64];
+    // snprintf is safe: fixed format, bounded buffer.
+    snprintf(path, sizeof(path), "/proc/%d/cwd", (int)pid);
+    ssize_t n = readlink(path, buf, len - 1);
+    if (n <= 0) return 0;
+    buf[n] = '\0';
+    return (size_t)n;
+}
+#else
+// macOS: libproc PIDVNODEPATHINFO.
 #include <libproc.h>
 
 size_t proc_cwd(pid_t pid, char* buf, size_t len) {
@@ -15,3 +31,4 @@ size_t proc_cwd(pid_t pid, char* buf, size_t len) {
     buf[i] = '\0';
     return i;
 }
+#endif

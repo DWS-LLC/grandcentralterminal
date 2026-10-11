@@ -12,12 +12,20 @@ final class Remote: @unchecked Sendable {
     // the client drains or disconnects. Prevents one stalled subscriber
     // from wedging every pane reader on the server lock.
     var wedged = false
+    // Unix peers start trusted; TCP peers become trusted only after the
+    // token hello. Untrusted peers get one hello chance, then dropped.
+    var trusted = true
     init(conn: Conn) { self.conn = conn }
 }
 
 final class Server {
     private let state: StateStore
     private let sockPath: String
+    // Optional TCP listener for remote canvases (nil = unix only).
+    // token gates TCP: every TCP peer's first frame must be a hello
+    // carrying it (unix peers are trusted, no token needed).
+    private let tcpPort: UInt16?
+    private let token: String
     private let lock = NSLock()  // guards panes + groups + remotes
 
     private var panes = [PaneID: Pane]()
@@ -26,9 +34,12 @@ final class Server {
     private var groups = [GroupID: GroupMeta]()
     private var remotes = [Remote]()
 
-    init(state: StateStore, sockPath: String) {
+    init(state: StateStore, sockPath: String, tcpPort: UInt16? = nil,
+         token: String = "") {
         self.state = state
         self.sockPath = sockPath
+        self.tcpPort = tcpPort
+        self.token = token
     }
 
     func run() {
@@ -55,7 +66,7 @@ final class Server {
         }
 
         unlink(sockPath)
-        let fd = socket(AF_UNIX, SOCK_STREAM, 0)
+        let fd = socket(AF_UNIX, sockStream, 0)
         guard fd >= 0 else { log("socket() failed: \(errno)"); return }
         // Spawned shells must not inherit daemon sockets.
         _ = fcntl(fd, F_SETFD, FD_CLOEXEC)
@@ -83,6 +94,10 @@ final class Server {
             RunLoop.current.run()
         }).start()
 
+        if let port = tcpPort {
+            Thread(block: { [weak self] in self?.runTCPListener(port) }).start()
+        }
+
         while true {
             let cfd = accept(fd, nil, nil)
             if cfd < 0 {
@@ -91,11 +106,38 @@ final class Server {
                 return
             }
             _ = fcntl(cfd, F_SETFD, FD_CLOEXEC)
-            let remote = Remote(conn: Conn(fd: cfd))
-            lock.lock()
-            remotes.append(remote)
-            lock.unlock()
-            Thread(block: { [weak self] in self?.serve(remote) }).start()
+            // Unix peers are trusted; TCP peers gate on the token below.
+            acceptConn(cfd, trusted: true)
+        }
+    }
+
+    // Shared accept path: registers the peer, spawns its serve thread.
+    // TCP callers pass trusted: false so serve() demands the token first.
+    private func acceptConn(_ cfd: Int32, trusted: Bool) {
+        let remote = Remote(conn: Conn(fd: cfd))
+        remote.trusted = trusted
+        lock.lock()
+        remotes.append(remote)
+        lock.unlock()
+        Thread(block: { [weak self] in self?.serve(remote) }).start()
+    }
+
+    // Second listener for remote canvases (alongside the unix socket).
+    // Runs on its own thread; every accepted fd joins the same serve().
+    private func runTCPListener(_ port: UInt16) {
+        let fd = listenTCP(port: port)
+        guard fd >= 0 else { log("tcp listen on \(port) failed: \(errno)"); return }
+        _ = fcntl(fd, F_SETFD, FD_CLOEXEC)
+        log("tcp listening on \(port)")
+        while true {
+            let cfd = accept(fd, nil, nil)
+            if cfd < 0 {
+                if errno == EINTR { continue }
+                log("tcp accept failed: \(errno)")
+                return
+            }
+            _ = fcntl(cfd, F_SETFD, FD_CLOEXEC)
+            acceptConn(cfd, trusted: false)
         }
     }
 
@@ -120,6 +162,21 @@ final class Server {
             lock.unlock()
         }
 
+        // TCP gate: the first frame must be a token hello. Unix peers
+        // skip this (trusted at accept). Wrong/missing token gets an
+        // errorReply and the connection drops — no welcome, no state.
+        if !remote.trusted {
+            guard let first = remote.conn.readFrame(),
+                  (first.tag == .hello || first.tag == .listPanes),
+                  let h: Hello = first.decode(),
+                  h.token == token || token.isEmpty else {
+                _ = remote.conn.send(tag: .errorReply,
+                                     json: ErrorReply(message: "bad token"))
+                return
+            }
+            remote.trusted = true
+        }
+
         // Don't bail if the client is already gone (e.g. `stop` sends
         // killDaemon and exits before we write): fall through to the read
         // loop so a queued frame still lands instead of being dropped.
@@ -130,6 +187,13 @@ final class Server {
     }
 
     private func handle(_ remote: Remote, _ frame: Frame) {
+        // Belt-and-braces: serve() gates TCP up front, but a peer that
+        // never authed must never mutate state even if it skips the gate.
+        guard remote.trusted else {
+            _ = remote.conn.send(tag: .errorReply,
+                                 json: ErrorReply(message: "bad token"))
+            return
+        }
         switch frame.tag {
         case .hello, .listPanes:
             _ = remote.conn.send(tag: .welcome, json: welcomePayload())

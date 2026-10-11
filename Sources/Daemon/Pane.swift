@@ -5,6 +5,15 @@ import Foundation
 import Common
 import ProcInfo
 
+#if os(Linux)
+// Glibc's Swift import hides the X/Open PTY functions (they need
+// feature-test macros); declare them straight from libc.
+@_silgen_name("posix_openpt") func gct_posix_openpt(_ flags: Int32) -> Int32
+@_silgen_name("grantpt") func gct_grantpt(_ fd: Int32) -> Int32
+@_silgen_name("unlockpt") func gct_unlockpt(_ fd: Int32) -> Int32
+@_silgen_name("ptsname_r") func gct_ptsname_r(_ fd: Int32, _ buf: UnsafeMutablePointer<CChar>, _ len: UInt) -> Int32
+#endif
+
 final class Pane {
     let id: PaneID
     var meta: PaneMeta
@@ -34,7 +43,22 @@ final class Pane {
         // on spaces: agents pass real shell syntax (`&&`, quotes, pipes).
         // Empty = interactive login shell. Either way the pane exits when
         // the command does (tmux-like); `send` drives a live shell instead.
-        let shell = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
+        // Default is $SHELL, else the passwd shell, else zsh (macOS) /
+        // bash (Linux, which rarely has zsh). NEVER an empty/hardcoded
+        // wrong shell: bash-as-login prints the "default is now zsh"
+        // warning on macOS and skips the user's real rc files.
+        let shell: String
+        if let s = ProcessInfo.processInfo.environment["SHELL"], !s.isEmpty {
+            shell = s
+        } else if let pw = getpwuid(getuid()), let cs = pw.pointee.pw_shell {
+            shell = String(cString: cs)
+        } else {
+#if os(Linux)
+            shell = "/bin/bash"
+#else
+            shell = "/bin/zsh"
+#endif
+        }
         if let cmd = spawnCommand, !cmd.isEmpty {
             return [shell, "-l", "-c", cmd]
         }
@@ -46,18 +70,35 @@ final class Pane {
     // terminal, and execs the shell. Without the ctty, TIOCSWINSZ's
     // SIGWINCH and tty signals (^C, ^Z, job control) never reach children.
     func spawn(cols: UInt16, rows: UInt16) throws {
+#if os(Linux)
+        let m = gct_posix_openpt(Int32(O_RDWR | O_NOCTTY))
+#else
         let m = posix_openpt(O_RDWR | O_NOCTTY)
+#endif
         guard m >= 0 else { throw SpawnError(code: errno) }
         masterFD = m
+#if os(Linux)
+        guard gct_grantpt(m) == 0, gct_unlockpt(m) == 0 else { throw SpawnError(code: errno) }
+#else
         guard grantpt(m) == 0, unlockpt(m) == 0 else { throw SpawnError(code: errno) }
+#endif
         var name = [CChar](repeating: 0, count: 128)
+#if os(Linux)
+        guard gct_ptsname_r(m, &name, 128) == 0 else { throw SpawnError(code: errno) }
+#else
         guard ptsname_r(m, &name, 128) == 0 else { throw SpawnError(code: errno) }
+#endif
         let slavePath = String(cString: name)
 
         // Seed the window size before the shell starts; keep the master out
         // of the child via cloexec (ptyexec opens the slave itself).
+        // ioctl wants c_ulong on Glibc, UInt on Darwin — one cast each.
         var ws = winsize(ws_row: rows, ws_col: cols, ws_xpixel: 0, ws_ypixel: 0)
+#if os(Linux)
+        _ = ioctl(m, UInt(TIOCSWINSZ), &ws)
+#else
         _ = ioctl(m, TIOCSWINSZ, &ws)
+#endif
         _ = fcntl(m, F_SETFD, FD_CLOEXEC)
 
         let helper = Pane.helperPath()
@@ -66,9 +107,16 @@ final class Pane {
         }
         let args = [helper, slavePath, meta.cwd, "--"] + spawnArgs
 
+#if os(Linux)
+        // Glibc's posix_spawnattr_t is a value struct, not a pointer.
+        var attr = posix_spawnattr_t()
+        posix_spawnattr_init(&attr)
+        defer { posix_spawnattr_destroy(&attr) }
+#else
         var attr: posix_spawnattr_t? = nil
         posix_spawnattr_init(&attr)
         defer { posix_spawnattr_destroy(&attr) }
+#endif
 
         var cargs: [UnsafeMutablePointer<CChar>?] = args.map { strdup($0)! }
         cargs.append(nil)
@@ -96,9 +144,13 @@ final class Pane {
     private func childEnv() -> [String: String] {
         var env = ProcessInfo.processInfo.environment
         env.removeValue(forKey: "GHOSTTY_RESOURCES_DIR")
-        // Accidental inheritance: tool/launcher environments set NO_COLOR=1
-        // for their own output; panes are new terminals and should color.
+        // Accidental inheritance: tool/launcher environments set these for
+        // their own output; panes are new terminals and must color.
+        // NO_COLOR + CLICOLOR=0 + FORCE_COLOR=0 all kill color (observed:
+        // Claude Code sessions show monochrome panes until scrubbed).
         env.removeValue(forKey: "NO_COLOR")
+        if env["CLICOLOR"] == "0" { env.removeValue(forKey: "CLICOLOR") }
+        if env["FORCE_COLOR"] == "0" { env.removeValue(forKey: "FORCE_COLOR") }
         env["TERM"] = "xterm-256color"
         env["COLORTERM"] = "truecolor"
         env["TERM_PROGRAM"] = "GrandCentralTerminal"
@@ -124,9 +176,7 @@ final class Pane {
            !p.isEmpty {
             return p
         }
-        return (NSHomeDirectory() as NSString)
-            .appendingPathComponent(
-                "Library/Application Support/Grand Central Terminal/daemon.sock")
+        return daemonBaseDir() + "/daemon.sock"
     }
 
     // Blocking reader: runs on its own thread per pane. Owns closing the
@@ -147,7 +197,7 @@ final class Pane {
                 p.ring.append(chunk)
                 onOutput(p, chunk)
             }
-            if fd >= 0 { _ = Darwin.close(fd) }
+            if fd >= 0 { _ = closeSocket(fd) }
             onEOF(self ?? Pane.placeholder)
         }).start()
     }
@@ -170,7 +220,11 @@ final class Pane {
 
     func resize(cols: UInt16, rows: UInt16) {
         var ws = winsize(ws_row: rows, ws_col: cols, ws_xpixel: 0, ws_ypixel: 0)
+#if os(Linux)
+        _ = ioctl(masterFD, UInt(TIOCSWINSZ), &ws)
+#else
         _ = ioctl(masterFD, TIOCSWINSZ, &ws)
+#endif
     }
 
     func markExited() {

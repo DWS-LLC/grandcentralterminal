@@ -92,13 +92,22 @@ extension CanvasView {
 
     func createGroup(members: [PaneID], name: String? = nil) {
         guard members.count >= 2 else { return }
+        // Same-host only: a group arbitrates layout on ONE daemon.
+        // Mixed selections group their largest same-host subset; a 1/1
+        // split across hosts refuses (nothing to group).
+        let byOwner = Dictionary(grouping: members, by: { hub.owner(of: $0) ?? "local" })
+        guard let (owner, owned) = byOwner.max(by: { $0.value.count < $1.value.count }),
+              owned.count >= 2 else { return }
+        if owned.count < members.count {
+            NSLog("[gct] group: mixed-host selection — grouping the \(owned.count) \(owner) panes")
+        }
         let color = GroupStyle.palette[groupMetas.count % GroupStyle.palette.count]
-        conn?.createGroup(CreateGroup(name: name, color: color,
-                                      members: members))
+        hub.createGroup(CreateGroup(name: name, color: color,
+                                    members: owned), owner: owner)
     }
 
     func ungroup(_ id: GroupID) {
-        conn?.deleteGroup(id)
+        hub.deleteGroup(id)
     }
 
     func renameGroup(_ id: GroupID, name: String?) {
@@ -106,7 +115,7 @@ extension CanvasView {
         g.name = GroupStyle.sanitizedName(name)
         groupMetas[id] = g
         refreshGroupViews()
-        conn?.updateGroup(UpdateGroup(id: id, name: g.name,
+        hub.updateGroup(UpdateGroup(id: id, name: g.name,
                                       color: g.color, members: g.members))
     }
 
@@ -115,7 +124,7 @@ extension CanvasView {
         g.members = members
         groupMetas[id] = g
         refreshGroupViews()
-        conn?.updateGroup(UpdateGroup(id: id, name: g.name,
+        hub.updateGroup(UpdateGroup(id: id, name: g.name,
                                       color: g.color, members: g.members))
     }
 
@@ -304,7 +313,7 @@ extension CanvasView {
             let frame = NSRectOverlap.to(r)
             guard frame != pane.frame else { continue }
             pane.setRect(frame, notifySurface: false)
-            conn?.movePane(MovePane(id: pid, rect: r,
+            hub.movePane(MovePane(id: pid, rect: r,
                             allowOverlap: GCTConfig.current.allowWindowOverlap))
         }
         refreshGroupViews()

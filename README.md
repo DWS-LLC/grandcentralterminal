@@ -91,14 +91,15 @@ and everything reattaches, scrollback replayed.
 ```
 vendor/ghostty/          ghostty @ a4aacd91 + patches/libghostty-external-io.patch
 patches/                 the external-IO delta (see patches/README.md)
-Sources/Common/          wire protocol + framed unix-socket connection
+Sources/Common/          wire protocol + framed socket connection (unix + TCP)
 Sources/Daemon/          gctd: PTYs, panes, scrollback, persistence
 Sources/PtyExec/         setsid + TIOCSCTTY + exec helper (per-pane child)
 Sources/Canvas/          the AppKit app: camera, panes, switcher, input
+Sources/Canvas/HostHub.swift  one conn per daemon, owner routing + id mapping
 Makefile                 build/sign/install/uninstall/clean
 scripts/fetch-ghostty.sh clones + patches the vendored ghostty
+scripts/build-remote.sh  build + deploy the Linux daemon over ssh
 ```
-
 ## Build
 
 ```sh
@@ -125,8 +126,62 @@ gctd status     # list panes
 gctd stop       # kill daemon + panes
 ```
 
-## Agents (harness control surface)
+## Remote daemons
 
+`gctd` runs on macOS (unix socket, `.app`-bundled) and Linux (unix socket
++ optional TCP). The mac canvas talks to any number of remote daemons over
+TCP: each host's windows get their own color, and right-clicking empty
+canvas offers "New remote pane" per host.
+
+```sh
+# 1. Build + deploy the Linux daemon (Swift builds in a container
+#    on the remote; no local toolchain needed beyond ssh + podman there).
+#    Installs a systemd user service (linger on, restart on failure).
+scripts/build-remote.sh dubey@192.168.1.38 7420 <token>
+scripts/install-remote.sh dubey@192.168.1.38 7420 <token>
+
+# Or by hand on the remote:
+LD_LIBRARY_PATH=$HOME/gct-remote/lib $HOME/gct-remote/bin/gctd \
+  --port=7420 --token=<token>
+```
+
+```toml
+# ~/.config/gct/config.toml — direct LAN (same subnet, no tunnel).
+[host.enterprise]
+host = "192.168.1.38"
+port = 7420
+token = "<token>"
+color = "#f59e0b"   # optional; default = auto from the palette
+```
+
+Reload config (`⌘⇧R`): the canvas connects, and the host's panes join the
+canvas with its color. Trouble connecting? `ssh` tunnel fallback (token
+never leaves localhost):
+
+```sh
+ssh -L 7420:127.0.0.1:7420 -N -f dubey@192.168.1.38
+```
+
+```toml
+[host.enterprise]
+host = "127.0.0.1"
+port = 7420
+token = "<token>"
+```
+
+Remote panes behave like local ones (PTYs live on the remote; scrollback,
+resize, groups, and persistence all work), with three rules: groups are
+same-host only (mixed selections group the largest same-host subset),
+`⌘T`/directional splits follow the focused pane's host, and each daemon
+arbitrates its own layout (the canvas pre-resolves against the union
+world, so cross-host windows never overlap). `⌘⇧R` reconnects when
+`[host.*]` changes; a dropped host clears its panes (retry via reload).
+The CLI targets remotes too: `gctd --tcp=192.168.1.38:7420 --token=<token>
+list` (env: `GCT_TCP`, `GCT_TOKEN`). Serve flags: `gctd --port=N
+--token=..` (env: `GCT_PORT`, `GCT_TOKEN`); paths honor `$HOME` first,
+`GCT_HOME` overrides the base dir (Linux default `~/.config/gct`).
+
+## Agents (harness control surface)
 `gctd` doubles as the agent/harness CLI against the running daemon —
 prefer GCT panes for background tasks (grouped, no time limits,
 user-inspectable on the canvas). Full prompt in `SKILL.md`.
@@ -219,8 +274,6 @@ arrive via `resize_callback` and go to the daemon as `TIOCSWINSZ`. See
 
 - The daemon's scrollback ring is memory-only: `gctd stop` loses history
   (same as killing a tmux server).
-- Remote/ssh panes are not wired into the UI yet — the daemon supports a
-  `command` per pane, but the app only spawns local shells.
 - Panes render live at every zoom level; many heavy panes will cost GPU.
 - Doom-hidden windows pause every pane renderer (ordered-out presents
   nothing); VT keeps flowing and replays on show.
