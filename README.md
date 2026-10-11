@@ -9,6 +9,17 @@ rendering, with a tmux-style **client/daemon split**: a headless daemon owns
 every PTY, so closing the app detaches and the shells keep running; relaunch
 and everything reattaches, scrollback replayed.
 
+<p align="center">
+  <a href="docs/media/gct-reel.mp4"><img src="docs/media/poster.jpg" alt="GCT reel: the canvas as an airframe, x-ray of gctd, PTY bus and libghostty"></a>
+</p>
+<p align="center"><a href="docs/media/gct-reel.mp4"><b>▶ Watch the reel</b></a> · 72s, 1080p60</p>
+
+![The canvas zoomed out: a city of live panes, grouped by color](docs/media/canvas.jpg)
+
+| Groups + floating panes | Agents drive their own panes |
+|---|---|
+| ![Groups](docs/media/groups.jpg) | ![Agents](docs/media/agents.jpg) |
+
 ## What's implemented
 
 - Infinite canvas: drag empty space to pan; scroll over a terminal scrolls
@@ -99,6 +110,8 @@ Sources/Canvas/HostHub.swift  one conn per daemon, owner routing + id mapping
 Makefile                 build/sign/install/uninstall/clean
 scripts/fetch-ghostty.sh clones + patches the vendored ghostty
 scripts/build-remote.sh  build + deploy the Linux daemon over ssh
+demo/                    scripted shoot + reel kit (see demo/README.md)
+docs/media/              README stills + the reel
 ```
 ## Build
 
@@ -132,6 +145,8 @@ gctd stop       # kill daemon + panes
 + optional TCP). The mac canvas talks to any number of remote daemons over
 TCP: each host's windows get their own color, and right-clicking empty
 canvas offers "New remote pane" per host.
+
+![Three remote hosts in formation around local panes, each in its own color](docs/media/remote.jpg)
 
 ```sh
 # 1. Build + deploy the Linux daemon (Swift builds in a container
