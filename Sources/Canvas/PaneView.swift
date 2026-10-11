@@ -20,6 +20,9 @@ final class PaneView: NSView {
     // move/close/group. Rendered with the accent color so it reads apart
     // from single-pane focus.
     var isSelected = false { didSet { if isSelected != oldValue { applyChrome() } } }
+    // Focus zoom: set by CanvasView while this pane fills the viewport.
+    // Renders the ⤢ marker + zoom chrome via applyChrome.
+    var isZoomed = false { didSet { if isZoomed != oldValue { applyChrome() } } }
 
     init(meta: PaneMeta) {
         self.id = meta.id
@@ -71,6 +74,16 @@ final class PaneView: NSView {
         }
         self.meta = meta
         layoutChrome()
+        applyChrome()
+    }
+    // Daemon truth (name/color/group) without touching the frame: the
+    // zoomed pane's fullscreen rect is local-only until unzoom.
+    func syncMetaOnly(_ meta: PaneMeta) {
+        self.meta.host = meta.host
+        self.meta.name = meta.name
+        self.meta.title = meta.title
+        self.meta.cwd = meta.cwd
+        self.meta.floating = meta.floating
         applyChrome()
     }
 
@@ -135,24 +148,24 @@ final class PaneView: NSView {
         // Multi-select beats focus: selected panes wear accent chrome so a
         // 2+ selection reads apart from the single focused pane. A
         // focused-but-unselected pane keeps the normal focused look.
-        let accent = isSelected
+        // Zoomed panes wear it too (same weight as the float pin).
+        let accent = isSelected || isZoomed
         // Fill the pane behind the terminal with the titlebar color: the
         // inset terminal leaves the side/bottom border visible.
         layer?.backgroundColor =
             (accent ? NSColor.systemBlue : isFocused ? t.borderFocused : t.borderUnfocused).cgColor
-        // Floating reads at a glance: deeper shadow lifts it off the
-        // canvas; plain titlebar otherwise.
-        layer?.shadowOpacity = meta.floating ? min(1, t.shadowOpacity + 0.25) : t.shadowOpacity
-        layer?.shadowRadius = meta.floating ? t.shadowRadius + 6 : t.shadowRadius
+        // Floating/zoomed reads at a glance: deeper shadow lifts it off
+        // the canvas; plain titlebar otherwise.
+        let lifted = meta.floating || isZoomed
+        layer?.shadowOpacity = lifted ? min(1, t.shadowOpacity + 0.25) : t.shadowOpacity
+        layer?.shadowRadius = lifted ? t.shadowRadius + 6 : t.shadowRadius
         layer?.shadowOffset = CGSize(width: 0, height: -6)
         layer?.shadowColor = NSColor.black.cgColor
-
         titlebar.layer?.backgroundColor =
             (accent ? NSColor.systemBlue : isFocused ? t.titlebarBackgroundFocused : t.titlebarBackgroundUnfocused).cgColor
-
         titleLabel.string = titleText
         titleLabel.foregroundColor =
-            (isFocused ? t.titlebarTextFocused : t.titlebarTextUnfocused).cgColor
+            ((isFocused || isZoomed) ? t.titlebarTextFocused : t.titlebarTextUnfocused).cgColor
         titleLabel.font = t.titleFont
         titleLabel.fontSize = t.titleFont.pointSize
         layoutChrome()
@@ -162,7 +175,8 @@ final class PaneView: NSView {
         let host_ = meta.host
         let kind = meta.name ?? "Terminal"
         let pin = meta.floating ? "⬆ " : ""
-        return "\(pin)\(host_) – \(kind) – \(meta.cwd)"
+        let zoom = isZoomed ? "⤢ " : ""
+        return "\(zoom)\(pin)\(host_) – \(kind) – \(meta.cwd)"
     }
 
     // Hit zones for manual routing (world coords).

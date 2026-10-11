@@ -9,6 +9,24 @@ final class CanvasView: NSView {
 
     let worldView = NSView(frame: .zero)
     private(set) var camera = Camera()
+    // "Focus zoom" (cmd+z): the pane leaves the camera plane and fills
+    // the viewport as a SHARP local fullscreen — the ghostty surface
+    // reflows to the full size and re-renders vector-crisp (the old
+    // camera fit just magnified the raster past 100%, hence the blur).
+    // Saved frame + camera restore on toggle; focus move elsewhere exits.
+    private var zoomSavedFrame: NSRect?
+    private var zoomSavedCam: Camera?
+    var zoomSavedPane: PaneID?
+    // True while a pane zoom is live: fit math targets the viewport (not
+    // the raw window) and empty-space pan/zoom gestures hold still.
+    private var isPaneZoomed: Bool { zoomSavedPane != nil }
+    // Camera-fit viewport: the window minus the status bar strip (when the
+    // bar is up the pane must not slide under it). Screen points.
+    private var viewportSize: CGSize {
+        var size = window?.frame.size ?? bounds.size
+        if statusBar?.superview != nil { size.height -= statusBar?.barHeight ?? 0 }
+        return size
+    }
     var panes = [PaneID: PaneView]()
     var zOrder = [PaneID]()
     private(set) var focusedID: PaneID?
@@ -537,7 +555,10 @@ final class CanvasView: NSView {
             let ss = pane.frame.size.applying(
                 CGAffineTransform(scaleX: camera.scale, y: camera.scale))
             let screenRect = NSRect(origin: sp, size: ss)
-            let visible = windowVisible && viewBounds.intersects(screenRect)
+            // The zoomed pane fills the viewport by construction: never
+            // let a stale frustum test pause its renderer mid-zoom.
+            let visible = windowVisible
+                && (pane.id == zoomSavedPane || viewBounds.intersects(screenRect))
             host.setOcclusion(visible)
         }
     }
@@ -574,8 +595,9 @@ final class CanvasView: NSView {
     }
 
     // Floating panes stack above every tiled pane (order within each
-    // layer follows zOrder). Called after focus/z changes and meta
-    // updates.
+    // layer follows zOrder). The zoomed pane sits above everything —
+    // including floaters — while zoomed. Called after focus/z changes
+    // and meta updates.
     func restackFloating() {
         for id in zOrder {
             guard let pane = panes[id], !pane.meta.floating else { continue }
@@ -584,6 +606,10 @@ final class CanvasView: NSView {
         }
         for id in zOrder {
             guard let pane = panes[id], pane.meta.floating else { continue }
+            pane.removeFromSuperview()
+            worldView.addSubview(pane)
+        }
+        if let z = zoomSavedPane, let pane = panes[z] {
             pane.removeFromSuperview()
             worldView.addSubview(pane)
         }
@@ -615,6 +641,11 @@ final class CanvasView: NSView {
             dropComposition()
         }
         focusedID = id
+        // An explicit focus move exits a pane zoom: restore the zoomed
+        // pane's frame + camera before going somewhere new.
+        if zoomSavedPane != nil, zoomSavedPane != id {
+            exitZoomRestore()
+        }
         if let pane = panes[id] {
             pane.isFocused = true
             pane.host?.setFocus(true)
@@ -646,10 +677,24 @@ final class CanvasView: NSView {
             }
             if let zone = pane.resizeZone(at: world,
                                           screenTolerance: camera.screenToWorldDistance(5)) {
-                drag = .resize(id: pane.id, zone: zone, rect0: pane.frame)
-                return
+                // Resize of a zoomed pane: exit zoom first (restore frame
+                // + camera), then resize the restored frame.
+                if zoomSavedPane == pane.id { exitZoomRestore() }
+                guard let pane = panes[pane.id] else { return }
+                // Post-restore the cursor may no longer sit in a zone
+                // (frame shrank back): fall through to titlebar/surface.
+                if let zone = pane.resizeZone(at: world,
+                                              screenTolerance: camera.screenToWorldDistance(5)) {
+                    drag = .resize(id: pane.id, zone: zone, rect0: pane.frame)
+                    return
+                }
             }
-            if pane.isInTitlebar(world) {
+            let restored = panes[pane.id] ?? pane
+            if restored.isInTitlebar(world) {
+                // Titlebar grab on a zoomed pane: exit zoom first, then
+                // move the restored pane (grab delta recomputed).
+                if zoomSavedPane == restored.id { exitZoomRestore() }
+                guard let pane = panes[restored.id] else { return }
                 // Dragging a selected pane's titlebar moves the whole
                 // selection as a rigid block.
                 if selectedIDs.contains(pane.id), selectedIDs.count >= 2 {
@@ -666,7 +711,7 @@ final class CanvasView: NSView {
                                                 y: world.y - pane.frame.minY))
                 return
             }
-            // Terminal surface click.
+            let pane = panes[pane.id] ?? pane
             let local = pane.surfacePoint(at: world)
             let mods = GhosttyMods(event.modifierFlags)
             let button: ghostty_input_mouse_button_e =
@@ -703,12 +748,13 @@ final class CanvasView: NSView {
             if !event.modifierFlags.contains(.shift) { clearSelection() }
             return
         }
-        // Plain drag on empty space pans the camera. (Rubber-band grouping
-        // is on the right button; group menus too — see rightMouseDown.)
-        // A plain left press (no shift) clears the multi-select; the drag
-        // still pans.
+        // Pane zoom holds the camera: empty-space drags do nothing (the
+        // pane fills the viewport; panning would just lose it). Toggle or
+        // focus-move to exit.
         if !event.modifierFlags.contains(.shift) { clearSelection() }
-        drag = .pan(start: viewPoint(event), offset0: camera.offset)
+        if !isPaneZoomed {
+            drag = .pan(start: viewPoint(event), offset0: camera.offset)
+        }
     }
 
     override func mouseDragged(with event: NSEvent) {
@@ -1251,7 +1297,11 @@ final class CanvasView: NSView {
         if case .select = drag {
             if let band = selectionBand {
                 let r = selectionRect(band)
-                if r.width <= 8 || r.height <= 8 {
+                // Click-vs-drag in SCREEN points (constant feel at any
+                // zoom); tiny in both axes = a plain right-click.
+                let w = camera.worldToScreenDistance(r.width)
+                let h = camera.worldToScreenDistance(r.height)
+                if w <= 8 || h <= 8 {
                     drag = .none
                     hideSelectionBand()
                 } else {
@@ -1371,6 +1421,7 @@ final class CanvasView: NSView {
         snap.target = self
         snap.state = GCTConfig.current.snapping ? .on : .off
         menu.addItem(snap)
+        NSMenu.popUpContextMenu(menu, with: event, for: self)
     }
     @objc func groupSelectionFromMenu(_ sender: NSMenuItem) {
         groupStagedSelection()
@@ -1487,6 +1538,10 @@ final class CanvasView: NSView {
                                        mods: GhosttyScrollMods(event))
                 return
             }
+            // Pane zoom holds the camera: wheel/pinch off-pane would zoom
+            // out from under the zoomed pane and strand it. Terminal hover
+            // scroll still reaches the pane above.
+            guard !isPaneZoomed else { return }
             cancelCameraAnim()
             let p = viewPoint(event)
             camera.zoom(at: p, factor: exp(-event.scrollingDeltaY / 400))
@@ -1499,6 +1554,7 @@ final class CanvasView: NSView {
         // horizontal scroll) goes to the terminal, plain wheel zooms.
         if event.hasPreciseScrollingDeltas
             && event.modifierFlags.intersection([.shift, .control, .option, .command]).isEmpty {
+            guard !isPaneZoomed else { return }
             cancelCameraAnim()
             camera.offset.x -= event.scrollingDeltaX
             camera.offset.y -= event.scrollingDeltaY
@@ -1514,6 +1570,7 @@ final class CanvasView: NSView {
                                     mods: GhosttyScrollMods(event))
             return
         }
+        guard !isPaneZoomed else { return }
         cancelCameraAnim()
         let p = viewPoint(event)
         camera.zoom(at: p, factor: exp(-event.scrollingDeltaY / 400))
@@ -1524,6 +1581,7 @@ final class CanvasView: NSView {
     // Pinch: zoom anchored at the cursor. Per-event magnification is a
     // delta since the last event, so 1+m composes into the full gesture.
     override func magnify(with event: NSEvent) {
+        guard !isPaneZoomed else { return }
         cancelCameraAnim()
         let p = viewPoint(event)
         camera.zoom(at: p, factor: 1 + event.magnification)
@@ -1531,15 +1589,17 @@ final class CanvasView: NSView {
         applyCamera()
     }
 
-    // Two-finger double-tap: toggle actual size at the tap vs fit-all.
+    // Two-finger double-tap: actual size (1.0) when zoomed out, fit-all
+    // when at/above it. Above 1.0 the terminal raster magnifies (soft);
+    // per-pane cmd-+/- stays sharp. Exits a pane zoom first (same as fit).
     override func smartMagnify(with event: NSEvent) {
-        if camera.scale >= Camera.maxScale - 0.001 {
+        if isPaneZoomed { exitZoomThenFit(); return }
+        if camera.scale >= 1.0 - 0.001 {
             fitAll()
             return
         }
         var target = camera
-        target.zoom(at: viewPoint(event),
-                    factor: Camera.maxScale / camera.scale)
+        target.zoom(at: viewPoint(event), factor: 1.0 / camera.scale)
         animateCamera(to: target)
     }
 
@@ -1613,7 +1673,8 @@ final class CanvasView: NSView {
         case .shrinkLeft: resizeFocused(edge: .left, grow: false)
         case .shrinkRight: resizeFocused(edge: .right, grow: false)
         case .switcher: toggleSwitcher()
-        case .fitAll: fitAll()
+        case .fitAll: exitZoomThenFit()
+        case .zoomPane: toggleZoomPane()
         case .copy: copyFromFocused()
         case .paste: pasteIntoFocused()
         case .groupSelection: groupStagedSelection()
@@ -2116,6 +2177,7 @@ final class CanvasView: NSView {
         panes.removeValue(forKey: id)
         zOrder.removeAll { $0 == id }
         selectedIDs.remove(id)
+        if zoomSavedPane == id { zoomSavedFrame = nil; zoomSavedCam = nil; zoomSavedPane = nil }
         if focusedID == id {
             focusedID = nil
             if let last = zOrder.last { focusPane(last) }
@@ -2418,41 +2480,113 @@ final class CanvasView: NSView {
         }
     }
 
-    // Recenter the camera on a pane without changing the zoom.
+    // Recenter the camera on a pane without changing the zoom. Targets the
+    // viewport (window minus the status bar): a bottom bar shifts the
+    // center up so the pane never hides under it.
     func centerOnPane(_ id: PaneID) {
-        guard let pane = panes[id], let window else { return }
-        let screen = window.frame.size
+        guard let pane = panes[id] else { return }
+        let screen = viewportSize
         let r = pane.frame
+        let yOff = GCTConfig.current.statusbarEnabled
+            && GCTConfig.current.statusbarPosition == .bottom
+            && statusBar?.superview != nil ? statusBar?.barHeight ?? 0 : 0
         animateCamera(to: Camera(
             offset: CGPoint(x: screen.width / 2 - r.midX * camera.scale,
-                            y: screen.height / 2 - r.midY * camera.scale),
+                            y: screen.height / 2 + yOff / 2 - r.midY * camera.scale),
             scale: camera.scale))
     }
 
-    func zoomToPane(_ id: PaneID) {
-        guard let pane = panes[id], let window else { return }
-        let screen = window.frame.size
+    func zoomToPane(_ id: PaneID, margin: CGFloat = 0.8) {
+        guard let pane = panes[id] else { return }
+        let screen = viewportSize
         let r = pane.frame
-        let fit = min(CGFloat(0.8) * screen.width / r.width,
-                      CGFloat(0.8) * screen.height / r.height,
-                      Camera.maxScale)
+        let fit = max(min(margin * screen.width / r.width,
+                      margin * screen.height / r.height,
+                      Camera.maxScale),
+                      Camera.minScale)
+        let yOff = GCTConfig.current.statusbarEnabled
+            && GCTConfig.current.statusbarPosition == .bottom
+            && statusBar?.superview != nil ? statusBar?.barHeight ?? 0 : 0
         animateCamera(to: Camera(
             offset: CGPoint(x: screen.width / 2 - r.midX * fit,
-                            y: screen.height / 2 - r.midY * fit),
+                            y: screen.height / 2 + yOff / 2 - r.midY * fit),
             scale: fit))
     }
 
+    // Focus zoom: the pane fills the viewport at scale 1 (SHARP — the
+    // surface reflows to full size and re-renders, no raster upscale).
+    // Toggling restores the saved frame + camera. Wheel/pinch/pan hold
+    // while zoomed; a focus move elsewhere exits (restores, then moves).
+    func toggleZoomPane() {
+        guard let id = focusedID, let pane = panes[id] else { return }
+        if zoomSavedPane == id {
+            exitZoomRestore()
+        } else {
+            if zoomSavedPane != nil { exitZoomRestore() }
+            enterZoomFullscreen(id)
+        }
+    }
+    private func enterZoomFullscreen(_ id: PaneID) {
+        guard let pane = panes[id] else { return }
+        zoomSavedFrame = pane.frame
+        zoomSavedCam = camera
+        zoomSavedPane = id
+        // Camera to scale 1 first (no animation — the pane covers all),
+        // then grow the pane to the viewport: syncSurfaceSize reflows
+        // the PTY + re-renders the grid sharp at full size.
+        camera = Camera(offset: .zero, scale: 1.0)
+        applyCamera()
+        let r = NSRect(origin: .zero, size: viewportSize)
+        pane.setRect(r, notifySurface: true)
+        pane.isZoomed = true
+        bringToFront(id)
+        refreshOcclusion()
+        conn?.movePane(MovePane(id: id, rect: Rect(x: r.minX, y: r.minY,
+            w: r.width, h: r.height),
+            allowOverlap: true))
+    }
+    // Restore the saved frame + camera. Returns false when not zoomed.
+    @discardableResult
+    private func exitZoomRestore() -> Bool {
+        guard let id = zoomSavedPane, let pane = panes[id],
+              let frame = zoomSavedFrame, let cam = zoomSavedCam else {
+            zoomSavedFrame = nil; zoomSavedCam = nil; zoomSavedPane = nil
+            return false
+        }
+        zoomSavedFrame = nil; zoomSavedCam = nil; zoomSavedPane = nil
+        pane.isZoomed = false
+        camera = cam
+        applyCamera()
+        pane.setRect(frame, notifySurface: true)
+        refreshOcclusion()
+        conn?.movePane(MovePane(id: id, rect: Rect(x: frame.minX, y: frame.minY,
+            w: frame.width, h: frame.height),
+            allowOverlap: GCTConfig.current.allowWindowOverlap))
+        return true
+    }
+
+    // fit-all exits a pane zoom first: restoring then fitting would flash
+    // two animations; clear and fit once instead.
+    func exitZoomThenFit() {
+        _ = exitZoomRestore()
+        fitAll()
+    }
+
     func fitAll() {
-        guard !zOrder.isEmpty, let window else { return }
+        guard !zOrder.isEmpty else { return }
         var bbox = CGRect.null
         for pane in panes.values { bbox = bbox.union(pane.frame) }
-        let screen = window.frame.size
-        let fit = min(screen.width / bbox.width,
+        let screen = viewportSize
+        let fit = max(min(screen.width / bbox.width,
                       screen.height / bbox.height,
-                      Camera.maxScale) * 0.92
+                      Camera.maxScale) * 0.92,
+                      Camera.minScale)
+        let yOff = GCTConfig.current.statusbarEnabled
+            && GCTConfig.current.statusbarPosition == .bottom
+            && statusBar?.superview != nil ? statusBar?.barHeight ?? 0 : 0
         animateCamera(to: Camera(
             offset: CGPoint(x: screen.width / 2 - bbox.midX * fit,
-                            y: screen.height / 2 - bbox.midY * fit),
+                            y: screen.height / 2 + yOff / 2 - bbox.midY * fit),
             scale: fit))
     }
 

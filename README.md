@@ -9,15 +9,19 @@ rendering, with a tmux-style **client/daemon split**: a headless daemon owns
 every PTY, so closing the app detaches and the shells keep running; relaunch
 and everything reattaches, scrollback replayed.
 
-![concept](2.png)
-
 ## What's implemented
 
 - Infinite canvas: drag empty space to pan; scroll over a terminal scrolls
   the terminal (wheel or trackpad, no modifier — `scroll-on-terminal-hover`,
   default true), scroll over empty canvas zooms toward the cursor; pinch
-  also zooms (0.03–1.0×, native-size text stays crisp); two-finger
-  double-tap toggles actual size vs fit-all; `⌘0` fits all panes.
+  also zooms (`zoom-min`–`zoom-max`, default 0.03–4.0×; above 1.0 the
+  texture magnifies — use per-pane `cmd-+/-` for sharp big text);
+  two-finger double-tap toggles actual size vs fit-all; `⌘0` fits all
+  panes; `⌘Z` focus-zooms the pane into a sharp local fullscreen (the
+  surface reflows + re-renders vector-crisp, never a raster upscale; `⤢`
+  marker + accent chrome while zoomed). Toggle restores frame + camera;
+  focus moves, `⌘0`, titlebar/resize grabs, and double-tap exit; pan /
+  wheel / pinch hold while zoomed; fits dodge the status bar.
   - drag the titlebar to move, edges/corners to resize (live PTY reflow)
   - click to focus (`focus-follows-mouse = true` focuses on hover instead);
     click-drag inside a terminal selects text; `⌘H/J/K/L` moves focus to the
@@ -78,6 +82,9 @@ and everything reattaches, scrollback replayed.
   restart it respawns shells in their recorded cwd/rects and restores groups
   (members pruned to live panes). Scrollback lives
   with the daemon (8 MiB ring per pane) and is replayed on attach.
+  `⌘Q` quits the canvas UI (panes keep running in gctd; relaunch
+  reattaches); the Dock menu's "Quit Daemon" kills every terminal.
+  A Dock click re-summons a doom-hidden window.
 
 ## Layout
 
@@ -219,13 +226,12 @@ arrive via `resize_callback` and go to the daemon as `TIOCSWINSZ`. See
   (unlike Linux's EIO), so dead panes are detected by the daemon's reaper
   and can linger briefly as a frozen frame before cleanup.
 
-## Keys
-
 | Key | Action |
 | --- | --- |
 | `⌘T` | new pane |
 | `⌘W` | close focused pane (or every selected pane when focused is selected) |
 | `⌘R` | rename focused pane (or its group) |
+| `⌘Z` | focus-zoom pane to a sharp local fullscreen (toggle restores frame + camera) |
 | `⌘G` | group staged selection (else rename focused pane's group) |
 | `⌘D` | toggle focused pane in multi-select |
 | `⌘⇧D` | clear multi-select |
@@ -250,8 +256,6 @@ arrive via `resize_callback` and go to the daemon as `TIOCSWINSZ`. See
 | drag titlebar | move pane (edges/center snap within the radius, guides light) |
 | drag group background | move every member together |
 | drag edges/corners | resize pane (moving edges snap, guides light) |
-
-
 `~/.config/gct/config.toml` — created with defaults on first launch; every key
 is optional and malformed values fall back to their defaults. `⌘⇧R`
 (reload-config) re-reads it live — theme, keybinds, snapping/overlap
@@ -312,6 +316,11 @@ focus-follows-mouse = false
 # over empty canvas zooms at the cursor. Set false for the old behavior:
 # trackpad pans, shift+scroll goes to the terminal, wheel zooms.
 scroll-on-terminal-hover = true
+# Canvas zoom limits for wheel/pinch (world scale, 1.0 = actual size):
+# zoom-min 0.005-1, zoom-max 1-8 (live via reload-config). Above 1.0 the
+# terminal texture magnifies (slightly soft); per-pane cmd-+/- stays sharp.
+zoom-min = 0.03
+zoom-max = 4
 
 # Canvas background per mode. Hex like "#1a1b26" (alpha 1), or with alpha
 # like "#1a1b2680" / "#1234" — alpha < 1 makes the canvas transparent,
@@ -390,6 +399,9 @@ shrink-window-left = "cmd+ctrl+shift+h"
 shrink-window-right = "cmd+ctrl+shift+l"
 switcher = "cmd+p"
 fit-all = "cmd+0"
+# tmux-style: fill the viewport with the focused pane (toggle restores
+# the exact camera; focus moves exit).
+zoom-pane = "cmd+z"
 copy = "cmd+c"
 paste = "cmd+v"
 # Multi-select (staged, NOT a group): right-drag selects, shift+click a

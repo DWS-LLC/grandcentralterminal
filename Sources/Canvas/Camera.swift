@@ -8,8 +8,9 @@ struct Camera: Equatable {
     var offset = CGPoint.zero
     var scale: CGFloat = 1.0
 
-    static let minScale: CGFloat = 0.03
-    static let maxScale: CGFloat = 1.0
+    // Clamp range from config (zoom-min / zoom-max), live-reloaded.
+    static var minScale: CGFloat { GCTConfig.current.zoomMin }
+    static var maxScale: CGFloat { GCTConfig.current.zoomMax }
 
     func worldToScreen(_ p: CGPoint) -> CGPoint {
         CGPoint(x: p.x * scale + offset.x, y: p.y * scale + offset.y)

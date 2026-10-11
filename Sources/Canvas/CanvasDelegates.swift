@@ -43,6 +43,10 @@ extension CanvasView: CanvasConnDelegate {
     }
 
     func connPaneMeta(_ meta: PaneMeta) {
+        // Our own zoom movePane echoes back here: the zoomed pane's frame
+        // is local-only until unzoom (restore persists it), so never let
+        // the broadcast shrink it back to the saved rect mid-zoom.
+        if zoomSavedPane == meta.id { panes[meta.id]?.syncMetaOnly(meta); return }
         panes[meta.id]?.update(meta: meta)
         refreshGroupViews()
         restackFloating()

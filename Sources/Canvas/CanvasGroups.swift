@@ -78,6 +78,10 @@ extension CanvasView {
         // Frontmost = last touched; zOrder of panes approximates it.
         // Walk groups in reverse creation order (dict order is stable
         // enough for a tiebreak here; overlapping groups are an edge).
+        // A zoomed pane fills the viewport above everything: skip group
+        // backgrounds while zoomed so empty-area clicks can't grab the
+        // group hiding underneath it.
+        if zoomSavedPane != nil { return nil }
         for view in groupViews.values.reversed() {
             if view.containsWorld(worldPoint) { return view }
         }
@@ -150,10 +154,11 @@ extension CanvasView {
     // / close / clear), the group keybind groups it, dragging a member
     // moves the whole block.
     func finishSelectionBand() {
-        defer { selectionBand = nil }
         guard let band = selectionBand else { return }
         let rect = selectionRect(band)
-        guard rect.width > 8, rect.height > 8 else { return }
+        // Same 8-screen-point click-vs-drag rule as rightMouseUp.
+        guard camera.worldToScreenDistance(rect.width) > 8,
+              camera.worldToScreenDistance(rect.height) > 8 else { return }
         var picked = [PaneID]()
         for (id, pane) in panes where rect.contains(pane.frame) {
             picked.append(id)

@@ -359,6 +359,7 @@ enum GCTAction: String, CaseIterable {
     case shrinkRight = "shrink-window-right"
     case switcher = "switcher"
     case fitAll = "fit-all"
+    case zoomPane = "zoom-pane"
     case copy = "copy"
     case paste = "paste"
     case groupSelection = "group-selection"
@@ -433,6 +434,11 @@ struct GCTConfig {
     // empty canvas zooms.
     var focusFollowsMouse = false
     var scrollOnTerminalHover = true
+    // Canvas zoom limits (wheel/pinch), world scale where 1.0 = actual
+    // size. max > 1 magnifies the terminal raster (slightly soft);
+    // per-pane cmd-+/- stays sharp.
+    var zoomMin: CGFloat = 0.03
+    var zoomMax: CGFloat = 4.0
     // Screen-space overlay bar of xbar-compatible plugin components.
     // Off by default; top/bottom edge; components lists plugin
     // basenames with `gap` spacers absorbing leftover width.
@@ -524,6 +530,13 @@ struct GCTConfig {
         if let v = root["scroll-on-terminal-hover"] {
             cfg.scrollOnTerminalHover = v.lowercased() == "true"
         }
+        if let s = root["zoom-min"], let n = Double(s), (0.005...1.0).contains(n) {
+            cfg.zoomMin = CGFloat(n)
+        }
+        if let s = root["zoom-max"], let n = Double(s), (1.0...8.0).contains(n) {
+            cfg.zoomMax = CGFloat(n)
+        }
+        if cfg.zoomMin > cfg.zoomMax { cfg.zoomMin = min(cfg.zoomMax, 1.0) }
         let sb = t["statusbar"] ?? [:]
         if let v = sb["enabled"] {
             cfg.statusbarEnabled = v.lowercased() == "true"
@@ -647,6 +660,7 @@ struct GCTConfig {
             // camera-follows/fits-focus-move (center/fit like focus moves).
             .switcher: GCTKeybind("cmd+p")!,
             .fitAll: GCTKeybind("cmd+0")!,
+            .zoomPane: GCTKeybind("cmd+z")!,
             .copy: GCTKeybind("cmd+c")!,
             .paste: GCTKeybind("cmd+v")!,
             .groupSelection: GCTKeybind("cmd+g")!,
@@ -716,6 +730,11 @@ struct GCTConfig {
     # behavior: trackpad pans, shift+scroll goes to the terminal, wheel
     # zooms.
     scroll-on-terminal-hover = true
+    # Canvas zoom limits for wheel/pinch (world scale, 1.0 = actual size):
+    # zoom-min 0.005-1, zoom-max 1-8. Above 1.0 the terminal texture is
+    # magnified (slightly soft); per-pane cmd-+/- stays razor sharp.
+    zoom-min = 0.03
+    zoom-max = 4
 
     [background]
     # Canvas background per mode. Hex like "#1a1b26" (alpha 1), or with
@@ -825,6 +844,9 @@ struct GCTConfig {
     shrink-window-right = "cmd+ctrl+shift+l"
     switcher = "cmd+p"
     fit-all = "cmd+0"
+    # Focus zoom: the pane fills the viewport sharp (surface reflows +
+    # re-renders, never a raster upscale). Toggle restores frame + camera.
+    zoom-pane = "cmd+z"
     copy = "cmd+c"
     paste = "cmd+v"
     # Terminal groups: right-drag empty space rubber-bands panes into a

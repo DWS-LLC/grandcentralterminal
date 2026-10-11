@@ -27,7 +27,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let win = CanvasWindow(
             contentRect: screen,
-            styleMask: [.borderless, .resizable, .miniaturizable],
+            styleMask: [.borderless, .miniaturizable],
             backing: .buffered,
             defer: false)
         win.title = "Grand Central Terminal"
@@ -101,6 +101,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             object: nil, queue: .main) { [weak self] _ in
             self?.conformToVisibleFrame()
         }
+        // Borderless windows still resize from edges (we dropped .resizable
+        // but AppKit keeps the zones live): snap back to the visible frame.
+        NotificationCenter.default.addObserver(
+            forName: NSWindow.didResizeNotification, object: nil,
+            queue: .main) { [weak self] _ in
+            self?.conformToVisibleFrame()
+        }
         // Launch-hidden doom: don't steal focus; the hotkey summons.
         let doomHidden = GCTConfig.current.doom.enabled
             && GCTConfig.current.doom.startHidden && doom.hotkeyArmed
@@ -123,9 +130,66 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    // Dock click with no visible windows (doom-hidden, minimized, or
+    // hidden-by-Cmd+H): summon the canvas. Doom owns the presentation
+    // (screen pick, animation, previous-app stash); take the plain
+    // path without doom. Returning false (not "open untitled") still
+    // brings the ordered-out window back via show().
+    func applicationShouldHandleReopen(_ sender: NSApplication,
+                                       hasVisibleWindows flag: Bool) -> Bool {
+        NSApp.unhide(nil)
+        if let doom {
+            doom.show()
+        } else {
+            window.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+        }
+        return false
+    }
+
+    // Cmd+Q quits the canvas UI normally; panes keep running in gctd
+    // (relaunch reattaches). The Dock menu's Quit Daemon kills gctd.
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         false  // closing the canvas detaches; panes keep running
     }
+    func applicationDockMenu(_ sender: NSApplication) -> NSMenu? {
+        let menu = NSMenu()
+        let show = NSMenuItem(title: "Show Canvas",
+                              action: #selector(AppDelegate.dockShow(_:)),
+                              keyEquivalent: "")
+        show.target = self
+        menu.addItem(show)
+        let quit = NSMenuItem(
+            title: "Quit Daemon (kills all terminals)",
+            action: #selector(AppDelegate.dockQuitDaemon(_:)),
+            keyEquivalent: "")
+        quit.target = self
+        menu.addItem(quit)
+        return menu
+    }
+    @objc func dockShow(_ sender: Any?) {
+        NSApp.unhide(nil)
+        if let doom {
+            doom.show()
+        } else {
+            window.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+        }
+    }
+    @objc func dockQuitDaemon(_ sender: Any?) {
+        killDaemonAndQuit()
+    }
+}
+// Ask gctd to shut down (kills every pane), then quit the canvas.
+// Best-effort socket write; the daemon reaps panes and exits itself.
+func killDaemonAndQuit() {
+    let fd = connectUnixSocket(CanvasPaths.sockPath)
+    if fd >= 0 {
+        let conn = Conn(fd: fd)
+        _ = conn.send(tag: .killDaemon, json: Hello(version: ProtoVersion))
+        conn.close()
+    }
+    NSApp.terminate(nil)
 }
 
 // Minimal app menu: Cmd+Q only (terminal key handling is our own).
