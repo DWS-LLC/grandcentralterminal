@@ -6,6 +6,7 @@
 #   demo/launch.sh reset            kill the demo daemon + wipe its state
 #   demo/launch.sh stop             quit the demo app (daemon keeps panes)
 #   demo/launch.sh swap <rice>      re-render config only (then reload-config)
+#   demo/launch.sh hosts up|down    stand-in remote hosts: local TCP daemons
 #
 #   repo build (.build/release) ──copy──▶ $DEMO_HOME/bin + app bundle
 #   rices/<rice>.env ──render──▶ config/config.toml + xdg/ghostty/config.ghostty
@@ -156,7 +157,64 @@ start_app() {
         nohup "$EXE" >"$DEMO_HOME/app.log" 2>&1 &!
 }
 
+# Stand-in remotes for the formation shot: extra daemons on this Mac,
+# each on its own TCP port + token, joined to the demo canvas as
+# [host.<name>]. Real remotes stay off camera. Tokens never print.
+HOSTS=(build-01:7431:#e0af68 gpu-02:7432:#73daca edge-03:7433:#f7768e)
+HOST_MARK="# --- demo hosts ---"
+
+hosts_up() {
+    local cfg="$DEMO_HOME/config/config.toml" spec name port color dir token
+    hosts_config_strip
+    print -r -- "$HOST_MARK" >> "$cfg"
+    for spec in $HOSTS; do
+        name=${spec%%:*} port=${${spec#*:}%%:*} color=${spec##*:}
+        dir="$DEMO_HOME/hosts/$name"
+        mkdir -p "$dir"
+        [[ -f $dir/token ]] || openssl rand -hex 16 > "$dir/token"
+        token=$(<"$dir/token")
+        if ! GCT_SOCK="$dir/daemon.sock" "$DEMO_HOME/bin/gctd" status >/dev/null 2>&1; then
+            clean_env ZDOTDIR="$DEMO_HOME/zdot" GCT_SOCK="$dir/daemon.sock" \
+                GCT_STATE="$dir/state.json" GCT_PID="$dir/daemon.pid" \
+                nohup "$DEMO_HOME/bin/gctd" --port="$port" --token="$token" \
+                >"$dir/daemon.log" 2>&1 &!
+        fi
+        print -r -- "[host.$name]
+host = \"127.0.0.1\"
+port = $port
+token = \"$token\"
+color = \"$color\"
+" >> "$cfg"
+    done
+    sleep 1
+    "$DEMO_HOME/bin/gctd" do reload-config >/dev/null 2>&1 || true
+}
+
+hosts_down() {
+    local spec dir
+    for spec in $HOSTS; do
+        dir="$DEMO_HOME/hosts/${spec%%:*}"
+        GCT_SOCK="$dir/daemon.sock" "$DEMO_HOME/bin/gctd" stop >/dev/null 2>&1 || true
+    done
+    hosts_config_strip
+    "$DEMO_HOME/bin/gctd" do reload-config >/dev/null 2>&1 || true
+}
+
+# Drop everything from the host marker down (hosts are appended last).
+hosts_config_strip() {
+    local cfg="$DEMO_HOME/config/config.toml"
+    [[ -f $cfg ]] && sed -i '' "/^$HOST_MARK\$/,\$d" "$cfg"
+    return 0
+}
+
 case ${1:-} in
+hosts)
+    case ${2:-} in
+    up) hosts_up ;;
+    down) hosts_down ;;
+    *) print -u2 "usage: launch.sh hosts up|down"; exit 2 ;;
+    esac
+    ;;
 reset)
     stop_app
     "$DEMO_HOME/bin/gctd" stop 2>/dev/null || true

@@ -63,7 +63,7 @@ TAKE_NAME=""
 roll() {
     TAKE_NAME=$1
     mkdir -p "$TAKES"
-    "${OBS[@]}" rec start
+    "${OBS[@]}" rec start || exit 1
     hold 1
 }
 wrap() {
@@ -88,3 +88,13 @@ newest() { comm -13 <(print -l ${(f)1}) <(ids) | head -1; }
 
 # Demo app pid (the live app runs from /Applications, never matched).
 demo_app_pid() { pgrep -f "GCT Demo/Grand Central Terminal.app/Contents/MacOS" | head -1; }
+
+# need_city: scenes that wipe (spawn, shove, groups...) leave no city behind.
+# Restage it when the core editor is missing, so scenes run in any order.
+need_city() {
+    "$G" focus nvim >/dev/null 2>&1 && return 0
+    source "$DEMO/scenes/city.sh"
+    wipe
+    stage_city
+    hold $(( SETTLE * 2 ))
+}

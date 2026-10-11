@@ -1,6 +1,6 @@
 """OBS remote for the GCT shoot, over obs-websocket.
 
-    obs.py setup              profile + scene: native display capture, 60fps
+    obs.py setup              profile + scene: native display capture, 60fps ProRes
     obs.py rec start|stop     record (stop prints the file path)
     obs.py shot <file.png>    full-res still of the display source
     obs.py cursor on|off      show the pointer (manual shots) or not
@@ -28,11 +28,13 @@ SOURCE = "Display"
 CAPTURE_KIND = "screen_capture"   # ScreenCaptureKit
 DISPLAY_TYPE = 0                  # 0 = whole display
 FPS = 60
-HEVC = "com.apple.videotoolbox.videoencoder.ave.hevc"
-# Constant quality, 1s GOP: screen content is mostly static, but camera
-# glides need headroom or text smears mid-move.
-HEVC_SETTINGS = {"rate_control": "CRF", "quality": 85, "keyint_sec": 1,
-                 "profile": "main", "bframes": False}
+# ProRes 422 on the ProRes engine. The HEVC engine tops out near 49fps at
+# 6400x3600 (OBS silently skipped ~85% of frames), and H.264 caps at 4096.
+# ProRes benches ~270fps native. Cost: ~3 Gbps, fine for short takes.
+PRORES = "com.apple.videotoolbox.videoencoder.appleproreshw.422"
+PRORES_422 = int.from_bytes(b"apcn", "big")   # codec_type FourCC
+PRORES_SETTINGS = {"codec_type": PRORES_422}
+START_POLLS = 30                  # x 0.1s for a recording to go live
 RAW_DIR = pathlib.Path.home() / "Movies/GCT Reel/raw"
 OBS_PROFILES = pathlib.Path.home() / "Library/Application Support/obs-studio/basic/profiles"
 
@@ -78,7 +80,7 @@ def write_profile_ini(w: int, h: int) -> None:
                   "FPSType": 1, "FPSInt": FPS, "ScaleType": "lanczos"},
         "Output": {"Mode": "Advanced"},
         "AdvOut": {"RecType": "Standard", "RecFilePath": RAW_DIR,
-                   "RecFormat2": "mov", "RecEncoder": HEVC, "RecTracks": 1},
+                   "RecFormat2": "mov", "RecEncoder": PRORES, "RecTracks": 1},
     }
     for name, kv in sections.items():
         if not cfg.has_section(name):
@@ -87,7 +89,7 @@ def write_profile_ini(w: int, h: int) -> None:
             cfg.set(name, k, str(v))
     with ini.open("w") as f:
         cfg.write(f, space_around_delimiters=False)
-    (ini.parent / "recordEncoder.json").write_text(json.dumps(HEVC_SETTINGS))
+    (ini.parent / "recordEncoder.json").write_text(json.dumps(PRORES_SETTINGS))
 
 
 def ensure_profile(c: obs.ReqClient, w: int, h: int) -> None:
@@ -153,7 +155,13 @@ def rec(cmd: str) -> None:
     c = client()
     if cmd == "start":
         c.start_record()
-        return
+        # A bad encoder id fails async: OBS pops a modal (which then sits in
+        # every later take) and the scene rolls on with nothing recording.
+        for _ in range(START_POLLS):
+            if c.get_record_status().output_active:
+                return
+            time.sleep(0.1)
+        sys.exit("obs: recording did not start; dismiss OBS's alert, check its log")
     path = c.stop_record().output_path
     # StopRecord returns before the muxer writes the moov atom.
     while c.get_record_status().output_active:

@@ -1,7 +1,8 @@
 #!/bin/zsh
 # Tour: glide between districts at different zooms. Every pane stays live,
-# even at 0.1x. Assumes the city is staged (run 01-hero first).
+# even at 0.1x.
 source "${0:A:h}/lib.sh"
+need_city
 
 act fit-all dur=0.01
 hold 2

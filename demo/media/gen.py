@@ -50,6 +50,9 @@ MUSIC_DIR = REEL_DIR / "music"
 
 POLL_SECONDS = 15
 HTTP_ACCEPTED = 202
+HTTP_PAYMENT_REQUIRED = 402
+CREDIT_WAIT_SECONDS = 60
+CREDIT_RETRIES = 60      # an hour of waiting, then give up
 
 
 class Status(str, Enum):
@@ -90,11 +93,19 @@ def _request(url: str, body: dict | None = None) -> urllib.request.Request:
 
 
 def http_json(url: str, body: dict | None = None, timeout: int = 120) -> dict:
-    try:
-        with urllib.request.urlopen(_request(url, body), timeout=timeout) as resp:
-            return json.load(resp)
-    except urllib.error.HTTPError as err:
-        sys.exit(f"HTTP {err.code} {url}: {err.read().decode(errors='replace')[:800]}")
+    # Out of credit (402) waits for the account's auto top-up instead of
+    # dying mid-batch; every other error is fatal.
+    for _ in range(CREDIT_RETRIES):
+        try:
+            with urllib.request.urlopen(_request(url, body), timeout=timeout) as resp:
+                return json.load(resp)
+        except urllib.error.HTTPError as err:
+            msg = err.read().decode(errors="replace")[:800]
+            if err.code != HTTP_PAYMENT_REQUIRED:
+                sys.exit(f"HTTP {err.code} {url}: {msg}")
+            print(f"[credits] 402, waiting {CREDIT_WAIT_SECONDS}s for top-up", flush=True)
+            time.sleep(CREDIT_WAIT_SECONDS)
+    sys.exit(f"HTTP 402 {url}: no top-up after {CREDIT_RETRIES} tries")
 
 
 def http_bytes(url: str, timeout: int = 600) -> bytes:

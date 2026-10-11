@@ -1,7 +1,8 @@
 #!/bin/zsh
 # Navigation: directional focus moves (cmd+h/j/k/l) fly + fit the camera,
-# then the cmd+p switcher. Assumes the city is staged.
+# then the cmd+p switcher.
 source "${0:A:h}/lib.sh"
+need_city
 
 "$G" focus nvim
 hold 2

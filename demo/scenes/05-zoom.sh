@@ -1,7 +1,8 @@
 #!/bin/zsh
 # Focus zoom: cmd+z takes a pane to a SHARP local fullscreen (surface
-# reflows, no raster upscale) and back. Assumes the city is staged.
+# reflows, no raster upscale) and back.
 source "${0:A:h}/lib.sh"
+need_city
 
 act fit-all dur=0.01
 hold 2

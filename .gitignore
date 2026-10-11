@@ -3,3 +3,4 @@ lib/
 .build/
 build/
 Sources/CGhostty/ghostty.h
+__pycache__/

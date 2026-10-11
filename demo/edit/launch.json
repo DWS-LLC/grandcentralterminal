@@ -1,0 +1,513 @@
+{
+ "music": "music-glitch-128.mp3",
+ "music_in": 0,
+ "music_out": 67.55,
+ "accent": "#7aa2f7",
+ "_grid": "128 BPM: beat 0.46875s, bar 1.875s (B); drop at 7.55s. Cold open 1913/2026 in the quiet intro, every later cut on a bar. Music stops at music_out (32 bars after the drop); the end card plays in silence.",
+ "shots": [
+  {
+   "src": "stock:op-1913",
+   "in": 0,
+   "dur": 3.75,
+   "card": "1913"
+  },
+  {
+   "src": "stock:op-2026",
+   "in": 0,
+   "dur": 3.8,
+   "card": "2026",
+   "screen": {
+    "src": "take:hero-tokyo-night",
+    "in": 1.2,
+    "speed": 1.0,
+    "quad": [
+     810,
+     144,
+     2994,
+     144,
+     2994,
+     1374,
+     810,
+     1374
+    ],
+    "matte": true,
+    "holdouts": [
+     [
+      1216.7,
+      1348.3,
+      1280,
+      1337.3,
+      1383.3,
+      1340,
+      1423.3,
+      1396.7,
+      1350,
+      1406.7,
+      1241.7,
+      1401.7,
+      1216.7,
+      1376.7
+     ],
+     [
+      1143.3,
+      1460,
+      1143.3,
+      1380,
+      1156.7,
+      1360,
+      1180,
+      1356,
+      1216.7,
+      1356.7,
+      1216.7,
+      1366.7,
+      1183.3,
+      1366,
+      1161.7,
+      1371.7,
+      1153.3,
+      1386.7,
+      1153.3,
+      1460
+     ]
+    ],
+    "track": [
+     [
+      80,
+      200,
+      480,
+      800
+     ],
+     [
+      3200,
+      200,
+      560,
+      800
+     ],
+     [
+      0,
+      1200,
+      500,
+      600
+     ],
+     [
+      600,
+      1720,
+      520,
+      280
+     ]
+    ]
+   }
+  },
+  {
+   "src": "take:tour-tokyo-night",
+   "in": 4.0,
+   "speed": 3,
+   "dur": 3.75,
+   "caption": [
+    "an infinite canvas",
+    "every pane stays live, at every zoom"
+   ]
+  },
+  {
+   "src": "stock:op-face",
+   "in": 0.3,
+   "dur": 1.875
+  },
+  {
+   "src": "take:spawn-tokyo-night",
+   "in": 2.0,
+   "speed": 3,
+   "dur": 3.75,
+   "caption": [
+    "split anywhere",
+    "⌘⇧ H J K L · the camera follows"
+   ]
+  },
+  {
+   "src": "stock:op-keys",
+   "in": 0.6,
+   "dur": 1.875
+  },
+  {
+   "src": "take:nav-tokyo-night",
+   "in": 2.0,
+   "speed": 3,
+   "dur": 3.75,
+   "caption": [
+    "fly between panes",
+    "⌘ H J K L · ⌘P switcher"
+   ]
+  },
+  {
+   "src": "take:zoom-tokyo-night",
+   "in": 2.6,
+   "speed": 1.5,
+   "dur": 3.75,
+   "caption": [
+    "⌘Z focus zoom",
+    "sharp fullscreen · never upscaled"
+   ]
+  },
+  {
+   "src": "stock:splitflap",
+   "in": 0.2,
+   "dur": 1.875
+  },
+  {
+   "src": "take:shove-tokyo-night",
+   "in": 2.0,
+   "speed": 2.5,
+   "dur": 3.75,
+   "caption": [
+    "no overlaps. ever.",
+    "grow a pane · neighbors cascade"
+   ]
+  },
+  {
+   "src": "take:groups-tokyo-night",
+   "in": 2.0,
+   "speed": 2,
+   "dur": 3.75,
+   "caption": [
+    "groups + floating panes",
+    "⌘G group · ⌘F float"
+   ]
+  },
+  {
+   "src": "stock:op-leave",
+   "in": 0.5,
+   "dur": 3.75,
+   "caption": [
+    "close the app",
+    "the shells keep running"
+   ],
+   "screen": {
+    "src": "take:hero-tokyo-night",
+    "in": 8.0,
+    "speed": 1.0,
+    "quad": [
+     810,
+     144,
+     2994,
+     144,
+     2994,
+     1374,
+     810,
+     1374
+    ],
+    "matte": true,
+    "holdouts": [
+     [
+      1216.7,
+      1348.3,
+      1280,
+      1337.3,
+      1383.3,
+      1340,
+      1423.3,
+      1396.7,
+      1350,
+      1406.7,
+      1241.7,
+      1401.7,
+      1216.7,
+      1376.7
+     ],
+     [
+      1143.3,
+      1460,
+      1143.3,
+      1380,
+      1156.7,
+      1360,
+      1180,
+      1356,
+      1216.7,
+      1356.7,
+      1216.7,
+      1366.7,
+      1183.3,
+      1366,
+      1161.7,
+      1371.7,
+      1153.3,
+      1386.7,
+      1153.3,
+      1460
+     ]
+    ],
+    "track": [
+     [
+      0,
+      0,
+      500,
+      700
+     ],
+     [
+      3200,
+      200,
+      560,
+      800
+     ],
+     [
+      3300,
+      1100,
+      500,
+      700
+     ],
+     [
+      2600,
+      1750,
+      700,
+      250
+     ]
+    ]
+   }
+  },
+  {
+   "src": "stock:op-night",
+   "in": 0.0,
+   "dur": 1.875,
+   "screen": {
+    "src": "take:hero-tokyo-night",
+    "in": 10.0,
+    "speed": 1.0,
+    "quad": [
+     810,
+     144,
+     2994,
+     144,
+     2994,
+     1374,
+     810,
+     1374
+    ],
+    "matte": false,
+    "holdouts": [
+     [
+      1216.7,
+      1348.3,
+      1280,
+      1337.3,
+      1383.3,
+      1340,
+      1423.3,
+      1396.7,
+      1350,
+      1406.7,
+      1241.7,
+      1401.7,
+      1216.7,
+      1376.7
+     ],
+     [
+      1143.3,
+      1460,
+      1143.3,
+      1380,
+      1156.7,
+      1360,
+      1180,
+      1356,
+      1216.7,
+      1356.7,
+      1216.7,
+      1366.7,
+      1183.3,
+      1366,
+      1161.7,
+      1371.7,
+      1153.3,
+      1386.7,
+      1153.3,
+      1460
+     ]
+    ],
+    "track": [
+     [
+      0,
+      0,
+      500,
+      700
+     ],
+     [
+      3200,
+      200,
+      560,
+      800
+     ],
+     [
+      3300,
+      1100,
+      500,
+      700
+     ],
+     [
+      2600,
+      1750,
+      700,
+      250
+     ]
+    ]
+   }
+  },
+  {
+   "src": "take:persist-tokyo-night",
+   "in": 1.0,
+   "dur": 1.875,
+   "caption": [
+    "mid-build"
+   ]
+  },
+  {
+   "src": "black",
+   "dur": 0.46875,
+   "card": "⌘Q"
+  },
+  {
+   "src": "take:persist-tokyo-night",
+   "in": 8.0,
+   "speed": 1.2,
+   "dur": 3.28125,
+   "caption": [
+    "relaunch",
+    "the daemon never stopped · scrollback replays"
+   ]
+  },
+  {
+   "src": "stock:op-agents",
+   "in": 0.5,
+   "dur": 3.75,
+   "caption": [
+    "agents get their own panes"
+   ],
+   "screen": {
+    "src": "take:agent-tokyo-night",
+    "in": 20.0,
+    "speed": 6,
+    "quad": [
+     810,
+     144,
+     2994,
+     144,
+     2994,
+     1374,
+     810,
+     1374
+    ],
+    "matte": true,
+    "holdouts": [
+     [
+      1276.7,
+      1296.7,
+      1333.3,
+      1286.7,
+      1416.7,
+      1286.7,
+      1433.3,
+      1296.7,
+      1458.3,
+      1340.0,
+      1393.3,
+      1346.7,
+      1290.0,
+      1343.3,
+      1276.7,
+      1320.0
+     ],
+     [
+      1200.0,
+      1440.0,
+      1200.0,
+      1333.3,
+      1210.0,
+      1316.7,
+      1226.7,
+      1308.3,
+      1266.7,
+      1308.3,
+      1310.0,
+      1323.3,
+      1310.0,
+      1330.0,
+      1266.7,
+      1320.0,
+      1226.7,
+      1320.0,
+      1215.0,
+      1330.0,
+      1211.7,
+      1440.0
+     ]
+    ],
+    "track": [
+     [
+      80,
+      200,
+      480,
+      800
+     ],
+     [
+      3200,
+      200,
+      560,
+      800
+     ],
+     [
+      0,
+      1200,
+      500,
+      600
+     ],
+     [
+      600,
+      1720,
+      520,
+      280
+     ]
+    ]
+   }
+  },
+  {
+   "src": "take:agent-tokyo-night",
+   "in": 3.0,
+   "speed": 9,
+   "dur": 3.75,
+   "caption": [
+    "Claude Code drives GCT",
+    "gctd open · group · dump"
+   ]
+  },
+  {
+   "src": "take:reload-tokyo-night",
+   "in": 2.5,
+   "dur": 3.75,
+   "caption": [
+    "⌘⇧R",
+    "swap the whole rice, live"
+   ]
+  },
+  {
+   "src": "stock:op-concourse",
+   "in": 0.5,
+   "dur": 3.75
+  },
+  {
+   "src": "take:outro-tokyo-night",
+   "in": 1.5,
+   "speed": 1.2,
+   "dur": 5.625
+  },
+  {
+   "src": "black",
+   "dur": 3.0,
+   "title": [
+    "Grand Central Terminal",
+    "tmux, on an infinite canvas"
+   ],
+   "card_at": 0.2
+  }
+ ],
+ "_persist": "persist take 3.9-8.0s is the quit gap: it shows whatever is behind the demo app. Cut around it."
+}
