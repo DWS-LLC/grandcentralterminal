@@ -1,0 +1,53 @@
+# GCT demo config, rendered by launch.sh from rices/<rice>.env.
+appearance = "dark"
+allow-window-overlap = false
+snapping = true
+snapping-type = "edges"
+snap-radius = 16
+show-snap-guides = true
+snap-guide-color = "@ACCENT@"
+new-window-open-direction = "right"
+new-window-dim = "follows"
+move-focus-on-new-window = true
+camera-follows-focus-move = true
+camera-fits-focus-move = true
+scroll-on-terminal-hover = true
+zoom-min = 0.02
+zoom-max = 4
+# Slower than daily-driver 0.28s so keyboard flights read on camera.
+camera-animation-duration = 0.7
+
+[background]
+dark = "@CANVAS@"
+light = "@CANVAS@"
+
+[titlebar]
+background = "@TITLE_BG@"
+text = "@TITLE_FG@"
+font = "JetBrainsMono Nerd Font Mono"
+font-size = 13
+border-width = 4
+shadow-opacity = 0.6
+shadow-radius = 18
+
+[statusbar]
+enabled = true
+position = "top"
+components = "clock, gap, gctpanes, gap, cpu, mem, net, uptime"
+height = 28
+spacing = 10
+background = "@BAR_BG@"
+text = "@BAR_FG@"
+font = "JetBrainsMono Nerd Font Mono"
+font-size = 13
+opacity = 1
+
+[doom]
+enabled = true
+# ctrl+space belongs to the live canvas.
+toggle = "ctrl+alt+space"
+animation = "slide"
+animation-duration = 0.25
+screen = "main"
+start-hidden = false
+launch-at-login = false

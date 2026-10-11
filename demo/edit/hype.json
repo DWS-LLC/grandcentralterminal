@@ -1,0 +1,153 @@
+{
+  "music": "music-glitch-128.mp3",
+  "music_in": 0,
+  "accent": "#7aa2f7",
+  "_grid": "128 BPM: beat 0.46875s, bar 1.875s; hard drop at 7.55s. Intro = 7.55s of stock, every cut after lands on a beat.",
+  "shots": [
+    {
+      "src": "stock:splitflap",
+      "in": 0.2,
+      "dur": 3.75
+    },
+    {
+      "src": "stock:ceiling",
+      "in": 2.0,
+      "dur": 1.875
+    },
+    {
+      "src": "stock:concourse",
+      "in": 1.5,
+      "dur": 1.925
+    },
+    {
+      "src": "take:hero-tokyo-night",
+      "in": 2.8,
+      "dur": 5.625,
+      "caption": [
+        "an infinite canvas",
+        "for your terminals"
+      ]
+    },
+    {
+      "src": "take:tour-tokyo-night",
+      "in": 4.0,
+      "speed": 3,
+      "dur": 5.625,
+      "caption": [
+        "every pane stays live",
+        "at every zoom level"
+      ]
+    },
+    {
+      "src": "take:spawn-tokyo-night",
+      "in": 2.0,
+      "speed": 3,
+      "dur": 7.5,
+      "caption": [
+        "split anywhere",
+        "⌘⇧ H J K L · the camera follows"
+      ]
+    },
+    {
+      "src": "take:nav-tokyo-night",
+      "in": 2.0,
+      "speed": 3,
+      "dur": 5.625,
+      "caption": [
+        "fly between panes",
+        "⌘ H J K L · ⌘P switcher"
+      ]
+    },
+    {
+      "src": "take:zoom-tokyo-night",
+      "in": 2.6,
+      "speed": 1.5,
+      "dur": 4.6875,
+      "caption": [
+        "⌘Z focus zoom",
+        "sharp fullscreen · re-rendered, never upscaled"
+      ]
+    },
+    {
+      "src": "take:shove-tokyo-night",
+      "in": 2.0,
+      "speed": 2.5,
+      "dur": 5.625,
+      "caption": [
+        "no overlaps. ever.",
+        "grow a pane · neighbors cascade"
+      ]
+    },
+    {
+      "src": "take:groups-tokyo-night",
+      "in": 2.0,
+      "speed": 2,
+      "dur": 5.625,
+      "caption": [
+        "groups + floating panes",
+        "select · ⌘G group · ⌘F float"
+      ]
+    },
+    {
+      "src": "stock:trains",
+      "in": 0.5,
+      "dur": 1.875
+    },
+    {
+      "src": "take:persist-tokyo-night",
+      "in": 2.5,
+      "speed": 1.5,
+      "dur": 7.5,
+      "caption": [
+        "⌘Q mid-build",
+        "relaunch · the daemon never stopped"
+      ]
+    },
+    {
+      "src": "stock:commuters",
+      "in": 0.5,
+      "dur": 1.875,
+      "crop": [
+        0.0,
+        0.5,
+        1.0,
+        0.5
+      ]
+    },
+    {
+      "src": "take:agent-tokyo-night",
+      "in": 3.0,
+      "speed": 9,
+      "dur": 5.625,
+      "caption": [
+        "agents get their own panes",
+        "Claude Code drives GCT through gctd"
+      ]
+    },
+    {
+      "src": "take:reload-tokyo-night",
+      "in": 2.5,
+      "dur": 5.625,
+      "caption": [
+        "⌘⇧R",
+        "swap the whole rice, live"
+      ]
+    },
+    {
+      "src": "stock:clock",
+      "in": 0.0,
+      "dur": 1.875
+    },
+    {
+      "src": "take:outro-tokyo-night",
+      "in": 1.5,
+      "speed": 1.2,
+      "dur": 7.5,
+      "title": [
+        "Grand Central Terminal",
+        "tmux, on an infinite canvas"
+      ],
+      "card_at": 2.5
+    }
+  ]
+}

@@ -1,0 +1,103 @@
+{
+ "notes": "Run: source ~/.zprofile && python3 -I demo/media/gen.py shot <id>... Outputs: ~/Movies/GCT Reel/{stock,stock/keyframes,music}. frames.first/last = file path or image shot id.",
+ "shots": [
+  {
+   "id": "concourse",
+   "kind": "video",
+   "model": "google/veo-3.1-fast",
+   "duration": 4,
+   "resolution": "4K",
+   "frames": {},
+   "prompt": "Slow, steady dolly push-in across the main concourse of Grand Central Terminal in New York at golden hour. Low warm sun pours through the tall arched windows, forming dramatic volumetric light shafts through faint haze that fall across the polished marble floor. Beaux-Arts stone, brass details, the vast vaulted ceiling above. A few small distant figures cross the light with their backs to camera, softly motion-blurred. 35mm cinema lens, rich warm highlights, deep shadows, natural film grain, photoreal. No legible text, no signage, no logos."
+  },
+  {
+   "id": "splitflap-key",
+   "kind": "image",
+   "model": "google/gemini-3-pro-image",
+   "resolution": "4K",
+   "prompt": "Cinematic photograph of a vintage mechanical split-flap departure board in a grand old railway terminal, seen nearly straight-on with only a slight angle. Matte black flaps, each character on its own flap module with a thin horizontal split line, crisp warm-white bold sans-serif capital letters. The top row spells exactly three words, GRAND CENTRAL TERMINAL, one capital letter per flap: G, R, A, N, D, blank flap, C, E, N, T, R, A, L, blank flap, T, E, R, M, I, N, A, L. Every letter is a clean, correct uppercase character; the word CENTRAL has a clear capital E. The rows below are blank black flaps except a right-hand time column showing 9:41, 10:05 and 10:22. Shallow depth of field: the top row tack-sharp, lower rows falling softly out of focus. Warm tungsten ambient light, subtle glints on the flaps, dark brass frame, dim background bokeh of a Beaux-Arts concourse with no people. 16:9, 85mm lens, photoreal. No other text, no logos.",
+   "fix": {
+    "note": "Take 2 rendered CENTRRAL; final = edit pass on it. Re-run: gen.py image splitflap-key --ref <take2> \"<prompt>\"",
+    "ref": "~/Movies/GCT Reel/stock/keyframes/rejected-splitflap-key-take2.jpg",
+    "prompt": "Edit this photograph. The top row of the split-flap board currently reads GRAND CENTRRAL TERMINAL, with one R too many. Correct it so the top row reads exactly GRAND CENTRAL TERMINAL: the middle word must be C-E-N-T-R-A-L, seven letters, a single R. Re-space that word's flaps evenly so the row looks natural. Keep everything else identical: same board, font, lighting, angle, times 9:41 10:05 10:22, background and depth of field."
+   }
+  },
+  {
+   "id": "splitflap-first",
+   "kind": "image",
+   "model": "google/gemini-3-pro-image",
+   "resolution": "4K",
+   "refs": [
+    "splitflap-key"
+   ],
+   "prompt": "Edit this photograph. Make every flap on the split-flap board blank: remove all letters and all numbers so every module shows a plain matte black flap, a few flaps in the top row caught mid-flip with slight motion blur. Keep everything else identical: same board, frame, flap grid, lighting, camera angle, background and depth of field."
+  },
+  {
+   "id": "splitflap",
+   "kind": "video",
+   "model": "google/veo-3.1-fast",
+   "duration": 4,
+   "resolution": "4K",
+   "frames": {
+    "first": "splitflap-first",
+    "last": "splitflap-key"
+   },
+   "prompt": "Close-up of a vintage mechanical split-flap departure board. The black flaps cascade and flip rapidly in a rippling wave across the board, characters blurring as they clatter past, then each module slows and settles one by one into the final display. Locked-off camera, shallow depth of field, warm tungsten light glinting off the flaps. Photoreal, cinematic.",
+   "note": "Veo requires a first_frame whenever last_frame is set."
+  },
+  {
+   "id": "ceiling",
+   "kind": "video",
+   "model": "google/veo-3.1-fast",
+   "duration": 4,
+   "resolution": "4K",
+   "frames": {},
+   "prompt": "Slow tilt up with a gentle pull-back inside Grand Central Terminal's main concourse: the shot begins on a tall arched window glowing with soft daylight, then rises to reveal the vast barrel-vaulted ceiling painted turquoise green with gold celestial zodiac constellations, figures and twinkling stars. Faint haze, majestic scale, smooth gimbal move. 24mm lens, photoreal, cinematic grade. No people visible, no text, no logos."
+  },
+  {
+   "id": "trains",
+   "kind": "video",
+   "model": "google/veo-3.1-fast",
+   "duration": 4,
+   "resolution": "4K",
+   "frames": {},
+   "prompt": "A vintage passenger train slowly departs from a cavernous early-1900s terminal train shed: riveted steel trusses, arched glass skylights, stone platforms, warm sodium lamps and cool daylight shafts through light haze. The train's rear car with glowing red tail lights recedes along the platform into the distance. Low angle from the platform edge, locked-off camera, shallow depth of field, photoreal, cinematic 35mm. Absolutely no signs, no text, no letters, no numbers, no logos, no screens, no people facing camera."
+  },
+  {
+   "id": "commuters",
+   "kind": "video",
+   "model": "google/veo-3.1-fast",
+   "duration": 4,
+   "resolution": "4K",
+   "frames": {},
+   "prompt": "High-angle time-lapse from a balcony overlooking Grand Central Terminal's main concourse: hundreds of commuters stream across the marble floor as fluid motion-blurred trails, the round information booth with its gold clock anchoring the center of frame, daylight shafts slowly shifting through the arched windows. Static camera, long-exposure streaks against crisp, sharp architecture, photoreal. Faces are unrecognizable blurs, no one faces camera, no text, no logos."
+  },
+  {
+   "id": "clock",
+   "kind": "video",
+   "model": "google/veo-3.1-fast",
+   "duration": 4,
+   "resolution": "4K",
+   "frames": {},
+   "prompt": "Slow, smooth push-in on the iconic four-faced brass and opal-glass clock atop the information booth in Grand Central Terminal. Warm glowing clock faces, polished brass catching the light, the concourse softly out of focus behind it with bokeh from chandeliers and arched windows. 85mm lens, shallow depth of field, photoreal, cinematic grade. No legible text, no logos, no people facing camera."
+  },
+  {
+   "id": "music-drive-124",
+   "kind": "music",
+   "model": "google/lyria-3-pro-preview",
+   "prompt": "Instrumental only, no vocals. An 80-second modern electronic track for a tech product launch video, 124 BPM, 4/4, confident and driving. 0:00-0:08: clean, tight build: filtered synth arpeggio opening up, rising riser and snare roll. At exactly 0:08: a hard, punchy drop: four-on-the-floor kick, tight claps, crisp hi-hats, deep sidechained bass, bright synth stabs. Punchy percussion with clear transients in strict 4- and 8-bar phrases so it is easy to cut picture to. Short breakdown around 0:45, second drop, then resolve cleanly on a final tonic hit with a short tail. Polished, modern mix."
+  },
+  {
+   "id": "music-synthwave-110",
+   "kind": "music",
+   "model": "google/lyria-3-pro-preview",
+   "prompt": "Instrumental only, no vocals. An 80-second darker synthwave track for a tech product video, 110 BPM, 4/4, moody and cinematic but confident. 0:00-0:08: brooding analog pad swell and pulsing filtered octave bass building tension. At exactly 0:08: a hard drop into a full groove: big gated-reverb snare, punchy kick, driving octave bassline, dark analog lead. Clear, cuttable percussion in strict 4- and 8-bar phrases. Brief breakdown mid-track, return of the groove, then resolve cleanly on a final sustained chord that rings out. Polished modern mix."
+  },
+  {
+   "id": "music-glitch-128",
+   "kind": "music",
+   "model": "google/lyria-3-pro-preview",
+   "prompt": "Instrumental only, no vocals. An 80-second minimal percussive glitch electronic track for a tech product video, 128 BPM, 4/4, precise and clever. 0:00-0:08: sparse clicks, ticks and micro-edited percussion building with a rising filter. At exactly 0:08: a hard drop: tight sub-heavy kick, stuttered glitch hats, chopped percussion, deep sub bass, minimal plucked synth motif. Very punchy, dry, cuttable transients in strict 4- and 8-bar phrases. Short breakdown mid-track, return, then a clean, decisive ending on a single final hit."
+  }
+ ]
+}

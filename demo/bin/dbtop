@@ -1,0 +1,3 @@
+#!/bin/zsh
+# btop with the demo rice config (themed, no process list on camera).
+XDG_CONFIG_HOME="$HOME/Library/Application Support/GCT Demo/xdg" exec btop "$@"
