@@ -434,6 +434,20 @@ final class Server {
             lock.unlock()
             broadcast(tag: .paneFocus, json: req)
 
+        case .canvasCommand:
+            // Scripted camera/action: validate the target pane, then relay
+            // verbatim. The canvas owns the semantics.
+            guard let req: CanvasCommand = frame.decode() else { return }
+            lock.lock()
+            let known = req.pane.map { panes[$0] != nil } ?? true
+            lock.unlock()
+            guard known else {
+                _ = remote.conn.send(tag: .errorReply,
+                                     json: ErrorReply(message: "no such pane"))
+                return
+            }
+            broadcast(tag: .canvasRelay, json: req)
+
         default:
             break
         }

@@ -31,6 +31,19 @@ struct Camera: Equatable {
                          y: screenPoint.y - anchor.y * scale)
     }
 
+    // Interpolate toward `to` (t in 0...1) in world-center + log-scale
+    // space: long zooms keep the viewport center on a straight line and
+    // zoom at a constant perceived rate, instead of bowing sideways.
+    func blend(to: Camera, t: CGFloat, viewport: CGSize) -> Camera {
+        let mid = CGPoint(x: viewport.width / 2, y: viewport.height / 2)
+        let c0 = screenToWorld(mid)
+        let c1 = to.screenToWorld(mid)
+        let s = exp(log(scale) + (log(to.scale) - log(scale)) * t)
+        let c = CGPoint(x: c0.x + (c1.x - c0.x) * t, y: c0.y + (c1.y - c0.y) * t)
+        return Camera(offset: CGPoint(x: mid.x - c.x * s, y: mid.y - c.y * s),
+                      scale: s)
+    }
+
     func transform() -> CATransform3D {
         let t = CGAffineTransform(translationX: offset.x, y: offset.y)
             .scaledBy(x: scale, y: scale)

@@ -13,8 +13,8 @@ import AppKit
 
 enum StatusBarLibrary {
     static var dir: URL {
-        URL(fileURLWithPath: (NSHomeDirectory() as NSString)
-            .appendingPathComponent(".config/gct/statusbar"))
+        URL(fileURLWithPath: (GCTConfig.dir as NSString)
+            .appendingPathComponent("statusbar"))
     }
 
     /// Create the folder on first launch, with a sample clock so an

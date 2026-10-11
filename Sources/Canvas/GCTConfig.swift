@@ -439,6 +439,8 @@ struct GCTConfig {
     // per-pane cmd-+/- stays sharp.
     var zoomMin: CGFloat = 0.03
     var zoomMax: CGFloat = 4.0
+    // Camera glide length (focus moves, fit-all, gctd camera default).
+    var cameraAnimDuration: Double = 0.28
     // Screen-space overlay bar of xbar-compatible plugin components.
     // Off by default; top/bottom edge; components lists plugin
     // basenames with `gap` spacers absorbing leftover width.
@@ -454,8 +456,11 @@ struct GCTConfig {
     var statusbarOpacity: CGFloat = 1
     var doom = GCTDoom()
 
-    static let path: String = (NSHomeDirectory() as NSString)
-        .appendingPathComponent(".config/gct/config.toml")
+    // GCT_CONFIG_DIR swaps the whole config dir (config.toml + statusbar/)
+    // so a demo/test canvas runs beside the live one. Unset = ~/.config/gct.
+    static let dir: String = ProcessInfo.processInfo.environment["GCT_CONFIG_DIR"]
+        ?? (NSHomeDirectory() as NSString).appendingPathComponent(".config/gct")
+    static let path: String = (dir as NSString).appendingPathComponent("config.toml")
 
     // Read the config file, creating it with defaults if missing.
     static func load() -> GCTConfig {
@@ -537,6 +542,10 @@ struct GCTConfig {
             cfg.zoomMax = CGFloat(n)
         }
         if cfg.zoomMin > cfg.zoomMax { cfg.zoomMin = min(cfg.zoomMax, 1.0) }
+        if let s = root["camera-animation-duration"], let n = Double(s),
+           (0.05...10.0).contains(n) {
+            cfg.cameraAnimDuration = n
+        }
         let sb = t["statusbar"] ?? [:]
         if let v = sb["enabled"] {
             cfg.statusbarEnabled = v.lowercased() == "true"
@@ -735,6 +744,9 @@ struct GCTConfig {
     # magnified (slightly soft); per-pane cmd-+/- stays razor sharp.
     zoom-min = 0.03
     zoom-max = 4
+    # Camera glide in seconds (focus moves, fit-all, switcher jumps),
+    # 0.05-10. Slow it down for screen recordings.
+    camera-animation-duration = 0.28
 
     [background]
     # Canvas background per mode. Hex like "#1a1b26" (alpha 1), or with

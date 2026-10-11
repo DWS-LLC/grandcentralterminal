@@ -95,6 +95,11 @@ extension CanvasView: CanvasConnDelegate {
             centerOnPane(id)
         }
     }
+
+    // Scripted camera/action (gctd camera / gctd do).
+    func connCanvasCommand(_ cmd: CanvasCommand) {
+        runCanvasCommand(cmd)
+    }
     func connClosed() {
         // Daemon died: try to restart it and reconnect.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in

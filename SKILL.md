@@ -82,6 +82,8 @@ individual without interrupting it. Close the group when the swarm lands.
 gctd rename $ID name=server
 gctd group $ID1 $ID2 name=feature color=#3b82f6
 gctd focus $ID          # focus + center the pane on the canvas
+gctd camera $ID zoom=0.5 dur=2   # glide the camera (or x= y=)
+gctd do fit-all         # any keybind action by config name
 gctd ungroup <group>    # panes survive
 gctd close $ID
 ```

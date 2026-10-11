@@ -30,24 +30,9 @@ final class GhosttyApp: @unchecked Sendable {
 
         _ = ghostty_init(0, nil)
 
-        let cfg = ghostty_config_new()
-        // Base look first, then the user's own ghostty config wins on
-        // every key it sets (config-file includes included below).
-        ghostty_config_load_file(cfg, GhosttyApp.baseConfigPath())
-        ghostty_config_load_default_files(cfg)
-        ghostty_config_load_recursive_files(cfg)
-        ghostty_config_finalize(cfg)
+        let cfg = GhosttyApp.loadConfig()
         config = UnsafeMutableRawPointer(cfg)
-
-        var color = ghostty_config_color_s()
-        let bgKey = "background"
-        if ghostty_config_get(cfg, &color, bgKey, UInt(bgKey.utf8.count)) {
-            background = NSColor(
-                red: CGFloat(color.r) / 255,
-                green: CGFloat(color.g) / 255,
-                blue: CGFloat(color.b) / 255,
-                alpha: 1)
-        }
+        background = GhosttyApp.background(of: cfg)
 
         var runtime = ghostty_runtime_config_s()
         runtime.userdata = Unmanaged.passUnretained(self).toOpaque()
@@ -88,6 +73,38 @@ final class GhosttyApp: @unchecked Sendable {
             self?.pump()
         }
         RunLoop.main.add(timer, forMode: .common)
+    }
+
+    // Base look first, then the user's own ghostty config wins on every
+    // key it sets (config-file includes included below).
+    private static func loadConfig() -> ghostty_config_t? {
+        let cfg = ghostty_config_new()
+        ghostty_config_load_file(cfg, GhosttyApp.baseConfigPath())
+        ghostty_config_load_default_files(cfg)
+        ghostty_config_load_recursive_files(cfg)
+        ghostty_config_finalize(cfg)
+        return cfg
+    }
+
+    private static func background(of cfg: ghostty_config_t?) -> NSColor? {
+        var color = ghostty_config_color_s()
+        let bgKey = "background"
+        guard ghostty_config_get(cfg, &color, bgKey, UInt(bgKey.utf8.count)) else {
+            return nil
+        }
+        return NSColor(red: CGFloat(color.r) / 255, green: CGFloat(color.g) / 255,
+                       blue: CGFloat(color.b) / 255, alpha: 1)
+    }
+
+    // Re-read the ghostty config into every live surface (the app update
+    // fans out), so reload-config swaps palette + font, not just chrome.
+    func reloadConfig() {
+        guard let app else { return }
+        let cfg = GhosttyApp.loadConfig()
+        ghostty_app_update_config(app, cfg)
+        if let config { ghostty_config_free(config) }
+        config = UnsafeMutableRawPointer(cfg)
+        background = GhosttyApp.background(of: cfg)
     }
 
     deinit {

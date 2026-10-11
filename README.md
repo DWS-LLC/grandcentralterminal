@@ -139,6 +139,8 @@ gctd send $ID "make test"            # type into the pane (+ newline)
 gctd rename $ID name=server
 gctd group $A $B name=feat color=#3b82f6
 gctd focus $ID                       # focus + center on the canvas
+gctd camera $ID zoom=0.4 dur=3       # glide to a pane (or x= y=) at a zoom
+gctd do fit-all [$ID] [dur=4]       # run any keybind action, focusing $ID first
 gctd close $ID
 ```
 
@@ -321,6 +323,9 @@ scroll-on-terminal-hover = true
 # terminal texture magnifies (slightly soft); per-pane cmd-+/- stays sharp.
 zoom-min = 0.03
 zoom-max = 4
+# Camera glide in seconds (focus moves, fit-all, switcher jumps),
+# 0.05-10. Slow it down for screen recordings.
+camera-animation-duration = 0.28
 
 # Canvas background per mode. Hex like "#1a1b26" (alpha 1), or with alpha
 # like "#1a1b2680" / "#1234" — alpha < 1 makes the canvas transparent,

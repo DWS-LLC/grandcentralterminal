@@ -123,6 +123,29 @@ func flags(_ args: [String]) -> [String: String] {
     return out
 }
 
+// "x,y,w,h" in world points, e.g. "0,0,900,560".
+func parseRect(_ raw: String) -> Rect {
+    let n = raw.split(separator: ",").compactMap { Double($0) }
+    guard n.count == 4 else { die("rect must be x,y,w,h, got \(raw)") }
+    return Rect(x: n[0], y: n[1], w: n[2], h: n[3])
+}
+
+// Optional numeric flag; present-but-garbage dies instead of guessing.
+func number(_ f: [String: String], _ key: String) -> Double? {
+    guard let raw = f[key] else { return nil }
+    guard let n = Double(raw) else { die("\(key) must be a number, got \(raw)") }
+    return n
+}
+
+// Relay a scripted canvas command; like focus, the broadcast IS the
+// delivery, so only an errorReply (bad pane) is surfaced.
+func sendCanvas(_ c: GCTClient, _ cmd: CanvasCommand) -> Never {
+    _ = c.conn.send(tag: .canvasCommand, json: cmd)
+    if let r = c.nextReply(), r.tag == .errorReply,
+       let e: ErrorReply = r.decode() { die(e.message) }
+    exit(0)
+}
+
 // MARK: - ANSI scrubber (for `dump --strip-ansi`)
 
 func stripANSI(_ s: String) -> String {
@@ -183,8 +206,9 @@ func usage() -> Never {
 
           Agent/harness surface (prefer GCT panes for background tasks:
           grouped, no time limits, user-inspectable on the canvas):
-            open [cwd=..] [name=..] [cmd=..] [group=..]
+            open [cwd=..] [name=..] [cmd=..] [group=..] [rect=x,y,w,h]
                                       open a pane beside focused/origin, print its id
+            move <pane> rect=x,y,w,h  place a pane (overlap rules still apply)
             list                      panes + groups, one per line
             dump <pane> [limit=N] [--strip-ansi]
                                       scrollback snapshot (id prefix, name, or self)
@@ -196,6 +220,10 @@ func usage() -> Never {
                                       group panes (2+), print group id
             ungroup <group>           dissolve a group (panes survive)
             focus <pane>              focus + center a pane on the canvas
+            camera [pane] [x=.. y=..] [zoom=..] [dur=..]
+                                      glide the camera to a world point or pane
+            do <action> [pane] [dur=..]
+                                      run a keybind action (fit-all, zoom-pane..)
             agent-setup print|install|uninstall|context
                                       skill install + live pane context for hooks
                                       (--harness=claude,codex,opencode,cursor,cursor-agents;
@@ -222,7 +250,8 @@ guard let verb = args.first else {
     let fm = FileManager.default
     let legacyDir = (NSHomeDirectory() as NSString)
         .appendingPathComponent("Library/Application Support/tmuxInfiniteCanvas")
-    if !fm.fileExists(atPath: statePath),
+    // Isolated instances (GCT_STATE set) never inherit the legacy layout.
+    if env["GCT_STATE"] == nil, !fm.fileExists(atPath: statePath),
        fm.fileExists(atPath: legacyDir + "/state.json") {
         try? fm.createDirectory(atPath: supportDir, withIntermediateDirectories: true)
         try? fm.copyItem(atPath: legacyDir + "/state.json", toPath: statePath)
@@ -283,8 +312,13 @@ case "open":
     }
     // Explicit group= name/id joins that group instead (daemon admits).
     if let gq = f["group"], let g = resolveGroup(w, gq) { join = g.id }
+    // Explicit rect=x,y,w,h (world points) pins the spot; still resolved.
+    if let r = f["rect"] { anchor = parseRect(r) }
+    // No cwd= opens where the caller stands (agents expect `cd repo; gctd
+    // open cmd=make` to build the repo, not $HOME).
+    let cwd = f["cwd"] ?? FileManager.default.currentDirectoryPath
     _ = c.conn.send(tag: .createPane, json: CreatePane(
-        rect: anchor, cwd: f["cwd"], name: f["name"], command: f["cmd"],
+        rect: anchor, cwd: cwd, name: f["name"], command: f["cmd"],
         joinGroup: join, joinDirection: join == nil ? nil : "right"))
     // Answer is a paneCreated broadcast; errorReply on spawn failure.
     // Tag-check first: a stray broadcast decodes as nothing, not as the
@@ -416,6 +450,51 @@ case "focus":
     if let r = c.nextReply(), r.tag == .errorReply,
        let e: ErrorReply = r.decode() { die(e.message) }
     exit(0)
+
+case "move":
+    // gctd move <pane> rect=x,y,w,h: place a pane (daemon-resolved, so
+    // the no-overlap policy still holds). Scene staging for demos.
+    guard rest.count == 2, rest[1].hasPrefix("rect=") else { die("move <pane> rect=x,y,w,h") }
+    let c = needClient()
+    guard let w = c.welcome() else { die("no reply from daemon") }
+    guard let pane = resolvePane(w, rest[0]) else { die("no such pane \(rest[0])") }
+    let rect = parseRect(String(rest[1].dropFirst("rect=".count)))
+    _ = c.conn.send(tag: .movePane, json: MovePane(id: pane.id, rect: rect))
+    exit(0)
+
+case "camera":
+    // gctd camera [pane] [x=.. y=..] [zoom=..] [dur=..]
+    // e.g. `gctd camera build zoom=0.4 dur=3` glides to build's center.
+    let positional = rest.filter { !$0.contains("=") }
+    guard positional.count <= 1 else { die("camera [pane] [x=..] [y=..] [zoom=..] [dur=..]") }
+    let f = flags(rest.filter { $0.contains("=") })
+    let c = needClient()
+    var cmd = CanvasCommand(verb: .camera,
+                            x: number(f, "x"), y: number(f, "y"),
+                            zoom: number(f, "zoom"), duration: number(f, "dur"))
+    if let raw = positional.first {
+        guard let w = c.welcome() else { die("no reply from daemon") }
+        guard let pane = resolvePane(w, raw) else { die("no such pane \(raw)") }
+        cmd.pane = pane.id
+    }
+    sendCanvas(c, cmd)
+
+case "do":
+    // gctd do <action> [pane] [dur=..]: run a keybind action (config name, e.g.
+    // fit-all, zoom-pane, open-new-window-right), focusing pane first.
+    // dur= paces the action's camera move, e.g. `do fit-all dur=4`.
+    let positional = rest.filter { !$0.contains("=") }
+    guard (1...2).contains(positional.count) else { die("do <action> [pane] [dur=..]") }
+    let f = flags(rest.filter { $0.contains("=") })
+    let c = needClient()
+    var cmd = CanvasCommand(verb: .action, action: positional[0],
+                            duration: number(f, "dur"))
+    if positional.count == 2 {
+        guard let w = c.welcome() else { die("no reply from daemon") }
+        guard let pane = resolvePane(w, positional[1]) else { die("no such pane \(positional[1])") }
+        cmd.pane = pane.id
+    }
+    sendCanvas(c, cmd)
 
 default:
     // runAgentSetup exits on every path, but the compiler can't see

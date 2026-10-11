@@ -438,6 +438,7 @@ final class CanvasView: NSView {
     func reloadConfig() {
         let oldDoomToggle = GCTConfig.current.doom.toggle
         GCTConfig.current = GCTConfig.load()
+        ghosttyApp?.reloadConfig()
         applyTheme()
         syncStatusBarToConfig()
         if GCTConfig.current.doom.toggle?.key != oldDoomToggle?.key ||
@@ -2590,31 +2591,78 @@ final class CanvasView: NSView {
             scale: fit))
     }
 
-    private var cameraAnim: (Timer, Camera, Camera, Double)?
+    // (timer, from, to, start time, duration seconds)
+    private var cameraAnim: (Timer, Camera, Camera, Double, Double)?
+    // Set only while a scripted action runs (gctd do .. dur=), so the
+    // action's own camera move takes the script's pacing.
+    private var scriptedAnimDuration: Double?
 
-    func animateCamera(to target: Camera) {
+    // Duration nil = config camera-animation-duration (0.28s default).
+    func animateCamera(to target: Camera, duration: Double? = nil) {
         cameraAnim?.0.invalidate()
         let from = camera
         let timer = Timer(timeInterval: 1.0 / 120.0, repeats: true) { [weak self] _ in
             self?.stepCamera()
         }
         RunLoop.main.add(timer, forMode: .common)
-        cameraAnim = (timer, from, target, CACurrentMediaTime())
+        let secs = max(duration ?? scriptedAnimDuration
+                       ?? GCTConfig.current.cameraAnimDuration, 0.01)
+        cameraAnim = (timer, from, target, CACurrentMediaTime(), secs)
     }
 
     private func stepCamera() {
         guard let anim = cameraAnim else { return }
-        let t = min((CACurrentMediaTime() - anim.3) / 0.28, 1)
+        let t = min((CACurrentMediaTime() - anim.3) / anim.4, 1)
         let ease = t < 0.5 ? 2 * t * t : 1 - pow(-2 * t + 2, 2) / 2
-        camera = Camera(
-            offset: CGPoint(x: anim.1.offset.x + (anim.2.offset.x - anim.1.offset.x) * ease,
-                            y: anim.1.offset.y + (anim.2.offset.y - anim.1.offset.y) * ease),
-            scale: anim.1.scale + (anim.2.scale - anim.1.scale) * ease)
+        camera = anim.1.blend(to: anim.2, t: ease, viewport: bounds.size)
         applyCamera()
         if t >= 1 {
             anim.0.invalidate()
             cameraAnim = nil
         }
+    }
+
+    // MARK: Scripted control (gctd camera / gctd do)
+
+    func runCanvasCommand(_ cmd: CanvasCommand) {
+        switch cmd.verb {
+        case .camera: scriptedCamera(cmd)
+        case .action: scriptedAction(cmd)
+        }
+    }
+
+    // Glide so the target world point sits at the viewport center:
+    // pane center when given, else x/y, else the current center.
+    // e.g. `gctd camera zoom=0.1 dur=4` pulls back in place over 4s.
+    private func scriptedCamera(_ cmd: CanvasCommand) {
+        _ = exitZoomRestore()
+
+        let screen = viewportSize
+        let mid = CGPoint(x: screen.width / 2, y: screen.height / 2)
+        var center = camera.screenToWorld(mid)
+        if let id = cmd.pane, let pane = panes[id] {
+            center = CGPoint(x: pane.frame.midX, y: pane.frame.midY)
+        }
+        center.x = cmd.x ?? center.x
+        center.y = cmd.y ?? center.y
+        let scale = min(max(cmd.zoom.map { CGFloat($0) } ?? camera.scale,
+                            Camera.minScale), Camera.maxScale)
+
+        animateCamera(to: Camera(
+            offset: CGPoint(x: mid.x - center.x * scale, y: mid.y - center.y * scale),
+            scale: scale), duration: cmd.duration)
+    }
+
+    // Same path as the keybind; the pane (if any) takes focus first.
+    private func scriptedAction(_ cmd: CanvasCommand) {
+        guard let raw = cmd.action, let action = GCTAction(rawValue: raw) else {
+            NSLog("[gct] gctd do: unknown action \(cmd.action ?? "nil")")
+            return
+        }
+        if let id = cmd.pane { focusPane(id) }
+        scriptedAnimDuration = cmd.duration
+        perform(action)
+        scriptedAnimDuration = nil
     }
 
     // MARK: Switcher
@@ -2686,7 +2734,9 @@ enum NSRectOverlap {
 enum CanvasPaths {
     static let supportDir = (NSHomeDirectory() as NSString)
         .appendingPathComponent("Library/Application Support/Grand Central Terminal")
-    static let sockPath = supportDir + "/daemon.sock"
+    // GCT_SOCK matches the daemon's override (inherited by the gctd we spawn).
+    static let sockPath = ProcessInfo.processInfo.environment["GCT_SOCK"]
+        ?? supportDir + "/daemon.sock"
     static let daemonPath = supportDir + "/bin/gctd"
 }
 

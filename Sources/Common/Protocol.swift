@@ -29,6 +29,7 @@ public enum MsgTag: UInt8 {
     case setFloating = 17 // JSON SetFloating
     case dumpPane    = 18 // JSON DumpPane (read-only ring snapshot)
     case focusPane   = 19 // JSON PaneRef (agent asks canvas to focus)
+    case canvasCommand = 20 // JSON CanvasCommand (scripted camera/action)
 
     // daemon -> client
     case welcome     = 64 // JSON Welcome
@@ -43,6 +44,7 @@ public enum MsgTag: UInt8 {
     case groupExit     = 73 // JSON GroupRef
     case paneDump      = 74 // JSON PaneDump (reply to dumpPane)
     case paneFocus     = 75 // JSON PaneRef (daemon -> canvas: focus this)
+    case canvasRelay   = 76 // JSON CanvasCommand (daemon -> canvas: run this)
 }
 
 public struct PaneID: Hashable, Sendable, CustomStringConvertible {
@@ -392,5 +394,32 @@ public struct PaneDump: Codable, Sendable {
                 data: String, base64: Bool) {
         self.id = id; self.bytes = bytes; self.truncated = truncated
         self.dropped = dropped; self.data = data; self.base64 = base64
+    }
+}
+
+// MARK: - Scripted canvas control
+//
+// `gctd camera` / `gctd do`: the daemon validates the pane and relays the
+// command to every canvas untouched. The canvas runs it exactly like the
+// matching gesture or keybind, so scripted demos show the real behavior.
+
+public enum CanvasVerb: String, Codable, Sendable {
+    case camera // animate to (x, y, zoom) or a pane's center
+    case action // run a keybind action by name, e.g. "fit-all"
+}
+
+public struct CanvasCommand: Codable, Sendable {
+    public var verb: CanvasVerb
+    public var pane: PaneID?      // camera target / focus before action
+    public var action: String?    // GCTAction raw value for .action
+    public var x: Double?         // camera world center; nil = keep
+    public var y: Double?
+    public var zoom: Double?      // camera scale; nil = keep
+    public var duration: Double?  // seconds; nil = config default
+    public init(verb: CanvasVerb, pane: PaneID? = nil, action: String? = nil,
+                x: Double? = nil, y: Double? = nil, zoom: Double? = nil,
+                duration: Double? = nil) {
+        self.verb = verb; self.pane = pane; self.action = action
+        self.x = x; self.y = y; self.zoom = zoom; self.duration = duration
     }
 }

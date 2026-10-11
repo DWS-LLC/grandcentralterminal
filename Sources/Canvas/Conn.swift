@@ -13,6 +13,7 @@ protocol CanvasConnDelegate: AnyObject {
     func connGroupMeta(_ meta: GroupMeta)
     func connGroupExit(_ id: GroupID)
     func connFocusPane(_ id: PaneID)
+    func connCanvasCommand(_ cmd: CanvasCommand)
     func connClosed()
 }
 
@@ -63,6 +64,8 @@ final class CanvasConn: @unchecked Sendable {
             break // agent-CLI only; the canvas never requests dumps
         case .paneFocus:
             if let r: PaneRef = frame.decode() { delegate?.connFocusPane(r.id) }
+        case .canvasRelay:
+            if let c: CanvasCommand = frame.decode() { delegate?.connCanvasCommand(c) }
         default:
             break
         }
