@@ -14,11 +14,24 @@ and everything reattaches, scrollback replayed.
 </p>
 <p align="center"><a href="docs/media/gct-reel.mp4"><b>▶ Watch the reel</b></a> · 72s, 1080p60</p>
 
-![The canvas zoomed out: a city of live panes, grouped by color](docs/media/canvas.jpg)
+## Download
 
-| Groups + floating panes | Agents drive their own panes |
-|---|---|
-| ![Groups](docs/media/groups.jpg) | ![Agents](docs/media/agents.jpg) |
+Grab the latest release from
+[forgejo](https://git.dubey.io/dubey/grandcentralterminal/releases):
+
+- **macOS (arm64)**: `GrandCentralTerminal-<ver>-macos-arm64.zip` —
+  unzip, drag `Grand Central Terminal.app` to `/Applications`, open.
+  Signed with a Developer ID + notarized, so Gatekeeper passes with
+  no warnings.
+- **Linux (x86_64/arm64)**: `gctd-<ver>-linux-<arch>.tar.gz` — the
+  headless daemon + `ptyexec`, fully static (runs on any distro):
+
+```sh
+tar -xzf gctd-<ver>-linux-<arch>.tar.gz -C ~/.local/bin
+gctd --port=7420 --token=<token>   # point the mac canvas at it via [host.<name>]
+```
+
+![The canvas zoomed out: a city of live panes, grouped by color](docs/media/canvas.jpg)
 
 ## What's implemented
 
