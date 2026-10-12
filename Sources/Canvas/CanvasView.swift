@@ -1234,9 +1234,16 @@ final class CanvasView: NSView {
     override func rightMouseDown(with event: NSEvent) {
         window?.makeFirstResponder(self)
         let world = worldPoint(event)
-        // On a pane: forward to the terminal as before (apps like vim /
-        // tmux expect right-click). No drag state: mouseUp ignores it.
         if let pane = topPane(at: world) {
+            // Titlebar right-click: pane/group membership menu (the
+            // terminal keeps left-clicks). Surface right-clicks still
+            // forward to the terminal (vim/tmux expect them).
+            if pane.isInTitlebar(world),
+               pane.resizeZone(at: world, screenTolerance: camera.screenToWorldDistance(5)) == nil {
+                focusPane(pane.id)
+                showTitlebarMenu(pane.id, at: event)
+                return
+            }
             focusPane(pane.id)
             let local = pane.surfacePoint(at: world)
             let mods = GhosttyMods(event.modifierFlags)
@@ -1348,6 +1355,52 @@ final class CanvasView: NSView {
     func showGroupMenu(_ id: GroupID, at event: NSEvent) {
         guard let b = groupBounds(id) else { return }
         showCanvasMenu(at: event, world: CGPoint(x: b.midX, y: b.midY))
+    }
+    // Titlebar right-click: membership for THIS pane. Same-owner groups
+    // get an "Add to <name>" entry (or "Remove from <name>" when
+    // already in it); "New group…" prompts for a name and starts a
+    // group with this pane (+ a same-host staged selection when live).
+    func showTitlebarMenu(_ id: PaneID, at event: NSEvent) {
+        let menu = NSMenu()
+        let owner = hub.owner(of: id) ?? "local"
+        let current = groupOf(id)
+        if let g = current, let meta = groupMetas[g] {
+            let title = NSMenuItem(title: "In group: \(meta.name ?? "Group")",
+                                   action: nil, keyEquivalent: "")
+            title.isEnabled = false
+            menu.addItem(title)
+            let remove = NSMenuItem(title: "Remove from \(meta.name ?? "group")",
+                                    action: #selector(removePaneFromGroupMenu(_:)),
+                                    keyEquivalent: "")
+            remove.target = self
+            remove.representedObject = id.uuid.uuidString
+            menu.addItem(remove)
+            menu.addItem(.separator())
+        }
+        let others = groupMetas.values.filter {
+            $0.id != current && hub.groupOwner(of: $0.id) == owner
+        }.sorted { ($0.name ?? "") < ($1.name ?? "") }
+        if !others.isEmpty {
+            let add = NSMenuItem(title: "Add to group", action: nil, keyEquivalent: "")
+            let sub = NSMenu(title: "Add to group")
+            for g in others {
+                let item = NSMenuItem(title: g.name ?? "Group",
+                                      action: #selector(addPaneToGroupMenu(_:)),
+                                      keyEquivalent: "")
+                item.target = self
+                item.representedObject = id.uuid.uuidString + "|" + g.id.uuid.uuidString
+                sub.addItem(item)
+            }
+            add.submenu = sub
+            menu.addItem(add)
+        }
+        let fresh = NSMenuItem(title: "New group…",
+                               action: #selector(newGroupForPaneMenu(_:)),
+                               keyEquivalent: "")
+        fresh.target = self
+        fresh.representedObject = id.uuid.uuidString
+        menu.addItem(fresh)
+        menu.popUp(positioning: nil, at: NSEvent.mouseLocation, in: nil)
     }
     // Right-click on non-pane canvas: ONE menu, always. Group background
     // adds rename/color/ungroup; a live selection adds group/close/
@@ -1511,6 +1564,58 @@ final class CanvasView: NSView {
         guard let s = sender.representedObject as? String,
               let u = UUID(uuidString: s) else { return }
         ungroup(GroupID(u))
+    }
+    // "pane|group": add the pane to the group's members (same host;
+    // the daemon admits it when the grown bounds stay clear, evicting
+    // it from any other group).
+    @objc func addPaneToGroupMenu(_ sender: NSMenuItem) {
+        guard let s = sender.representedObject as? String else { return }
+        let parts = s.split(separator: "|").map(String.init)
+        guard parts.count == 2,
+              let pu = UUID(uuidString: parts[0]),
+              let gu = UUID(uuidString: parts[1]) else { return }
+        let pid = PaneID(pu), gid = GroupID(gu)
+        guard panes[pid] != nil, var g = groupMetas[gid],
+              hub.groupOwner(of: gid) == hub.owner(of: pid) else { return }
+        guard !g.members.contains(pid) else { return }
+        g.members.append(pid)
+        groupMetas[gid] = g
+        refreshGroupViews()
+        hub.updateGroup(UpdateGroup(id: gid, name: g.name,
+                                      color: g.color, members: g.members))
+    }
+    // "pane": drop the pane from its current group. A solo leftover
+    // stays as a 1-member named group (daemon broadcasts prune dead
+    // members, not live ones).
+    @objc func removePaneFromGroupMenu(_ sender: NSMenuItem) {
+        guard let s = sender.representedObject as? String,
+              let u = UUID(uuidString: s) else { return }
+        let pid = PaneID(u)
+        guard let gid = groupOf(pid), var g = groupMetas[gid] else { return }
+        g.members.removeAll { $0 == pid }
+        groupMetas[gid] = g
+        refreshGroupViews()
+        hub.updateGroup(UpdateGroup(id: gid, name: g.name,
+                                      color: g.color, members: g.members))
+    }
+    // "pane": prompt for a name, start a group with this pane (+ a
+    // live same-host staged selection). The daemon admits each member
+    // only while the grown bounds stay clear; refusals stay groupless.
+    @objc func newGroupForPaneMenu(_ sender: NSMenuItem) {
+        guard let s = sender.representedObject as? String,
+              let u = UUID(uuidString: s) else { return }
+        let pid = PaneID(u)
+        guard panes[pid] != nil else { return }
+        promptName(title: "New group", initial: "Group \(groupMetas.count + 1)") { [weak self] name in
+            guard let self else { return }
+            var members = [pid]
+            let sel = self.liveSelected().filter {
+                $0 != pid && (self.hub.owner(of: $0) ?? "local") == (self.hub.owner(of: pid) ?? "local")
+            }
+            members.append(contentsOf: sel)
+            self.createGroup(members: members, name: name)
+            self.clearSelection()
+        }
     }
 
     @objc func newPaneHereFromMenu(_ sender: NSMenuItem) {

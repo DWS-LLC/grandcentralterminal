@@ -211,7 +211,7 @@ final class HostHub {
             guard paneOwner[local] == owner else { return nil }
             return paneRemote[local]
         }
-        guard remotes.count == req.members.count, remotes.count >= 2 else { return nil }
+        guard remotes.count == req.members.count, remotes.count >= 1 else { return nil }
         c.createGroup(CreateGroup(name: req.name, color: req.color, members: remotes))
         return nil // id arrives via groupCreated broadcast (mapped inbound)
     }

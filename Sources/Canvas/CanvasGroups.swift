@@ -91,13 +91,14 @@ extension CanvasView {
     // MARK: Group membership mutations (daemon round-trip)
 
     func createGroup(members: [PaneID], name: String? = nil) {
-        guard members.count >= 2 else { return }
+        guard !members.isEmpty else { return }
         // Same-host only: a group arbitrates layout on ONE daemon.
         // Mixed selections group their largest same-host subset; a 1/1
-        // split across hosts refuses (nothing to group).
+        // split across hosts refuses (nothing to group). Single-pane
+        // groups are allowed (named pin for later adds via titlebar).
         let byOwner = Dictionary(grouping: members, by: { hub.owner(of: $0) ?? "local" })
         guard let (owner, owned) = byOwner.max(by: { $0.value.count < $1.value.count }),
-              owned.count >= 2 else { return }
+              !owned.isEmpty else { return }
         if owned.count < members.count {
             NSLog("[gct] group: mixed-host selection — grouping the \(owned.count) \(owner) panes")
         }
@@ -221,7 +222,8 @@ extension CanvasView {
 
     // Group keybind on a staged selection: prompt for a name and create
     // the daemon group (clears the staging). Falls back to renaming the
-    // focused pane's group when nothing is staged.
+    // focused pane's group when nothing is staged. Keybind path keeps
+    // the 2+ minimum; single-pane named groups come from the titlebar.
     func groupStagedSelection() {
         let ids = liveSelected()
         guard ids.count >= 2 else {
