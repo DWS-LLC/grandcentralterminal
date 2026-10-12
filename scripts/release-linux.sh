@@ -97,11 +97,13 @@ if ! swift sdk list 2>/dev/null | grep -q "swift-6.4.0-RELEASE_static-linux"; th
   swift sdk install "$SDK_URL" --checksum "$SDK_SUM"
 fi
 swift build --package-path "$STAGE" -c release \
-  --swift-sdk "${ARCH}-swift-linux-musl" 2>&1 | tee build/linux-build.log | grep -E "error:|Build complete" | head -30
-# Pipefail is off for the tee pipe above (grep finds nothing on
-# success); fail explicitly when the binaries didn't land.
-[ -f "$STAGE"/.build/*/release/gctd ] || { echo "BUILD FAILED — see build/linux-build.log"; exit 1; }
+  --swift-sdk "${ARCH}-swift-linux-musl" 2>&1 | tee build/linux-build.log | grep -E "error:|Build complete!" | head -30
+# The static SDK builds into a triple dir
+# (.build/<triple>/release), not .build/release. Fail explicitly
+# when the binary didn't land (grep finds nothing on success, so
+# the pipe itself can't fail the script).
 BIN_DIR=$(echo "$STAGE"/.build/*/release)
+[ -f "$BIN_DIR/gctd" ] || { echo "BUILD FAILED — see build/linux-build.log"; exit 1; }
 tar -czf "$OUT" -C "$BIN_DIR" gctd ptyexec
 cp SKILL.md "build/gctd-${VERSION}-SKILL.md"
 echo "release: $OUT"
