@@ -81,7 +81,9 @@ ARCH="$(uname -m)"
 OUT="build/gctd-${VERSION}-linux-${ARCH}.tar.gz"
 mkdir -p build
 # Static Swift stdlib: the only .so needs left are libc/libm/glibc.
-swift build --package-path "$STAGE" -c release --static-swift-stdlib 2>&1 | tail -2
+# --verbose surfaces the real error (link failures print nothing
+# useful at default verbosity).
+swift build --package-path "$STAGE" -c release --static-swift-stdlib --verbose 2>&1 | tail -30
 BIN_DIR=$(echo "$STAGE"/.build/*/release)
 tar -czf "$OUT" -C "$BIN_DIR" gctd ptyexec
 cp SKILL.md "build/gctd-${VERSION}-SKILL.md"
