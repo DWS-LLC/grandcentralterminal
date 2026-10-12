@@ -110,6 +110,9 @@ Sources/Canvas/HostHub.swift  one conn per daemon, owner routing + id mapping
 Makefile                 build/sign/install/uninstall/clean
 scripts/fetch-ghostty.sh clones + patches the vendored ghostty
 scripts/build-remote.sh  build + deploy the Linux daemon over ssh
+scripts/release-macos.sh CI-signed macOS zip (notarized + stapled)
+scripts/release-linux.sh CI static-stdlib Linux gctd tarball
+.forgejo/workflows/release.yml  tag v* -> signed macOS + Linux artifacts
 demo/                    scripted shoot + reel kit (see demo/README.md)
 docs/media/              README stills + the reel
 ```
@@ -122,6 +125,29 @@ make install              # sign (Developer ID) + /Applications +
                           # /usr/local/bin/gctd + harness skill install
 make uninstall clean      # remove /Applications copy; drop artifacts
 ```
+
+## Release
+
+Tag `v*` on main; Forgejo CI builds both packages and attaches them
+to the tag's release page:
+
+```sh
+git tag v0.3.0 && git push origin v0.3.0
+```
+
+* `GrandCentralTerminal-<ver>-macos-arm64.zip` — the `.app` signed
+  with the Developer ID (hardened runtime), notarized, ticket
+  stapled: Gatekeeper passes offline on a fresh Mac.
+* `gctd-<ver>-linux-<arch>.tar.gz` — `gctd` + `ptyexec` with a
+  static Swift stdlib (only stock libc stays dynamic): unpacks and
+  runs on most distros, no toolchain needed.
+
+CI secrets (`/{owner}/{repo}/settings/actions/secrets`):
+`APPLE_CERT_P12_B64` (base64 Developer ID `.p12`),
+`APPLE_CERT_PASSWORD`, `KEYCHAIN_PASSWORD`, `APPLE_ID`,
+`APPLE_TEAM_ID`, `NOTARY_PASSWORD` (app-specific password).
+Runner labels in `.forgejo/workflows/release.yml` are `macos` and
+`linux` — rename to match your runners if they differ.
 
 Prereqs: Xcode (macOS SDK), [zig 0.16.0](https://ziglang.org/download/) on
 `PATH` (or `ZIG=/path/to/zig`), Metal Toolchain
