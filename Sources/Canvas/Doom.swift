@@ -188,7 +188,10 @@ final class DoomController {
         if win.isMiniaturized {
             lastToggle = Date()
             win.deminiaturize(nil)
-            win.makeKeyAndOrderFront(nil)
+            // Regardless (not keyAndOrderFront): the active Space may
+            // belong to a fullscreen app — order there, not ours.
+            win.orderFrontRegardless()
+            win.makeKey()
             NSApp.activate(ignoringOtherApps: true)
             afterVisible()
             return
@@ -218,7 +221,13 @@ final class DoomController {
             win.setFrame(final, display: false)
             win.alphaValue = 0
         }
-        win.makeKeyAndOrderFront(nil)
+        // orderFrontRegardless pulls the window onto the ACTIVE Space
+        // even when a fullscreen app owns it (makeKeyAndOrderFront
+        // would land on our home Space, hidden behind fullscreen).
+        // collectionBehavior (canJoinAllSpaces + fullScreenAuxiliary)
+        // keeps it legal there; activate takes keyboard focus.
+        win.orderFrontRegardless()
+        win.makeKey()
         NSApp.activate(ignoringOtherApps: true)
         runAnimation(duration: cfg.animationDuration, frame: final, alpha: 1) { [weak self] in
             self?.animating = false
