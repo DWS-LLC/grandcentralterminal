@@ -346,6 +346,36 @@ final class CanvasView: NSView {
         return r.rect
     }
 
+    // Keybind snap: move the focused pane to its NEAREST snap target,
+    // even when snapping is off (ignores the toggle AND the radius —
+    // always lands on the closest anchor). Same scope as drags
+    // (siblings when grouped, ungrouped frames + foreign borders
+    // otherwise). Runs through the gap resolve after so the landing
+    // keeps window-gap air instead of sitting flush, then persists.
+    func snapFocusedToNearest() {
+        guard let id = focusedID, let pane = panes[id] else { return }
+        let others = snapTargetsForPane(moving: id)
+        guard !others.isEmpty else { return }
+        let r = SnapEngine.snapMove(pane.frame, others: others,
+                                    radius: .greatestFiniteMagnitude,
+                                    mode: snapMode)
+        guard r.rect != pane.frame else { return }
+        let clean = NSRectOverlap.to(gapResolve(
+            NSRectOverlap.from(r.rect),
+            obstacles: GroupLayout.moveObstacles(
+                moving: id, memberOf: groupOf(id).map { Set([$0]) } ?? [],
+                panes: paneRects(), groups: groupMetas,
+                allowOverlap: GCTConfig.current.allowWindowOverlap,
+                floating: floatingPanes())))
+        // Gap resolve can push off the snapped line; guides only stay
+        // when the landing is still on it.
+        keepSnapGuides(x: r.guidesX, y: r.guidesY, on: clean)
+        pane.setRect(clean, notifySurface: false)
+        hub.movePane(MovePane(id: id, rect: pane.meta.rect,
+                        allowOverlap: GCTConfig.current.allowWindowOverlap, gap: currentGap()))
+        refreshGroupViews()
+        refreshOcclusion()
+    }
     // Whole-group/block drag: snap the BORDER UNION (post-resolve
     // member frames -> padded bounds, mirroring GroupGeometry) to
     // ungrouped frames + foreign group borders. Members ride the
@@ -1880,6 +1910,7 @@ final class CanvasView: NSView {
             if let id = focusedID { toggleSelected(id) }
         case .clearPaneSelection: clearSelection()
         case .toggleSnapping: toggleSnapping()
+        case .moveWindowToSnap: snapFocusedToNearest()
         case .reloadConfig: reloadConfig()
         }
     }

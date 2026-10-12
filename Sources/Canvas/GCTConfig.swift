@@ -369,6 +369,7 @@ enum GCTAction: String, CaseIterable {
     case togglePaneSelection = "toggle-pane-selection"
     case clearPaneSelection = "clear-pane-selection"
     case toggleSnapping = "toggle-snapping"
+    case moveWindowToSnap = "move-window-to-snap"
     case reloadConfig = "reload-config"
 }
 // MARK: - Config
@@ -912,6 +913,9 @@ struct GCTConfig {
     # never moves already-placed panes). Default bind below; rebind or
     # delete to unbind.
     toggle-snapping = "cmd+shift+s"
+    # Snap the focused window to its nearest snap target, even when
+    # snapping is off. Unbound by default — set e.g.
+    # move-window-to-snap = "cmd+shift+m".
     # Config: re-read config.toml and apply live (theme, keybinds,
     # snapping/overlap policy, doom hotkey). Doom structural keys
     # (enabled, start-hidden, launch-at-login) need a relaunch.
