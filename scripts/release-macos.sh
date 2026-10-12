@@ -44,10 +44,11 @@ ZIG_BIN="$(command -v zig || true)"
 if [ -z "$ZIG_BIN" ]; then
   echo "== installing zig 0.16.0 =="
   ZIG_VER="0.16.0"
-  curl -fsSL -o /tmp/zig.zip \
-    "https://ziglang.org/download/${ZIG_VER}/zig-macos-aarch64-${ZIG_VER}.zip"
-  unzip -q -o /tmp/zig.zip -d /tmp && rm /tmp/zig.zip
-  export PATH="/tmp/zig-macos-aarch64-${ZIG_VER}:$PATH"
+  ZIG_ARCH="$(uname -m | sed -e 's/arm64/aarch64/')"
+  curl -fsSL -o /tmp/zig.tar.xz \
+    "https://ziglang.org/download/${ZIG_VER}/zig-${ZIG_ARCH}-macos-${ZIG_VER}.tar.xz"
+  tar -xf /tmp/zig.tar.xz -C /tmp && rm /tmp/zig.tar.xz
+  export PATH="/tmp/zig-${ZIG_ARCH}-macos-${ZIG_VER}:$PATH"
 fi
 
 # 3. Stamp the version, then the normal build.
