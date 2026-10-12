@@ -85,14 +85,22 @@ swift --version
 ARCH="$(uname -m)"
 OUT="build/gctd-${VERSION}-linux-${ARCH}.tar.gz"
 mkdir -p build
-# Static Swift stdlib: the only .so needs left are libc/libm/glibc.
-# --verbose surfaces the real error (link failures print nothing
-# useful at default verbosity).
-swift build --package-path "$STAGE" -c release --static-swift-stdlib --verbose 2>&1 | tail -30
+# Fully static via the Static Linux SDK (musl): the binary depends on
+# nothing but the Linux syscall interface — runs on any distro, no
+# glibc floor, no bundled .so files. --static-swift-stdlib can't do
+# this: the toolchain's static ICU shims miss symbols (swift_u*).
+# SDK version must match the toolchain (6.4.0 here).
+SDK_URL="https://download.swift.org/swift-6.4.0-release/static-sdk/swift-6.4.0-RELEASE/swift-6.4.0-RELEASE_static-linux-0.1.0.artifactbundle.tar.gz"
+SDK_SUM="47d2fd89eebfdf9eb4d536b6710414297f755c17926cdebc4742c08982b40a9e"
+if ! swift sdk list 2>/dev/null | grep -q "swift-6.4.0-RELEASE_static-linux"; then
+  echo "== installing Static Linux SDK =="
+  swift sdk install "$SDK_URL" --checksum "$SDK_SUM"
+fi
+swift build --package-path "$STAGE" -c release \
+  --swift-sdk "${ARCH}-swift-linux-musl" 2>&1 | tail -5
 BIN_DIR=$(echo "$STAGE"/.build/*/release)
 tar -czf "$OUT" -C "$BIN_DIR" gctd ptyexec
 cp SKILL.md "build/gctd-${VERSION}-SKILL.md"
 echo "release: $OUT"
-echo "linked libs (must be stock libc only):"
-tar -xzf "$OUT" -C "$STAGE"
-ldd "$STAGE/gctd"
+echo "linked libs (want: not a dynamic executable):"
+file "$BIN_DIR/gctd"
