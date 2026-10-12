@@ -707,6 +707,7 @@ struct GCTConfig {
             .togglePaneSelection: GCTKeybind("cmd+d")!,
             .clearPaneSelection: GCTKeybind("cmd+shift+d")!,
             .toggleSnapping: GCTKeybind("cmd+shift+s")!,
+            .moveWindowToSnap: GCTKeybind("cmd+shift+m")!,
             .reloadConfig: GCTKeybind("cmd+shift+r")!,
         ]
     }
@@ -914,8 +915,8 @@ struct GCTConfig {
     # delete to unbind.
     toggle-snapping = "cmd+shift+s"
     # Snap the focused window to its nearest snap target, even when
-    # snapping is off. Unbound by default — set e.g.
-    # move-window-to-snap = "cmd+shift+m".
+    # snapping is off. Rebind or delete to unbind.
+    move-window-to-snap = "cmd+shift+m"
     # Config: re-read config.toml and apply live (theme, keybinds,
     # snapping/overlap policy, doom hotkey). Doom structural keys
     # (enabled, start-hidden, launch-at-login) need a relaunch.
