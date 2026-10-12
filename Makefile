@@ -46,8 +46,14 @@ build:
 	cp "$(SWIFT_BUILD)/ptyexec" "$(BUNDLE)/Contents/MacOS/"
 	cp Resources/AppIcon.icns "$(BUNDLE)/Contents/Resources/"
 	mkdir -p "$(SUPPORT)/bin" "$(SUPPORT)/skills/gct"
-	cp "$(SWIFT_BUILD)/gctd" "$(SUPPORT)/bin/gctd"
-	cp "$(SWIFT_BUILD)/ptyexec" "$(SUPPORT)/bin/ptyexec"
+	# Rename-swap, never overwrite in place: the daemon executes from this
+	# path, and an in-place rewrite of a running image invalidates its code
+	# signature (macOS then SIGKILLs every new exec — including the Claude
+	# SessionStart hook).
+	cp "$(SWIFT_BUILD)/gctd" "$(SUPPORT)/bin/gctd.new"
+	mv -f "$(SUPPORT)/bin/gctd.new" "$(SUPPORT)/bin/gctd"
+	cp "$(SWIFT_BUILD)/ptyexec" "$(SUPPORT)/bin/ptyexec.new"
+	mv -f "$(SUPPORT)/bin/ptyexec.new" "$(SUPPORT)/bin/ptyexec"
 	cp SKILL.md "$(SUPPORT)/skills/gct/SKILL.md"
 	@echo "built $(BUNDLE) (daemon staged in $(SUPPORT)/bin)"
 

@@ -41,10 +41,13 @@ cp "$BIN/ptyexec" "$APP/Contents/MacOS/"
 cp Resources/AppIcon.icns "$APP/Contents/Resources/"
 echo "built $APP"
 
-# 5. Stage daemon where the app expects it.
+# 5. Stage daemon where the app expects it. Rename-swap, never overwrite in
+# place: the daemon executes from this path and an in-place rewrite of a
+# running image invalidates its code signature (macOS then SIGKILLs every
+# new exec — including the Claude SessionStart hook).
 mkdir -p "$SUPPORT/bin"
-cp "$BIN/gctd" "$SUPPORT/bin/gctd"
-cp "$BIN/ptyexec" "$SUPPORT/bin/ptyexec"
+cp "$BIN/gctd" "$SUPPORT/bin/gctd.new" && mv -f "$SUPPORT/bin/gctd.new" "$SUPPORT/bin/gctd"
+cp "$BIN/ptyexec" "$SUPPORT/bin/ptyexec.new" && mv -f "$SUPPORT/bin/ptyexec.new" "$SUPPORT/bin/ptyexec"
 # 6. Stage the agent skill beside the daemon: `gctd agent-setup`
 # installs it into harness skill dirs from disk (no network).
 mkdir -p "$SUPPORT/skills/gct"

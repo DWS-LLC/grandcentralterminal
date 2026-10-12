@@ -275,8 +275,10 @@ dirs (`--harness=` narrows it; dry-run without `--yes`). `--hooks` merges
 a Claude `SessionStart` hook (via `/usr/local/bin/gctd`, no spaces) that
 injects live pane state every session — that's the discovery path: the
 agent learns GCT exists plus what's currently on the canvas, before the
-first prompt. The hook fails open (daemon down = empty context, never
-blocks start). Codex also needs `[features] skills=true` in its config.
+first prompt. The hook carries a 15s timeout and `|| exit 0`: daemon down,
+wedged, or unexecable binary = empty context, never an error, never blocks
+start. Re-running `install --hooks` migrates stale entries in place.
+Codex also needs `[features] skills=true` in its config.
 
 Each pane's shell runs via `ptyexec`, which takes a fresh session, claims
 the slave pty as its controlling terminal, and execs the shell — without

@@ -147,6 +147,11 @@ func agentSetupContext(json: Bool) {
 // JSONSerialization, insert our SessionStart entry, write back. Never
 // touches other keys; refuses to write unparseable files (prints the
 // entry for manual install instead).
+// SessionStart budget for `context`: normally milliseconds; the timeout
+// bounds a wedged daemon. Expiry discards output, and SessionStart can't
+// block, so the session just proceeds without context.
+let claudeHookTimeout = 15
+
 func mergeClaudeHook(bin: String) -> Bool {
     let path = agentHome() + "/.claude/settings.json"
     let fm = FileManager.default
@@ -171,18 +176,20 @@ func mergeClaudeHook(bin: String) -> Bool {
             if (h["command"] as? String) == ourCmd { return true }
         }
     }
-    // Migrate: an older install wrote the staged path (contains spaces —
-    // hook runners choke on it). Rewrite any gctd context entry in place
-    // instead of appending a duplicate.
+    // Migrate: older installs wrote the staged path (contains spaces —
+    // hook runners choke on it) or the bare command (an unexecable binary
+    // then fails SessionStart with a non-blocking error every session).
+    // Rewrite any gctd context entry in place instead of appending a duplicate.
     var migrated = false
     starts = starts.map { group in
         var group = group
         if var hs = group["hooks"] as? [[String: Any]] {
             for j in hs.indices {
                 if let cmd = hs[j]["command"] as? String,
-                   cmd.hasSuffix("agent-setup context"),
+                   cmd.contains("agent-setup context"),
                    cmd.contains("gctd"), cmd != ourCmd {
                     hs[j]["command"] = ourCmd
+                    hs[j]["timeout"] = claudeHookTimeout
                     migrated = true
                 }
             }
@@ -207,12 +214,16 @@ func mergeClaudeHook(bin: String) -> Bool {
 }
 
 func claudeHookEntryObject(bin: String) -> [String: Any] {
+    // `|| exit 0`: fail open. An unexecable binary (bad signature, missing
+    // path) exits nonzero with empty stderr, which Claude surfaces as a
+    // SessionStart hook error every session — swallow it instead.
     ["matcher": "", "hooks": [["type": "command",
-                               "command": "\(bin) agent-setup context"]]]
+                               "command": "\(bin) agent-setup context || exit 0",
+                               "timeout": claudeHookTimeout]]]
 }
 
 func claudeHookEntry(bin: String) -> String {
-    "{\"hooks\":{\"SessionStart\":[{\"matcher\":\"\",\"hooks\":[{\"type\":\"command\",\"command\":\"\(bin) agent-setup context\"}]}]}}"
+    "{\"hooks\":{\"SessionStart\":[{\"matcher\":\"\",\"hooks\":[{\"type\":\"command\",\"command\":\"\(bin) agent-setup context || exit 0\",\"timeout\":\(claudeHookTimeout)}]}]}}"
 }
 
 func agentSetupInstall(harnesses: [Harness], hooks: Bool, yes: Bool) {
