@@ -61,14 +61,16 @@ public final class Conn: @unchecked Sendable {
 
         if tag == .inputPane || tag == .outputPane {
             guard payload.count >= 17 else { return nil }
-            var u = uuid_t(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
-            payload.withUnsafeBytes { raw in
-                withUnsafeMutableBytes(of: &u) { dst in
-                    // payload[0] is the tag; uuid starts at byte 1.
-                    memcpy(dst.baseAddress!, raw.baseAddress! + 1, 16)
-                }
-            }
-            let id = PaneID(UUID(uuid: u))
+            // Portable UUID load: uuid_t isn't constructible under the
+            // static SDK's C import, so go through the 16 raw bytes.
+            let uuidBytes = (0..<16).map { payload[1 + $0] }
+            let u = UUID(uuid: (
+                uuidBytes[0], uuidBytes[1], uuidBytes[2], uuidBytes[3],
+                uuidBytes[4], uuidBytes[5], uuidBytes[6], uuidBytes[7],
+                uuidBytes[8], uuidBytes[9], uuidBytes[10], uuidBytes[11],
+                uuidBytes[12], uuidBytes[13], uuidBytes[14], uuidBytes[15]
+            ))
+            let id = PaneID(u)
             let data = payload.subdata(in: 17..<payload.count)
             return Frame(tag: tag, paneID: id, data: data, json: Data())
         }
