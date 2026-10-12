@@ -47,9 +47,10 @@ if ! command -v swiftly >/dev/null 2>&1; then
   curl -fsSL -o /tmp/swiftly.tar.gz \
     https://download.swift.org/swiftly/linux/swiftly-"$(uname -m)".tar.gz
   tar -xzf /tmp/swiftly.tar.gz -C /tmp && rm /tmp/swiftly.tar.gz
-  # Fully non-interactive: no prompt, no profile edit, no auto toolchain
-  # (the install step below pins SWIFT_VER explicitly).
-  yes | /tmp/swiftly init --quiet-shell-followup --no-modify-profile --skip-install
+  # Fully non-interactive: --assume-yes answers Proceed, no profile
+  # edit, no auto toolchain (the install step pins SWIFT_VER). NOTE:
+  # no `yes |` pipe — pipefail turns yes's SIGPIPE death into a 141.
+  /tmp/swiftly init --assume-yes --quiet-shell-followup --no-modify-profile --skip-install
   . "$SW_DIR/env.sh"
 fi
 if ! swiftly list 2>/dev/null | grep -q "$SWIFT_VER"; then
