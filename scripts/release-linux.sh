@@ -40,6 +40,8 @@ let package = Package(
 EOF
 
 SW_DIR="${SWIFTLY_HOME_DIR:-$HOME/.local/share/swiftly}"
+# Already bootstrapped on a previous run (persistent runner home)?
+[ -f "$SW_DIR/env.sh" ] && . "$SW_DIR/env.sh"
 if ! command -v swiftly >/dev/null 2>&1; then
   echo "== installing swiftly =="
   curl -fsSL -o /tmp/swiftly.tar.gz \
@@ -47,10 +49,26 @@ if ! command -v swiftly >/dev/null 2>&1; then
   tar -xzf /tmp/swiftly.tar.gz -C /tmp && rm /tmp/swiftly.tar.gz
   # Fully non-interactive: no prompt, no profile edit, no auto toolchain
   # (the install step below pins SWIFT_VER explicitly).
-  /tmp/swiftly init --quiet-shell-followup --no-modify-profile --skip-install
+  yes | /tmp/swiftly init --quiet-shell-followup --no-modify-profile --skip-install
+  . "$SW_DIR/env.sh"
 fi
-. "$SW_DIR/env.sh"
 if ! swiftly list 2>/dev/null | grep -q "$SWIFT_VER"; then
+  # swiftly exits 1 (fatal under set -e) when these are missing, even
+  # after a successful toolchain install — so they go in first.
+  echo "== installing Swift system deps =="
+  if [ "$(id -u)" -ne 0 ] && command -v sudo >/dev/null 2>&1; then
+    SUDO=sudo
+  else
+    SUDO=
+  fi
+  if command -v apt-get >/dev/null 2>&1; then
+    $SUDO apt-get update
+    $SUDO apt-get install -y libedit-dev libpython3-dev zip
+  elif command -v dnf >/dev/null 2>&1; then
+    $SUDO dnf install -y libedit python3-devel zip
+  elif command -v apk >/dev/null 2>&1; then
+    $SUDO apk add libedit-dev python3-dev zip
+  fi
   echo "== installing Swift $SWIFT_VER =="
   swiftly install "$SWIFT_VER" --assume-yes
 fi
