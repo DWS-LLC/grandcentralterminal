@@ -7,6 +7,9 @@
 
 import Foundation
 
+#if os(Linux) && canImport(Musl)
+import Musl
+#endif
 // Default TCP port for remote daemons (config/CLI override per host).
 public let GCTDefaultPort: UInt16 = 7420
 public struct Frame {
@@ -128,12 +131,17 @@ public final class Conn: @unchecked Sendable {
             var off = 0
             while off < raw.count {
 #if os(Linux)
-                // Musl (static SDK) takes Int32 flags directly; Glibc's
-                // MSG_NOSIGNAL is plain Int, hence the cast. SwiftGlibc
-                // re-exports musl's send — bare send would hit
-                // Conn.send(tag:) instead.
+#if canImport(Musl)
+                // Musl (static SDK): send lives in the Musl module, not
+                // top-level — bare send would hit Conn.send(tag:).
+                // Glibc's MSG_NOSIGNAL is plain Int, hence the cast;
+                // musl's is already Int32 (no-op there).
+                let n = Musl.send(fd, raw.baseAddress! + off,
+                                  raw.count - off, Int32(MSG_NOSIGNAL))
+#else
                 let n = SwiftGlibc.send(fd, raw.baseAddress! + off,
                                         raw.count - off, Int32(MSG_NOSIGNAL))
+#endif
 #else
                 let n = write(fd, raw.baseAddress! + off, raw.count - off)
 #endif
