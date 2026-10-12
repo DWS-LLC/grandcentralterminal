@@ -64,7 +64,12 @@ if ! swiftly list 2>/dev/null | grep -q "$SWIFT_VER"; then
   fi
   if command -v apt-get >/dev/null 2>&1; then
     $SUDO apt-get update
-    $SUDO apt-get install -y libedit-dev libpython3-dev zip
+    # swiftly's three (libedit/libpython/zip) plus everything the
+    # Swift 6.x toolchain links on Debian: without these the final
+    # gctd link dies with a bare "Build failed".
+    $SUDO apt-get install -y binutils git libc6-dev libcurl4-openssl-dev \
+      libedit-dev libpython3-dev libsqlite3-dev libstdc++-12-dev \
+      libxml2-dev libz3-dev pkg-config tzdata unzip zip
   elif command -v dnf >/dev/null 2>&1; then
     $SUDO dnf install -y libedit python3-devel zip
   elif command -v apk >/dev/null 2>&1; then
