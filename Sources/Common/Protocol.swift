@@ -108,6 +108,8 @@ public struct CreatePane: Codable, Sendable {
     public var command: String?   // e.g. "ssh host" for remote panes; nil = default shell
     // Same policy as MovePane; decodes missing (old clients) as false.
     public var allowOverlap: Bool
+    // Minimum padding (world points); decodes missing as 0 = flush.
+    public var gap: Double
     // Directional split from a grouped pane: admit into this group on
     // create (daemon trials the grown-bounds rule). Nil = groupless.
     // Decodes missing (old clients) as nil.
@@ -117,14 +119,14 @@ public struct CreatePane: Codable, Sendable {
     // Decodes missing as nil.
     public var joinDirection: String?
     public init(rect: Rect, cwd: String? = nil, name: String? = nil,
-                command: String? = nil, allowOverlap: Bool = false,
+                command: String? = nil, allowOverlap: Bool = false, gap: Double = 0,
                 joinGroup: GroupID? = nil, joinDirection: String? = nil) {
         self.rect = rect; self.cwd = cwd; self.name = name
-        self.command = command; self.allowOverlap = allowOverlap
+        self.command = command; self.allowOverlap = allowOverlap; self.gap = gap
         self.joinGroup = joinGroup; self.joinDirection = joinDirection
     }
     enum CodingKeys: String, CodingKey {
-        case rect, cwd, name, command, allowOverlap, joinGroup, joinDirection
+        case rect, cwd, name, command, allowOverlap, gap, joinGroup, joinDirection
     }
     public init(from decoder: any Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -133,6 +135,7 @@ public struct CreatePane: Codable, Sendable {
         name = try c.decodeIfPresent(String.self, forKey: .name)
         command = try c.decodeIfPresent(String.self, forKey: .command)
         allowOverlap = try c.decodeIfPresent(Bool.self, forKey: .allowOverlap) ?? false
+        gap = try c.decodeIfPresent(Double.self, forKey: .gap) ?? 0
         joinGroup = try c.decodeIfPresent(GroupID.self, forKey: .joinGroup)
         joinDirection = try c.decodeIfPresent(String.self, forKey: .joinDirection)
     }
@@ -174,15 +177,19 @@ public struct MovePane: Codable, Sendable {
     // so the broadcast stream is overlap-free. True = place exactly.
     // Decodes missing (old clients, scripts) as false.
     public var allowOverlap: Bool
-    public init(id: PaneID, rect: Rect, allowOverlap: Bool = false) {
-        self.id = id; self.rect = rect; self.allowOverlap = allowOverlap
+    // Minimum padding (world points) the daemon keeps around the pane.
+    // Decodes missing (old clients) as 0 = flush.
+    public var gap: Double
+    public init(id: PaneID, rect: Rect, allowOverlap: Bool = false, gap: Double = 0) {
+        self.id = id; self.rect = rect; self.allowOverlap = allowOverlap; self.gap = gap
     }
-    enum CodingKeys: String, CodingKey { case id, rect, allowOverlap }
+    enum CodingKeys: String, CodingKey { case id, rect, allowOverlap, gap }
     public init(from decoder: any Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         id = try c.decode(PaneID.self, forKey: .id)
         rect = try c.decode(Rect.self, forKey: .rect)
         allowOverlap = try c.decodeIfPresent(Bool.self, forKey: .allowOverlap) ?? false
+        gap = try c.decodeIfPresent(Double.self, forKey: .gap) ?? 0
     }
 }
 
@@ -338,18 +345,21 @@ public struct MoveGroup: Codable, Sendable {
     public var dy: Double
     // Same policy as MovePane; decodes missing (old clients) as false.
     public var allowOverlap: Bool
+    // Minimum padding (world points); decodes missing as 0 = flush.
+    public var gap: Double
     public init(id: GroupID, dx: Double, dy: Double,
-                allowOverlap: Bool = false) {
+                allowOverlap: Bool = false, gap: Double = 0) {
         self.id = id; self.dx = dx; self.dy = dy
-        self.allowOverlap = allowOverlap
+        self.allowOverlap = allowOverlap; self.gap = gap
     }
-    enum CodingKeys: String, CodingKey { case id, dx, dy, allowOverlap }
+    enum CodingKeys: String, CodingKey { case id, dx, dy, allowOverlap, gap }
     public init(from decoder: any Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         id = try c.decode(GroupID.self, forKey: .id)
         dx = try c.decode(Double.self, forKey: .dx)
         dy = try c.decode(Double.self, forKey: .dy)
         allowOverlap = try c.decodeIfPresent(Bool.self, forKey: .allowOverlap) ?? false
+        gap = try c.decodeIfPresent(Double.self, forKey: .gap) ?? 0
     }
 }
 
@@ -369,15 +379,18 @@ public struct SetFloating: Codable, Sendable {
     // Re-tiling policy: false = daemon resolves the pane out of overlap
     // when un-floating. Decodes missing as false.
     public var allowOverlap: Bool
-    public init(id: PaneID, floating: Bool, allowOverlap: Bool = false) {
-        self.id = id; self.floating = floating; self.allowOverlap = allowOverlap
+    // Minimum padding (world points); decodes missing as 0 = flush.
+    public var gap: Double
+    public init(id: PaneID, floating: Bool, allowOverlap: Bool = false, gap: Double = 0) {
+        self.id = id; self.floating = floating; self.allowOverlap = allowOverlap; self.gap = gap
     }
-    enum CodingKeys: String, CodingKey { case id, floating, allowOverlap }
+    enum CodingKeys: String, CodingKey { case id, floating, allowOverlap, gap }
     public init(from decoder: any Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         id = try c.decode(PaneID.self, forKey: .id)
         floating = try c.decode(Bool.self, forKey: .floating)
         allowOverlap = try c.decodeIfPresent(Bool.self, forKey: .allowOverlap) ?? false
+        gap = try c.decodeIfPresent(Double.self, forKey: .gap) ?? 0
     }
 }
 

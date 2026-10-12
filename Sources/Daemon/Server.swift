@@ -262,8 +262,7 @@ final class Server {
                 moving: req.id, memberOf: memberOf.map { Set([$0]) } ?? [],
                 panes: rects, groups: metas,
                 allowOverlap: req.allowOverlap, floating: floating)
-            rect = Overlap.resolve(rect, obstacles: obstacles)
-            // Invariant: a member's new rect must not grow its group's
+            rect = Overlap.resolve(rect, obstacles: obstacles, gap: req.gap)
             // bounds over anything foreign — another group's bounds or a
             // loose pane. Slide along the grown bounds first (mirrors the
             // canvas static drags so the stream converges); hold the
@@ -428,7 +427,7 @@ final class Server {
                     memberOf: memberOf.map { Set([$0]) } ?? [],
                     panes: rects, groups: metas,
                     allowOverlap: req.allowOverlap, floating: floating)
-                var rect = Overlap.resolve(pane.meta.rect, obstacles: obstacles)
+                var rect = Overlap.resolve(pane.meta.rect, obstacles: obstacles, gap: req.gap)
                 if let memberOf,
                    GroupLayout.grownClash(moving: req.id, memberOf: memberOf,
                                           candidate: rect,
@@ -636,7 +635,7 @@ final class Server {
             moving: req.id, panes: rects, groups: metas,
             floating: floatingLocked())
         let target = Rect(x: b.x + req.dx, y: b.y + req.dy, w: b.w, h: b.h)
-        let clean = Overlap.resolve(target, obstacles: obstacles)
+        let clean = Overlap.resolve(target, obstacles: obstacles, gap: req.gap)
         let dx = clean.x - b.x, dy = clean.y - b.y
         var updated = [PaneMeta]()
         for id in members {
@@ -674,7 +673,7 @@ final class Server {
                 obstacles.append(b)
             }
             rect = obstacles.isEmpty ? req.rect
-                : Overlap.resolve(req.rect, obstacles: obstacles)
+                : Overlap.resolve(req.rect, obstacles: obstacles, gap: req.gap)
         } else {
             let obstacles = GroupLayout.creationObstacles(
                 paneRects: rects,
@@ -682,7 +681,7 @@ final class Server {
                 allowOverlap: req.allowOverlap,
                 floating: floating)
             rect = obstacles.isEmpty ? req.rect
-                : Overlap.resolve(req.rect, obstacles: obstacles)
+                : Overlap.resolve(req.rect, obstacles: obstacles, gap: req.gap)
         }
         lock.unlock()
         let cwd = req.cwd ?? NSHomeDirectory()
@@ -730,7 +729,7 @@ final class Server {
                         // the grown block is exclusive, allowOverlap
                         // must not exempt loose panes from the push.
                         allowOverlap: false,
-                        floating: floatingLocked())
+                        floating: floatingLocked(), gap: req.gap)
                     let grouped = Set(groups.values.flatMap(\.members))
                     for (pid, r) in moves where !grouped.contains(pid) {
                         withNew[pid] = r

@@ -44,6 +44,32 @@ public enum Overlap {
     // advances past one blocker edge, which terminates on an infinite
     // canvas. Nearest of the four escapes wins. Guaranteed overlap-free.
     public static func resolve(_ rect: Rect, obstacles: [Rect]) -> Rect {
+        resolve(rect, obstacles: obstacles, gap: 0)
+    }
+
+    // Gap-aware resolve: keeps at least `gap` world points of air
+    // between rect and every obstacle (gap <= 0 = legacy flush).
+    // Inflates obstacles by half the gap and the mover by the other
+    // half, resolves flush, then shrinks the mover back: flush
+    // landings end up exactly `gap` apart, and zero-gap callers see
+    // byte-identical behavior.
+    public static func resolve(_ rect: Rect, obstacles: [Rect], gap: Double) -> Rect {
+        guard gap > 0, !obstacles.isEmpty else {
+            return resolveNoGap(rect, obstacles: obstacles)
+        }
+        // Half-gap each side: obstacle inflation + mover inflation sum
+        // to the full gap, so flush inflated landings deflate to
+        // exactly `gap` apart. Position-only: sizes restore after.
+        let h = gap / 2
+        let big = Rect(x: rect.x - h, y: rect.y - h, w: rect.w + gap, h: rect.h + gap)
+        let fat = obstacles.map {
+            Rect(x: $0.x - h, y: $0.y - h, w: $0.w + gap, h: $0.h + gap)
+        }
+        let clean = resolveNoGap(big, obstacles: fat)
+        return Rect(x: clean.x + h, y: clean.y + h, w: rect.w, h: rect.h)
+    }
+
+    private static func resolveNoGap(_ rect: Rect, obstacles: [Rect]) -> Rect {
         // Canonical order: callers build obstacle lists from Swift dicts
         // (random per-process seed), so canvas and daemon would otherwise
         // resolve the same scene differently. Sort once at entry.
@@ -75,7 +101,6 @@ public enum Overlap {
             return dx0 * dx0 + dy0 * dy0 < dx1 * dx1 + dy1 * dy1
         }) ?? orig
     }
-
     public enum Axis { case horizontal, vertical }
 
     // Placement resolver: while rect hits an obstacle, jump past the
@@ -112,24 +137,24 @@ public enum Overlap {
     }
 
     public static func clampResize(_ candidate: Rect, original: Rect,
-                                   edges: Edges, obstacles: [Rect]) -> Rect {
+                                   edges: Edges, obstacles: [Rect], gap: Double = 0) -> Rect {
         var rect = candidate
         for obs in obstacles {
             guard overlaps(rect, obs), !overlaps(original, obs) else { continue }
             if edges.e, original.x + original.w <= obs.x {
-                rect.w = max(0, obs.x - rect.x)
+                rect.w = max(0, obs.x - gap - rect.x)
             }
             if edges.w, original.x >= obs.x + obs.w {
                 let maxX = rect.x + rect.w
-                rect.x = max(rect.x, obs.x + obs.w)
+                rect.x = max(rect.x, obs.x + obs.w + gap)
                 rect.w = max(0, maxX - rect.x)
             }
             if edges.n, original.y + original.h <= obs.y {
-                rect.h = max(0, obs.y - rect.y)
+                rect.h = max(0, obs.y - gap - rect.y)
             }
             if edges.s, original.y >= obs.y + obs.h {
                 let maxY = rect.y + rect.h
-                rect.y = max(rect.y, obs.y + obs.h)
+                rect.y = max(rect.y, obs.y + obs.h + gap)
                 rect.h = max(0, maxY - rect.y)
             }
         }
@@ -138,9 +163,10 @@ public enum Overlap {
 
     // Shove-resize: `candidate` is the focused pane's grown rect (fixed);
     // blockers are pushed out of the way along ONE axis in `sign`
-    // direction. Returns updated frames for `obstacles` in order.
+    // direction. Returns updated frames for `obstacles` in order. `gap`
+    // keeps pushed frames that far off the candidate and each other.
     public static func pushForResize(_ candidate: Rect, obstacles: [Rect],
-                                     axis: Axis, sign: Int) -> [Rect] {
+                                     axis: Axis, sign: Int, gap: Double = 0) -> [Rect] {
         // Deterministic across processes (see resolve): work on a
         // canonically sorted copy, then map back to input positions so
         // the return stays positional for zip-back callers.
@@ -158,12 +184,12 @@ public enum Overlap {
         for _ in 0..<cap {
             if let i = frames.firstIndex(where: { overlaps($0, candidate) }) {
                 switch (axis, sign > 0) {
-                case (.horizontal, true): frames[i].x = candidate.x + candidate.w
+                case (.horizontal, true): frames[i].x = candidate.x + candidate.w + gap
                 case (.horizontal, false):
-                    frames[i].x = candidate.x - frames[i].w
-                case (.vertical, true): frames[i].y = candidate.y + candidate.h
+                    frames[i].x = candidate.x - frames[i].w - gap
+                case (.vertical, true): frames[i].y = candidate.y + candidate.h + gap
                 case (.vertical, false):
-                    frames[i].y = candidate.y - frames[i].h
+                    frames[i].y = candidate.y - frames[i].h - gap
                 }
                 moved.insert(i)
                 continue
@@ -188,22 +214,22 @@ public enum Overlap {
             }
             if moveA {
                 switch (axis, sign > 0) {
-                case (.horizontal, true): frames[a].x = frames[b].x + frames[b].w
+                case (.horizontal, true): frames[a].x = frames[b].x + frames[b].w + gap
                 case (.horizontal, false):
-                    frames[a].x = frames[b].x - frames[a].w
-                case (.vertical, true): frames[a].y = frames[b].y + frames[b].h
+                    frames[a].x = frames[b].x - frames[a].w - gap
+                case (.vertical, true): frames[a].y = frames[b].y + frames[b].h + gap
                 case (.vertical, false):
-                    frames[a].y = frames[b].y - frames[a].h
+                    frames[a].y = frames[b].y - frames[a].h - gap
                 }
                 moved.insert(a)
             } else {
                 switch (axis, sign > 0) {
-                case (.horizontal, true): frames[b].x = frames[a].x + frames[a].w
+                case (.horizontal, true): frames[b].x = frames[a].x + frames[a].w + gap
                 case (.horizontal, false):
-                    frames[b].x = frames[a].x - frames[b].w
-                case (.vertical, true): frames[b].y = frames[a].y + frames[a].h
+                    frames[b].x = frames[a].x - frames[b].w - gap
+                case (.vertical, true): frames[b].y = frames[a].y + frames[a].h + gap
                 case (.vertical, false):
-                    frames[b].y = frames[a].y - frames[b].h
+                    frames[b].y = frames[a].y - frames[b].h - gap
                 }
                 moved.insert(b)
             }
@@ -428,7 +454,8 @@ public enum GroupLayout {
                                   groups: [GroupID: GroupMeta],
                                   axis: Overlap.Axis, sign: Int,
                                   allowOverlap: Bool,
-                                  floating: Set<PaneID> = []) -> [PaneID: Rect] {
+                                  floating: Set<PaneID> = [],
+                                  gap: Double = 0) -> [PaneID: Rect] {
         var units = shoveUnits(moving: moving, memberOf: memberOf,
                                panes: panes, groups: groups,
                                floating: floating)
@@ -440,7 +467,7 @@ public enum GroupLayout {
         guard !units.isEmpty else { return [:] }
         let frames = units.map(\.rect)
         let pushed = Overlap.pushForResize(grown, obstacles: frames,
-                                           axis: axis, sign: sign)
+                                           axis: axis, sign: sign, gap: gap)
         var out = [PaneID: Rect]()
         for (unit, frame) in zip(units, pushed) {
             let dx = frame.x - unit.rect.x, dy = frame.y - unit.rect.y

@@ -298,7 +298,7 @@ extension CanvasView {
             panes: rects, groups: groupMetas,
             axis: axis, sign: sign,
             allowOverlap: GCTConfig.current.allowWindowOverlap,
-            floating: floating)
+            floating: floating, gap: Double(GCTConfig.current.windowGap))
         guard !moves.isEmpty else { return false }
         // Verify before touching anything.
         var varied = rects
@@ -316,7 +316,7 @@ extension CanvasView {
             guard frame != pane.frame else { continue }
             pane.setRect(frame, notifySurface: false)
             hub.movePane(MovePane(id: pid, rect: r,
-                            allowOverlap: GCTConfig.current.allowWindowOverlap))
+                            allowOverlap: GCTConfig.current.allowWindowOverlap, gap: Double(GCTConfig.current.windowGap)))
         }
         refreshGroupViews()
         refreshOcclusion()

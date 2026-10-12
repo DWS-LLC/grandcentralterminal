@@ -224,7 +224,7 @@ final class CanvasView: NSView {
             cwd: cwd,
             name: exe.split(separator: "/").last.map(String.init),
             command: cmd,
-            allowOverlap: GCTConfig.current.allowWindowOverlap), owner: "local")
+            allowOverlap: GCTConfig.current.allowWindowOverlap, gap: currentGap()), owner: "local")
     }
 
     private func layoutStatusBar() {
@@ -247,6 +247,19 @@ final class CanvasView: NSView {
     }
 
     // MARK: Window snapping (helpers; drag call sites below)
+
+    // Gap-aware collision resolve: Overlap.resolve with the configured
+    // window-gap (world points, 0 = flush). Every placement path goes
+    // through here so the minimum padding holds canvas-wide. The same
+    // gap rides the wire (MovePane/CreatePane/MoveGroup/SetFloating)
+    // so the daemon arbitrates identically.
+    private func gapResolve(_ rect: Rect, obstacles: [Rect]) -> Rect {
+        Overlap.resolve(rect, obstacles: obstacles, gap: currentGap())
+    }
+
+    private func currentGap() -> Double {
+        Double(GCTConfig.current.windowGap)
+    }
 
     // Config snapping-type -> engine anchors.
     private var snapMode: SnapEngine.Mode {
@@ -642,7 +655,7 @@ final class CanvasView: NSView {
         pane.update(meta: meta)
         restackFloating()
         hub.setFloating(SetFloating(id: id, floating: next,
-            allowOverlap: GCTConfig.current.allowWindowOverlap))
+            allowOverlap: GCTConfig.current.allowWindowOverlap, gap: currentGap()))
     }
     func focusPane(_ id: PaneID) {
         focusPane(id, raise: true)
@@ -825,7 +838,7 @@ final class CanvasView: NSView {
                 // collision (nothing else moves). Opt-in
                 // (allow-mouse-drag-to-push): foreigners yield instead.
                 if !GCTConfig.current.allowMouseDragToPush {
-                    let clean = Overlap.resolve(
+                    let clean = gapResolve(
                         NSRectOverlap.from(NSRect(
                             x: b0.minX + dx, y: b0.minY + dy,
                             width: b0.width, height: b0.height)),
@@ -867,7 +880,7 @@ final class CanvasView: NSView {
                     panes: varied, groups: groupMetas,
                     axis: axis, sign: sign,
                     allowOverlap: GCTConfig.current.allowWindowOverlap,
-                    floating: floatingPanes())
+                    floating: floatingPanes(), gap: currentGap())
                 var check = varied
                 for (pid, r) in moves { check[pid] = r }
                 guard shoveClearsBlock(grown: grown, id: id,
@@ -879,7 +892,7 @@ final class CanvasView: NSView {
                     pane.setRect(frame, notifySurface: false)
                     hub.movePane(MovePane(
                         id: pid, rect: r,
-                        allowOverlap: GCTConfig.current.allowWindowOverlap))
+                        allowOverlap: GCTConfig.current.allowWindowOverlap, gap: currentGap()))
                 }
             }
             // Free path: no obstacle contact. Snap MEMBER frames (not
@@ -925,7 +938,7 @@ final class CanvasView: NSView {
             for (_, b) in GroupLayout.bounds(groups: groupMetas, panes: rects) {
                 foreign.append(b)
             }
-            let clean = Overlap.resolve(NSRectOverlap.from(union1), obstacles: foreign)
+            let clean = gapResolve(NSRectOverlap.from(union1), obstacles: foreign)
             // Snap AFTER the resolve: post-resolve member frames (not
             // the union), members ride the final delta rigidly.
             // Same-group-only selection snaps in-group (siblings); a
@@ -1006,7 +1019,7 @@ final class CanvasView: NSView {
             // Fast path preserves old behavior exactly: no groups, overlap
             // allowed = untouched.
             if !obstacles.isEmpty || !GCTConfig.current.allowWindowOverlap {
-                rect = NSRectOverlap.to(Overlap.resolve(
+                rect = NSRectOverlap.to(gapResolve(
                     NSRectOverlap.from(rect), obstacles: obstacles))
             }
             // Members: static world by default — slide along collisions
@@ -1091,7 +1104,7 @@ final class CanvasView: NSView {
                     edges: Overlap.Edges(
                         w: zone.resizesW, e: zone.resizesE,
                         s: zone.resizesS, n: zone.resizesN),
-                    obstacles: obstacles)
+                    obstacles: obstacles, gap: currentGap())
                 rect = NSRectOverlap.to(clean)
             }
             // Members: static world by default — slide the grown bounds
@@ -1196,13 +1209,13 @@ final class CanvasView: NSView {
         }
         if case .move(let id, _) = drag, let pane = panes[id] {
             hub.movePane(MovePane(id: id, rect: pane.meta.rect,
-                            allowOverlap: GCTConfig.current.allowWindowOverlap))
+                            allowOverlap: GCTConfig.current.allowWindowOverlap, gap: currentGap()))
         }
         if case .multiMove(let members, _, _) = drag {
             for m in members {
                 guard let pane = panes[m] else { continue }
                 hub.movePane(MovePane(id: m, rect: pane.meta.rect,
-                                allowOverlap: GCTConfig.current.allowWindowOverlap))
+                                allowOverlap: GCTConfig.current.allowWindowOverlap, gap: currentGap()))
             }
         }
         if case .groupMove(let id, _, _, let rects0) = drag,
@@ -1211,7 +1224,7 @@ final class CanvasView: NSView {
             hub.moveGroup(MoveGroup(id: id,
                                       dx: Double(b1.minX - b0.minX),
                                       dy: Double(b1.minY - b0.minY),
-                                      allowOverlap: GCTConfig.current.allowWindowOverlap))
+                                      allowOverlap: GCTConfig.current.allowWindowOverlap, gap: currentGap()))
             refreshGroupViews()
         }
         if case .select = drag {
@@ -1630,14 +1643,15 @@ final class CanvasView: NSView {
             allowOverlap: GCTConfig.current.allowWindowOverlap,
             floating: floatingPanes())
         if !GCTConfig.current.allowWindowOverlap || !obstacles.isEmpty {
-            r = NSRectOverlap.to(Overlap.resolve(NSRectOverlap.from(r),
-                                                 obstacles: obstacles))
+            r = NSRectOverlap.to(gapResolve(NSRectOverlap.from(r),
+                                            obstacles: obstacles))
         }
         hub.createPane(CreatePane(
             rect: Rect(x: r.minX, y: r.minY, w: r.width, h: r.height),
             cwd: cwd,
-            allowOverlap: GCTConfig.current.allowWindowOverlap), owner: "local")
+            allowOverlap: GCTConfig.current.allowWindowOverlap, gap: currentGap()), owner: "local")
     }
+
 
     @objc func newRemotePaneFromMenu(_ sender: NSMenuItem) {
         guard let s = sender.representedObject as? String else { return }
@@ -1657,12 +1671,12 @@ final class CanvasView: NSView {
             allowOverlap: GCTConfig.current.allowWindowOverlap,
             floating: floatingPanes())
         if !GCTConfig.current.allowWindowOverlap || !obstacles.isEmpty {
-            r = NSRectOverlap.to(Overlap.resolve(NSRectOverlap.from(r),
-                                                 obstacles: obstacles))
+            r = NSRectOverlap.to(gapResolve(NSRectOverlap.from(r),
+                                            obstacles: obstacles))
         }
         hub.createPane(CreatePane(
             rect: Rect(x: r.minX, y: r.minY, w: r.width, h: r.height),
-            allowOverlap: GCTConfig.current.allowWindowOverlap), owner: owner)
+            allowOverlap: GCTConfig.current.allowWindowOverlap, gap: currentGap()), owner: owner)
     }
     override func mouseMoved(with event: NSEvent) {
         // Hover routing: the pane under the cursor gets position updates
@@ -2220,7 +2234,7 @@ final class CanvasView: NSView {
         hub.createPane(CreatePane(
             rect: Rect(x: r.minX, y: r.minY, w: r.width, h: r.height),
             cwd: cwd,
-            allowOverlap: GCTConfig.current.allowWindowOverlap,
+            allowOverlap: GCTConfig.current.allowWindowOverlap, gap: currentGap(),
             joinGroup: remoteJoin, joinDirection: direction.rawValue), owner: owner)
     }
 
@@ -2235,13 +2249,13 @@ final class CanvasView: NSView {
             allowOverlap: GCTConfig.current.allowWindowOverlap,
             floating: floatingPanes())
         if !GCTConfig.current.allowWindowOverlap || !obstacles.isEmpty {
-            r = NSRectOverlap.to(Overlap.resolve(NSRectOverlap.from(r),
-                                                 obstacles: obstacles))
+            r = NSRectOverlap.to(gapResolve(NSRectOverlap.from(r),
+                                            obstacles: obstacles))
         }
         hub.createPane(CreatePane(
             rect: Rect(x: r.minX, y: r.minY, w: r.width, h: r.height),
             cwd: cwd,
-            allowOverlap: GCTConfig.current.allowWindowOverlap), owner: "local")
+            allowOverlap: GCTConfig.current.allowWindowOverlap, gap: currentGap()), owner: "local")
     }
 
     // New-pane placement: flush against the focused pane on the given
@@ -2305,8 +2319,8 @@ final class CanvasView: NSView {
         }
         if !cfg.allowWindowOverlap || !obstacles.isEmpty {
             if cfg.allowWindowOverlap {
-                let clean = Overlap.resolve(NSRectOverlap.from(rect),
-                                            obstacles: obstacles)
+                let clean = gapResolve(NSRectOverlap.from(rect),
+                                       obstacles: obstacles)
                 rect = NSRectOverlap.to(clean)
             } else {
                 let (axis, sign): (Overlap.Axis, Int) = switch dir {
@@ -2319,7 +2333,7 @@ final class CanvasView: NSView {
                 // bounds (not just pane frames) also hold.
                 var placed = Overlap.resolve(NSRectOverlap.from(rect), direction: sign,
                     axis: axis, obstacles: paneRects().filter { !floatingPanes().contains($0.key) }.map(\.value))
-                placed = Overlap.resolve(placed, obstacles: obstacles)
+                placed = gapResolve(placed, obstacles: obstacles)
                 rect = NSRectOverlap.to(placed)
             }
         }
@@ -2432,7 +2446,7 @@ final class CanvasView: NSView {
         hub.movePane(MovePane(id: pane.id,
                                 rect: Rect(x: rect.minX, y: rect.minY,
                                            w: rect.width, h: rect.height),
-                                allowOverlap: GCTConfig.current.allowWindowOverlap))
+                                allowOverlap: GCTConfig.current.allowWindowOverlap, gap: currentGap()))
         refreshOcclusion()
     }
 
@@ -2467,8 +2481,8 @@ final class CanvasView: NSView {
             }
             if !obstacles.isEmpty {
                 let before = rect
-                let clean = Overlap.resolve(NSRectOverlap.from(rect),
-                                            obstacles: obstacles)
+                let clean = gapResolve(NSRectOverlap.from(rect),
+                                       obstacles: obstacles)
                 rect = NSRectOverlap.to(clean)
                 if rect != before {
                     pane.setRect(rect, notifySurface: false)
@@ -2476,7 +2490,7 @@ final class CanvasView: NSView {
                         id: id,
                         rect: Rect(x: rect.minX, y: rect.minY,
                                    w: rect.width, h: rect.height),
-                        allowOverlap: GCTConfig.current.allowWindowOverlap))
+                        allowOverlap: GCTConfig.current.allowWindowOverlap, gap: currentGap()))
                 }
             }
             settled.append((id, rect))
@@ -2553,7 +2567,7 @@ final class CanvasView: NSView {
                     edges: Overlap.Edges(
                         w: edge == .left, e: edge == .right,
                         s: edge == .below, n: edge == .above),
-                    obstacles: obstacles)
+                    obstacles: obstacles, gap: Double(cfg.windowGap))
                 rect = NSRectOverlap.to(clean)
                 guard rect != f else { return }
             }
@@ -2576,7 +2590,7 @@ final class CanvasView: NSView {
         pane.setRect(rect, notifySurface: true)
         hub.movePane(MovePane(id: id, rect: Rect(
             x: rect.minX, y: rect.minY, w: rect.width, h: rect.height),
-            allowOverlap: GCTConfig.current.allowWindowOverlap))
+            allowOverlap: GCTConfig.current.allowWindowOverlap, gap: currentGap()))
         refreshGroupViews()
         refreshOcclusion()
     }
@@ -2605,14 +2619,14 @@ final class CanvasView: NSView {
             panes: rects, groups: groupMetas,
             axis: axis, sign: sign,
             allowOverlap: GCTConfig.current.allowWindowOverlap,
-            floating: floatingPanes())
+            floating: floatingPanes(), gap: currentGap())
         for (pid, r) in moves {
             guard let pane = panes[pid], pane.id != moving else { continue }
             let frame = NSRectOverlap.to(r)
             guard frame != pane.frame else { continue }
             pane.setRect(frame, notifySurface: false)
             hub.movePane(MovePane(id: pid, rect: r,
-                    allowOverlap: GCTConfig.current.allowWindowOverlap))
+                    allowOverlap: GCTConfig.current.allowWindowOverlap, gap: currentGap()))
         }
         refreshGroupViews()
         refreshOcclusion()
@@ -2748,7 +2762,7 @@ final class CanvasView: NSView {
         refreshOcclusion()
         hub.movePane(MovePane(id: id, rect: Rect(x: frame.minX, y: frame.minY,
             w: frame.width, h: frame.height),
-            allowOverlap: GCTConfig.current.allowWindowOverlap))
+            allowOverlap: GCTConfig.current.allowWindowOverlap, gap: currentGap()))
         return true
     }
 

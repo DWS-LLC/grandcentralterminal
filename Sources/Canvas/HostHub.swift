@@ -183,7 +183,7 @@ final class HostHub {
 
     func movePane(_ req: MovePane) {
         guard let (c, remote) = remotePane(req.id) else { return }
-        c.movePane(MovePane(id: remote, rect: req.rect, allowOverlap: req.allowOverlap))
+        c.movePane(MovePane(id: remote, rect: req.rect, allowOverlap: req.allowOverlap, gap: req.gap))
     }
 
     func paneCwd(_ req: PaneCwd) {
@@ -194,7 +194,7 @@ final class HostHub {
     func setFloating(_ req: SetFloating) {
         guard let (c, remote) = remotePane(req.id) else { return }
         c.setFloating(SetFloating(id: remote, floating: req.floating,
-                                  allowOverlap: req.allowOverlap))
+                                  allowOverlap: req.allowOverlap, gap: req.gap))
     }
 
     func sendInput(_ id: PaneID, _ data: Data) {
@@ -236,6 +236,6 @@ final class HostHub {
     func moveGroup(_ req: MoveGroup) {
         guard let (c, remote) = remoteGroup(req.id) else { return }
         c.moveGroup(MoveGroup(id: remote, dx: req.dx, dy: req.dy,
-                              allowOverlap: req.allowOverlap))
+                              allowOverlap: req.allowOverlap, gap: req.gap))
     }
 }

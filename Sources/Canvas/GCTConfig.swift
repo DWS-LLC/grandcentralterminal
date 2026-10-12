@@ -397,6 +397,11 @@ struct GCTConfig {
     // Mouse drags never shove other panes/groups out of the way (they
     // slide around or hold instead). Keyboard grow always shoves.
     var allowMouseDragToPush = false
+    // Minimum padding between windows in world points (0-256, default
+    // 0 = flush). Collision resolves (create/move/resize, keyboard
+    // grow, group shoves) keep at least this much air; snapping still
+    // lands flush, then the gap resolve pushes back out to the gap.
+    var windowGap: CGFloat = 0
     // Magnetic window snapping: dragging or resizing a pane within
     // snap-radius pulls it flush with nearby panes and lights
     // full-canvas guide lines. On by default; the toggle-snapping
@@ -495,6 +500,10 @@ struct GCTConfig {
         }
         if let v = root["allow-mouse-drag-to-push"] {
             cfg.allowMouseDragToPush = v.lowercased() == "true"
+        }
+        if let s = root["window-gap"], let n = Double(s),
+           (0.0...256.0).contains(n) {
+            cfg.windowGap = CGFloat(n)
         }
         if let v = root["snapping"] {
             cfg.snapping = v.lowercased() == "true"
@@ -711,6 +720,9 @@ struct GCTConfig {
     # Window placement. Panes are kept from overlapping unless you allow
     # it: new panes, moves, and resizes all resolve collisions.
     allow-window-overlap = false
+    # Minimum padding between windows in world points (0-256, default 0
+    # = flush). Every collision resolve keeps at least this much air.
+    window-gap = 0
     # Magnetic window snapping (on by default): dragging or resizing a
     # pane within snap-radius pulls it flush with nearby panes and
     # lights full-canvas guide lines (fast fade in/out). Toggling only

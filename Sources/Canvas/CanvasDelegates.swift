@@ -24,7 +24,7 @@ extension CanvasView: CanvasConnDelegate {
                 let r = newPaneRect()
                 hub.createPane(CreatePane(
                     rect: Rect(x: r.minX, y: r.minY, w: r.width, h: r.height),
-                    allowOverlap: GCTConfig.current.allowWindowOverlap), owner: "local")
+                    allowOverlap: GCTConfig.current.allowWindowOverlap, gap: Double(GCTConfig.current.windowGap)), owner: "local")
             } else if !mappedPanes.isEmpty {
                 if !GCTConfig.current.allowWindowOverlap {
                     untangleLoadedPanes()
