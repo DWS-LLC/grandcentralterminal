@@ -97,7 +97,7 @@ if ! swift sdk list 2>/dev/null | grep -q "swift-6.4.0-RELEASE_static-linux"; th
   swift sdk install "$SDK_URL" --checksum "$SDK_SUM"
 fi
 swift build --package-path "$STAGE" -c release \
-  --swift-sdk "${ARCH}-swift-linux-musl" 2>&1 | tail -5
+  --swift-sdk "${ARCH}-swift-linux-musl" 2>&1 | tee build/linux-build.log | tail -5
 BIN_DIR=$(echo "$STAGE"/.build/*/release)
 tar -czf "$OUT" -C "$BIN_DIR" gctd ptyexec
 cp SKILL.md "build/gctd-${VERSION}-SKILL.md"

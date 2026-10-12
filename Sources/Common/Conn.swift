@@ -126,9 +126,16 @@ public final class Conn: @unchecked Sendable {
             var off = 0
             while off < raw.count {
 #if os(Linux)
+#if canImport(Musl)
+                // Static SDK (musl): MSG_NOSIGNAL is Int32, send takes
+                // Int32 flags — no conversion needed.
+                let n = send(fd, raw.baseAddress! + off,
+                             raw.count - off, MSG_NOSIGNAL)
+#else
                 // MSG_NOSIGNAL is plain Int on Glibc; send wants Int32.
                 let n = SwiftGlibc.send(fd, raw.baseAddress! + off,
                                         raw.count - off, Int32(MSG_NOSIGNAL))
+#endif
 #else
                 let n = write(fd, raw.baseAddress! + off, raw.count - off)
 #endif
@@ -237,9 +244,15 @@ public func listenTCP(port: UInt16) -> Int32 {
             // Dual-stack: accept v4 on the v6 socket when the OS allows.
             var v6only: Int32 = 0
 #if os(Linux)
+#if canImport(Musl)
+            // Musl imports these as plain Int32 — direct call.
+            setsockopt(s, IPPROTO_IPV6, IPV6_V6ONLY, &v6only,
+                       socklen_t(MemoryLayout<Int32>.size))
+#else
             // IPPROTO_IPV6 is Int, IPV6_V6ONLY is Int32 on Glibc.
             setsockopt(s, Int32(IPPROTO_IPV6), IPV6_V6ONLY, &v6only,
                        socklen_t(MemoryLayout<Int32>.size))
+#endif
 #else
             setsockopt(s, IPPROTO_IPV6, IPV6_V6ONLY, &v6only,
                        socklen_t(MemoryLayout<Int32>.size))
@@ -254,9 +267,14 @@ public func listenTCP(port: UInt16) -> Int32 {
     }
     return listenFD
 }
-// SOCK_STREAM is Int32 on Darwin, a typed enum on Glibc — one shim.
+// SOCK_STREAM is Int32 on Darwin, a typed enum on Glibc, plain
+// Int32 on Musl — one shim each.
 #if os(Linux)
+#if canImport(Musl)
+public let sockStream: Int32 = SOCK_STREAM
+#else
 public let sockStream: Int32 = Int32(SOCK_STREAM.rawValue)
+#endif
 #else
 public let sockStream: Int32 = SOCK_STREAM
 #endif
