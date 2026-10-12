@@ -322,6 +322,267 @@ index b168851..f0dab45 100644
  pub const Options = @import("termio/Options.zig");
  pub const Termio = @import("termio/Termio.zig");
  pub const Thread = @import("termio/Thread.zig");
+diff --git a/src/termio/External.zig b/src/termio/External.zig
+new file mode 100644
+index 0000000..3c26cbe
+--- /dev/null
++++ b/src/termio/External.zig
+@@ -0,0 +1,255 @@
++//! External implements a termio backend for external data sources.
++//!
++//! Unlike the Exec backend which spawns a subprocess with a PTY, the External
++//! backend receives terminal output data through explicit API calls. This is
++//! useful for scenarios where the data source is external to the process,
++//! such as:
++//!
++//!   - SSH connections where data comes from a remote host
++//!   - Serial port connections
++//!   - Replay/testing scenarios
++//!   - Embedded terminal widgets receiving data from network sources
++//!
++//! The External backend still maintains proper terminal state (modes, cursor,
++//! etc.) and supports bidirectional communication - input from the terminal
++//! (keyboard events) is queued and can be read by the embedder to send to
++//! the external source.
++//!
++//! Ported from daiimus/ghostty:ios-external-backend (21c71734) onto upstream
++//! master; see patches/README.md in this repository for provenance.
++const External = @This();
++
++const std = @import("std");
++const assert = @import("../quirks.zig").inlineAssert;
++const Allocator = std.mem.Allocator;
++const renderer = @import("../renderer.zig");
++const terminal = @import("../terminal/main.zig");
++const termio = @import("../termio.zig");
++
++const log = std.log.scoped(.io_external);
++
++/// Configuration for the External backend.
++pub const Config = struct {
++    /// Initial terminal size
++    cols: u16 = 80,
++    rows: u16 = 24,
++
++    /// Callback for when terminal wants to write data (user input).
++    /// The embedder should send this data to the external source (e.g., SSH).
++    /// If null, input is silently discarded.
++    ///
++    /// Thread safety: invoked on the IO thread. If the embedder needs
++    /// to dispatch to a different thread (e.g., main thread for UIKit),
++    /// it must handle that internally.
++    write_callback: ?*const fn (data: []const u8, userdata: ?*anyopaque) void = null,
++    write_userdata: ?*anyopaque = null,
++
++    /// Callback for when the terminal is resized. The embedder should use
++    /// this to resize the external source (e.g., SSH PTY window change).
++    /// If null, resizes are not reported to the embedder.
++    ///
++    /// Thread safety: invoked on the IO thread. If the embedder needs
++    /// to dispatch to a different thread (e.g., main thread for UIKit),
++    /// it must handle that internally.
++    resize_callback: ?*const fn (cols: u16, rows: u16, width_px: u32, height_px: u32, userdata: ?*anyopaque) void = null,
++    resize_userdata: ?*anyopaque = null,
++};
++
++/// The current terminal grid size
++grid_size: renderer.GridSize,
++
++/// The current screen size in pixels
++screen_size: renderer.ScreenSize,
++
++/// Write callback for sending input to external source
++write_callback: ?*const fn (data: []const u8, userdata: ?*anyopaque) void,
++write_userdata: ?*anyopaque,
++
++/// Resize callback for notifying embedder of terminal size changes
++resize_callback: ?*const fn (cols: u16, rows: u16, width_px: u32, height_px: u32, userdata: ?*anyopaque) void,
++resize_userdata: ?*anyopaque,
++
++/// Initialize the External backend.
++pub fn init(
++    alloc: Allocator,
++    cfg: Config,
++) !External {
++    _ = alloc;
++
++    log.info("External backend initializing with {d}x{d}, callback={}", .{
++        cfg.cols,
++        cfg.rows,
++        cfg.write_callback != null,
++    });
++
++    return .{
++        .grid_size = .{
++            .columns = cfg.cols,
++            .rows = cfg.rows,
++        },
++        .screen_size = .{
++            .width = 0,
++            .height = 0,
++        },
++        .write_callback = cfg.write_callback,
++        .write_userdata = cfg.write_userdata,
++        .resize_callback = cfg.resize_callback,
++        .resize_userdata = cfg.resize_userdata,
++    };
++}
++
++pub fn deinit(self: *External) void {
++    self.* = undefined;
++}
++
++/// Initialize terminal state for this backend.
++pub fn initTerminal(self: *External, term: *terminal.Terminal) void {
++    // Set initial size
++    self.resize(.{
++        .columns = term.cols,
++        .rows = term.rows,
++    }, .{
++        .width = term.width_px,
++        .height = term.height_px,
++    }) catch {};
++}
++
++/// Called when entering the IO thread.
++pub fn threadEnter(
++    self: *External,
++    alloc: Allocator,
++    io: *termio.Termio,
++    td: *termio.Termio.ThreadData,
++) !void {
++    _ = self;
++    _ = alloc;
++    _ = io;
++
++    // Initialize thread data for external backend
++    td.backend = .{ .external = .{} };
++
++    log.info("external backend thread entered", .{});
++}
++
++/// Called when exiting the IO thread.
++pub fn threadExit(self: *External, td: *termio.Termio.ThreadData) void {
++    _ = self;
++    assert(td.backend == .external);
++    log.info("external backend thread exiting", .{});
++}
++
++/// Handle focus changes.
++pub fn focusGained(
++    self: *External,
++    td: *termio.Termio.ThreadData,
++    focused: bool,
++) !void {
++    _ = self;
++    _ = focused;
++    assert(td.backend == .external);
++    // External backend doesn't need to do anything special for focus
++}
++
++/// Resize the terminal.
++pub fn resize(
++    self: *External,
++    grid_size: renderer.GridSize,
++    screen_size: renderer.ScreenSize,
++) !void {
++    self.grid_size = grid_size;
++    self.screen_size = screen_size;
++    log.debug("external backend resized to {}x{}", .{ grid_size.columns, grid_size.rows });
++
++    // Notify the embedder of the new size so it can resize the external
++    // source (e.g., SSH PTY window change request).
++    if (self.resize_callback) |cb| {
++        cb(
++            grid_size.columns,
++            grid_size.rows,
++            screen_size.width,
++            screen_size.height,
++            self.resize_userdata,
++        );
++    }
++}
++
++/// Queue a write to the external source.
++/// This is called when the terminal wants to send data (user input).
++///
++/// When `linefeed` is true (LNM mode 20), each carriage return (`\r`)
++/// in the data is expanded to `\r\n`, matching the Exec backend
++/// behavior. This is necessary because in linefeed mode, the Enter
++/// key should produce CR+LF rather than just CR.
++///
++/// Thread safety: this function is called from the IO thread. The
++/// write callback is invoked synchronously on the same thread. If
++/// the embedder needs to dispatch to a different thread (e.g., main
++/// thread for UIKit), it must handle that internally.
++pub fn queueWrite(
++    self: *External,
++    alloc: Allocator,
++    td: *termio.Termio.ThreadData,
++    data: []const u8,
++    linefeed: bool,
++) !void {
++    _ = alloc;
++    assert(td.backend == .external);
++
++    // If we have a write callback, call it
++    if (self.write_callback) |cb| {
++        if (!linefeed) {
++            // Fast path: no linefeed expansion needed.
++            cb(data, self.write_userdata);
++            return;
++        }
++
++        // Slow path: expand \r to \r\n (LNM mode). We need to scan
++        // for CR characters and send them as CRLF pairs.
++        var start: usize = 0;
++        for (data, 0..) |ch, i| {
++            if (ch == '\r') {
++                // Send everything up to and including the CR
++                if (i >= start) {
++                    cb(data[start .. i + 1], self.write_userdata);
++                }
++                // Send the LF
++                cb(&[_]u8{'\n'}, self.write_userdata);
++                start = i + 1;
++            }
++        }
++        // Send any remaining data after the last CR
++        if (start < data.len) {
++            cb(data[start..], self.write_userdata);
++        }
++    } else {
++        log.debug("external write discarded (no callback): {} bytes", .{data.len});
++    }
++}
++
++/// Handle abnormal child exit. No-op for External backend since there is
++/// no child process.
++pub fn childExitedAbnormally(
++    self: *External,
++    gpa: Allocator,
++    t: *terminal.Terminal,
++    exit_code: u32,
++    runtime_ms: u64,
++) !void {
++    _ = self;
++    _ = gpa;
++    _ = t;
++    _ = exit_code;
++    _ = runtime_ms;
++    // External backend has no child process, so this is a no-op.
++}
++
++/// Thread data specific to the External backend.
++pub const ThreadData = struct {
++    // External backend doesn't need thread-specific state currently,
++    // but we keep this struct for consistency with other backends.
++
++    pub fn deinit(self: *ThreadData, alloc: Allocator) void {
++        _ = alloc;
++        self.* = undefined;
++    }
++};
 diff --git a/src/termio/Termio.zig b/src/termio/Termio.zig
 index 824c16c..8be9b95 100644
 --- a/src/termio/Termio.zig
