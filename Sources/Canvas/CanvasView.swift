@@ -1593,10 +1593,11 @@ final class CanvasView: NSView {
     override func scrollWheel(with event: NSEvent) {
         // Hover routes the scroll: over a terminal surface it goes to the
         // terminal (scrollback, alt-screen, mouse reporting — the core
-        // decides), anywhere else it zooms the canvas at the cursor. No
-        // modifier needed, wheel and trackpad alike. Deltas already honor
-        // the user's scroll-direction preference; momentum-phase events
-        // take the same path, giving inertial scroll/zoom for free.
+        // decides). Everywhere else is map-like: a trackpad two-finger
+        // drag pans, a mouse wheel zooms at the cursor, and pinch
+        // (magnify) zooms. No modifier needed. Deltas already honor the
+        // user's scroll-direction preference; momentum-phase events take
+        // the same path, giving inertial pan/zoom for free.
         // Shape mirrors Ghostty's own SurfaceView: raw deltas (2x for
         // precise devices), precision+momentum packed into scroll mods.
         if GCTConfig.current.scrollOnTerminalHover {
@@ -1608,13 +1609,18 @@ final class CanvasView: NSView {
                                        mods: GhosttyScrollMods(event))
                 return
             }
-            // Pane zoom holds the camera: wheel/pinch off-pane would zoom
+            // Pane zoom holds the camera: gestures off-pane would zoom
             // out from under the zoomed pane and strand it. Terminal hover
             // scroll still reaches the pane above.
             guard !isPaneZoomed else { return }
             cancelCameraAnim()
             let p = viewPoint(event)
-            camera.zoom(at: p, factor: exp(-event.scrollingDeltaY / 400))
+            if event.hasPreciseScrollingDeltas {
+                camera.offset.x -= event.scrollingDeltaX
+                camera.offset.y -= event.scrollingDeltaY
+            } else {
+                camera.zoom(at: p, factor: exp(-event.scrollingDeltaY / 400))
+            }
             rebasePanDrag(around: p)
             applyCamera()
             return

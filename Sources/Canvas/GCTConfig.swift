@@ -430,9 +430,9 @@ struct GCTConfig {
     var cameraFitsFocusMove = true
     // Hover behavior: focus-follows-mouse focuses the pane under the
     // cursor on motion (same name as ghostty); scroll-on-terminal-hover
-    // routes wheel/trackpad scroll to the hovered terminal, else zoom.
-    // Both default true: scroll over a terminal scrolls it, scroll over
-    // empty canvas zooms.
+    // routes wheel/trackpad scroll to the hovered terminal, else pan
+    // (trackpad) or zoom (wheel). Both default true: scroll over a
+    // terminal scrolls it, scroll over empty canvas pans/zooms.
     var focusFollowsMouse = false
     var scrollOnTerminalHover = true
     // Canvas zoom limits (wheel/pinch), world scale where 1.0 = actual
@@ -754,9 +754,9 @@ struct GCTConfig {
     # ghostty's focus-follows-mouse). Off by default: click to focus.
     focus-follows-mouse = false
     # Scroll (wheel or trackpad) over a terminal scrolls the terminal;
-    # scroll over empty canvas zooms at the cursor. Set false for the old
-    # behavior: trackpad pans, shift+scroll goes to the terminal, wheel
-    # zooms.
+    # scroll over empty canvas pans (two-finger trackpad) or zooms at
+    # the cursor (mouse wheel). Set false for the old behavior:
+    # trackpad pans, shift+scroll goes to the terminal, wheel zooms.
     scroll-on-terminal-hover = true
     # Canvas zoom limits for wheel/pinch (world scale, 1.0 = actual size):
     # zoom-min 0.005-1, zoom-max 1-8. Above 1.0 the terminal texture is
