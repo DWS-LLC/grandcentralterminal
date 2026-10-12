@@ -39,17 +39,21 @@ let package = Package(
 )
 EOF
 
+SW_DIR="${SWIFTLY_HOME_DIR:-$HOME/.local/share/swiftly}"
 if ! command -v swiftly >/dev/null 2>&1; then
   echo "== installing swiftly =="
-  curl -L https://swift-server.github.io/swiftly/swiftly-install.sh | bash -s -- -y
-  export PATH="$HOME/.local/bin:$PATH"
+  curl -fsSL -o /tmp/swiftly.tar.gz \
+    https://download.swift.org/swiftly/linux/swiftly-"$(uname -m)".tar.gz
+  tar -xzf /tmp/swiftly.tar.gz -C /tmp && rm /tmp/swiftly.tar.gz
+  /tmp/swiftly init --quiet-shell-followup
 fi
+. "$SW_DIR/env.sh"
 if ! swiftly list 2>/dev/null | grep -q "$SWIFT_VER"; then
   echo "== installing Swift $SWIFT_VER =="
   swiftly install "$SWIFT_VER" --assume-yes
 fi
-swiftly use "$SWIFT_VER"
-export PATH="$HOME/.swiftly/bin:$PATH"
+swiftly use --assume-yes "$SWIFT_VER"
+hash -r
 swift --version
 
 ARCH="$(uname -m)"

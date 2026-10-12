@@ -51,13 +51,14 @@ if [ -z "$ZIG_BIN" ]; then
   export PATH="/tmp/zig-${ZIG_ARCH}-macos-${ZIG_VER}:$PATH"
 fi
 
-# 3. Stamp the version, then the normal build.
+# 3. Stamp the version, then the normal build. ZIG= points at the real
+# binary: the Makefile default is a local path that won't exist on CI.
 PLIST="Resources/Info.plist"
 cp "$PLIST" /tmp/Info.plist.bak
 /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" "$PLIST"
 /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $VERSION" "$PLIST"
 trap 'cp /tmp/Info.plist.bak Resources/Info.plist' EXIT
-make build
+make build ZIG="$(command -v zig)"
 
 # 4. Sign (hardened runtime, explicit inner-first order — no --deep).
 codesign --force --options runtime --timestamp \
