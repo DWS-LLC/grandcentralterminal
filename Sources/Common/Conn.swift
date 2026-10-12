@@ -128,16 +128,12 @@ public final class Conn: @unchecked Sendable {
             var off = 0
             while off < raw.count {
 #if os(Linux)
-#if canImport(Musl)
-                // Static SDK (musl): MSG_NOSIGNAL is Int32, send takes
-                // Int32 flags — no conversion needed.
-                let n = send(fd, raw.baseAddress! + off,
-                             raw.count - off, MSG_NOSIGNAL)
-#else
-                // MSG_NOSIGNAL is plain Int on Glibc; send wants Int32.
+                // Musl (static SDK) takes Int32 flags directly; Glibc's
+                // MSG_NOSIGNAL is plain Int, hence the cast. SwiftGlibc
+                // re-exports musl's send — bare send would hit
+                // Conn.send(tag:) instead.
                 let n = SwiftGlibc.send(fd, raw.baseAddress! + off,
                                         raw.count - off, Int32(MSG_NOSIGNAL))
-#endif
 #else
                 let n = write(fd, raw.baseAddress! + off, raw.count - off)
 #endif
