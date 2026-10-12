@@ -10,9 +10,8 @@
 #   APPLE_CERT_P12_B64  base64 of the Developer ID Application .p12
 #   APPLE_CERT_PASSWORD password for the .p12 (empty string when none)
 #
-# Runner labels: the jobs below use `macos` and `linux`. Rename to match
-# your runner labels if they differ.
-
+# Runner labels: `macos-arm64` (challenger-macos-arm64) and `linux`.
+# Rename to match your runner labels if they differ.
 "on":
   push:
     tags:
@@ -20,7 +19,7 @@
 
 jobs:
   macos:
-    runs-on: macos
+    runs-on: macos-arm64
     steps:
       - uses: actions/checkout@v4
       - name: Build, sign, notarize
