@@ -45,7 +45,9 @@ if ! command -v swiftly >/dev/null 2>&1; then
   curl -fsSL -o /tmp/swiftly.tar.gz \
     https://download.swift.org/swiftly/linux/swiftly-"$(uname -m)".tar.gz
   tar -xzf /tmp/swiftly.tar.gz -C /tmp && rm /tmp/swiftly.tar.gz
-  /tmp/swiftly init --quiet-shell-followup
+  # Fully non-interactive: no prompt, no profile edit, no auto toolchain
+  # (the install step below pins SWIFT_VER explicitly).
+  /tmp/swiftly init --quiet-shell-followup --no-modify-profile --skip-install
 fi
 . "$SW_DIR/env.sh"
 if ! swiftly list 2>/dev/null | grep -q "$SWIFT_VER"; then

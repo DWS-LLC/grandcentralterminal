@@ -8,6 +8,7 @@ PIN="a4aacd918ba9e79929ff608034c60a4341773ef0"   # upstream master, 2026-10-06
 if [ ! -d vendor/ghostty ]; then
   git clone --depth 1 https://github.com/ghostty-org/ghostty.git vendor/ghostty
 fi
+PATCH="$PWD/patches/libghostty-external-io.patch"
 (
   cd vendor/ghostty
   current=$(git rev-parse HEAD 2>/dev/null || true)
@@ -15,8 +16,9 @@ fi
     git fetch --depth 1 origin "$PIN"
     git checkout -q --detach "$PIN"
   fi
-  git apply --check ../patches/libghostty-external-io.patch 2>/dev/null &&
-    git apply ../patches/libghostty-external-io.patch ||
-    git diff --quiet || echo "patch already applied"
+  # Already applied (dirty tree from a previous apply)? Skip quietly.
+  git diff --quiet || { echo "patch already applied"; exit 0; }
+  # Fresh tree: the patch MUST apply — a silent skip builds the wrong
+  # header and Swift fails hours later on missing external-IO symbols.
+  git apply "$PATCH"
 )
-echo "vendor/ghostty ready at $PIN + patches/libghostty-external-io.patch"
