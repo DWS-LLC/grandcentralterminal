@@ -159,7 +159,20 @@ def report() -> None:
 
 
 # --- Cost estimates ----------------------------------------------------------
+# Flat $/s (720p-class, no audio) for models whose SKUs don't fit the Veo scheme.
+# Seedance is token-priced: ~129.6k tokens per 6s 720p24 clip * $1.07e-5.
+FLAT_USD_PER_SEC = {
+    "black-forest-labs/flux-3-video": 0.17,
+    "bytedance/seedance-2.5": 0.23,
+    "minimax/hailuo-3-max": 0.08,
+    "kwaivgi/kling-v3.0-pro": 0.112,
+}
+
+
 def video_cost(model: str, seconds: int, res: str) -> float:
+    if model in FLAT_USD_PER_SEC:
+        return FLAT_USD_PER_SEC[model] * seconds
+
     models = http_json(VIDEO_MODELS_URL)["data"]
     skus = next((m["pricing_skus"] for m in models if m["id"] == model), None)
     if skus is None:
