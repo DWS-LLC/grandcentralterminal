@@ -37,8 +37,9 @@ gctd --port=7420 --token=<token>   # point the mac canvas at it via [host.<name>
 
 - Infinite canvas: drag empty space to pan; scroll over a terminal scrolls
   the terminal (wheel or trackpad, no modifier — `scroll-on-terminal-hover`,
-  default true), scroll over empty canvas zooms toward the cursor; pinch
-  also zooms (`zoom-min`–`zoom-max`, default 0.03–4.0×; above 1.0 the
+  default true), scroll over empty canvas pans (two-finger trackpad) or
+  zooms toward the cursor (mouse wheel); pinch also zooms
+  (`zoom-min`–`zoom-max`, default 0.03–4.0×; above 1.0 the
   texture magnifies — use per-pane `cmd-+/-` for sharp big text);
   two-finger double-tap toggles actual size vs fit-all; `⌘0` fits all
   panes; `⌘Z` focus-zooms the pane into a sharp local fullscreen (the
@@ -46,7 +47,10 @@ gctd --port=7420 --token=<token>   # point the mac canvas at it via [host.<name>
   marker + accent chrome while zoomed). Toggle restores frame + camera;
   focus moves, `⌘0`, titlebar/resize grabs, and double-tap exit; pan /
   wheel / pinch hold while zoomed; fits dodge the status bar.
-  - drag the titlebar to move, edges/corners to resize (live PTY reflow)
+  - drag the titlebar to move, edges/corners to resize (live PTY reflow);
+  the whole titlebar band grabs for moving — only the corners and the
+  side/bottom edges resize — and right-clicking any window chrome
+  (titlebar or border) offers add-to/remove-from named groups
   - click to focus (`focus-follows-mouse = true` focuses on hover instead);
     click-drag inside a terminal selects text; `⌘H/J/K/L` moves focus to the
     nearest pane in that direction (camera centers + zooms to fit it — both
@@ -309,7 +313,9 @@ launch-at-login = false # login item (also in system Settings)
 
 Notes: the combo is eaten system-wide while GCT runs (shells never see
 it); stock macOS binds `ctrl+space` to input-source switching, so free
-it in Settings or pick another bind. Hotkey registration failure is
+it in Settings or pick another bind. The summon lifts the window above
+fullscreen apps (same recipe as Ghostty's quick terminal) — `ctrl+space`
+works from inside a fullscreen app. Hotkey registration failure is
 loud (log + stay visible) — a silent failure would strand a hidden
 window with the Dock as the only way back. Validation: hidden launch,
 `ctrl+space` round-trip (frontmost flips GCT → previous app), typing
@@ -354,7 +360,8 @@ arrive via `resize_callback` and go to the daemon as `TIOCSWINSZ`. See
 | `⌘P` | pane switcher (type to filter, ⏎ to jump) |
 | `⌘0` | fit all panes |
 | scroll over terminal | scroll the terminal (wheel or trackpad) |
-| scroll over empty canvas | zoom canvas (toward cursor) |
+| trackpad scroll over empty canvas | pan canvas |
+| wheel scroll over empty canvas | zoom canvas (toward cursor) |
 | click-drag inside terminal | select text (`⌘C` copies) |
 | pinch | zoom canvas (toward cursor) |
 | two-finger double-tap | toggle actual size / fit all |
@@ -362,9 +369,10 @@ arrive via `resize_callback` and go to the daemon as `TIOCSWINSZ`. See
 | opt-drag empty space | draw a new pane (free corner snaps, live cols×rows pill) |
 | right-drag empty space | rubber-band panes into a staged multi-select (no grouping yet) |
 | right-click canvas/group background | one menu, always: selection actions (when live) + group actions (on background) + new pane here + snapping on/off |
+| right-click window chrome | add to / remove from named group, new group |
 | shift+click titlebar | toggle pane in multi-select |
 | drag selected titlebar | move the whole selection as a rigid block |
-| drag titlebar | move pane (edges/center snap within the radius, guides light) |
+| drag titlebar | move pane (titlebar band always moves; corners + side/bottom edges resize; edges/center snap within the radius, guides light) |
 | drag group background | move every member together |
 | drag edges/corners | resize pane (moving edges snap, guides light) |
 `~/.config/gct/config.toml` — created with defaults on first launch; every key
@@ -382,6 +390,11 @@ appearance = "system"
 # Window placement. Panes are kept from overlapping unless you allow it:
 # new panes, moves, and resizes all resolve collisions.
 allow-window-overlap = false
+# Forced padding between windows in world points (0-256, default 0 =
+# flush): every collision resolve keeps at least this much air. Raising
+# it re-spreads existing panes on reload-config (and next launch);
+# lowering it only affects future moves.
+window-gap = 0
 # Magnetic window snapping (on, edges): drags/resizes within
 # snap-radius pull flush with nearby panes + light full-canvas guides
 # (fast fade in/out). snapping-type picks the anchors: edges (min/max,
@@ -529,7 +542,9 @@ clear-pane-selection = "cmd+shift+d"
 # (colored background, blocks non-members even when overlap is allowed);
 # otherwise it renames the focused pane's group. Drag the background to
 # move it; right-click it for rename/color/ungroup; rename-pane (cmd+r)
-# targets the group when the focused pane has one.
+# targets the group when the focused pane has one. A group with no
+# members left is deleted (closing or removing its last pane); it won't
+# linger in the add-to menu.
 group-selection = "cmd+g"
 ungroup = "cmd+shift+g"
 # Snapping: flip magnetic window snapping at runtime (session-only;

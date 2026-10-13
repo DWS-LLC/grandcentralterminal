@@ -62,6 +62,9 @@ final class Server {
         let live = Set(panes.keys)
         for var g in saved.groups {
             g.members = g.members.filter { live.contains($0) }
+            // Persisted husks (crashed before delete-on-empty landed):
+            // don't resurrect them.
+            guard !g.members.isEmpty else { continue }
             groups[g.id] = g
         }
 
@@ -313,7 +316,8 @@ final class Server {
             // paneDied becomes a no-op (untracked), so broadcast here.
             pane.terminate()
             broadcast(tag: .paneExit, json: PaneExit(id: req.id, code: -1))
-            for g in pruned { broadcast(tag: .groupMeta, json: g) }
+            for g in pruned.touched { broadcast(tag: .groupMeta, json: g) }
+            for gid in pruned.emptied { broadcast(tag: .groupExit, json: GroupRef(id: gid)) }
             state.scheduleSave(saved)
 
         case .createGroup:
@@ -376,23 +380,38 @@ final class Server {
             g.name = GroupStyle.sanitizedName(req.name)
             g.color = GroupStyle.sanitizedColor(req.color) ?? g.color
             // Admitted members evicted from any other group (single
-            // membership).
+            // membership). Any group left empty — the target itself or
+            // an evicted donor — is deleted, not kept as a husk.
             let fresh = Set(admitted)
             var evicted = [GroupMeta]()
+            var emptied = [GroupID]()
             for (id, var other) in groups where id != req.id {
                 let before = other.members.count
                 other.members.removeAll { fresh.contains($0) }
                 if other.members.count != before {
-                    groups[id] = other
-                    evicted.append(other)
+                    if other.members.isEmpty {
+                        groups.removeValue(forKey: id)
+                        emptied.append(id)
+                    } else {
+                        groups[id] = other
+                        evicted.append(other)
+                    }
                 }
             }
-            groups[req.id] = g
-            let updated = g
+            let updated: GroupMeta?
+            if g.members.isEmpty {
+                groups.removeValue(forKey: req.id)
+                emptied.append(req.id)
+                updated = nil
+            } else {
+                groups[req.id] = g
+                updated = g
+            }
             let afterUpdate = snapshotLocked()
             lock.unlock()
             for e in evicted { broadcast(tag: .groupMeta, json: e) }
-            broadcast(tag: .groupMeta, json: updated)
+            if let updated { broadcast(tag: .groupMeta, json: updated) }
+            for gid in emptied { broadcast(tag: .groupExit, json: GroupRef(id: gid)) }
             state.scheduleSave(afterUpdate)
         case .deleteGroup:
             guard let req: GroupRef = frame.decode() else { return }
@@ -584,9 +603,14 @@ final class Server {
             let before = other.members.count
             other.members.removeAll { fresh.contains($0) }
             if other.members.count != before {
-                groups[id] = other
-                let m = other
-                broadcastLocked(tag: .groupMeta, json: m)
+                if other.members.isEmpty {
+                    groups.removeValue(forKey: id)
+                    broadcastLocked(tag: .groupExit, json: GroupRef(id: id))
+                } else {
+                    groups[id] = other
+                    let m = other
+                    broadcastLocked(tag: .groupMeta, json: m)
+                }
             }
         }
         let g = GroupMeta(id: gid,
@@ -598,17 +622,24 @@ final class Server {
         return g
     }
 
-    // Drop a dead pane from every group; returns touched groups for
-    // broadcast.
+    // Drop a dead pane from every group. Groups left with no live
+    // members are deleted (empty groups don't linger in menus);
+    // returns survivors for groupMeta broadcast, dead ids for groupExit.
     @discardableResult
-    private func prunePaneLocked(_ id: PaneID) -> [GroupMeta] {
+    private func prunePaneLocked(_ id: PaneID) -> (touched: [GroupMeta], emptied: [GroupID]) {
         var touched = [GroupMeta]()
+        var emptied = [GroupID]()
         for (gid, var g) in groups where g.members.contains(id) {
             g.members.removeAll { $0 == id }
-            groups[gid] = g
-            touched.append(g)
+            if g.members.isEmpty {
+                groups.removeValue(forKey: gid)
+                emptied.append(gid)
+            } else {
+                groups[gid] = g
+                touched.append(g)
+            }
         }
-        return touched
+        return (touched, emptied)
     }
 
     private func broadcastLocked(tag: MsgTag, json: some Codable & Sendable) {
@@ -839,7 +870,8 @@ final class Server {
         let pruned = prunePaneLocked(pane.id)
         let saved = snapshotLocked()
         lock.unlock()
-        for g in pruned { broadcast(tag: .groupMeta, json: g) }
+        for g in pruned.touched { broadcast(tag: .groupMeta, json: g) }
+        for gid in pruned.emptied { broadcast(tag: .groupExit, json: GroupRef(id: gid)) }
         state.scheduleSave(saved)
     }
 

@@ -485,10 +485,19 @@ final class CanvasView: NSView {
     func reloadConfig() {
         let oldDoomToggle = GCTConfig.current.doom.toggle
         let oldRemotes = GCTConfig.current.remotes
+        let oldGap = GCTConfig.current.windowGap
+        let oldOverlap = GCTConfig.current.allowWindowOverlap
         GCTConfig.current = GCTConfig.load()
         ghosttyApp?.reloadConfig()
         applyTheme()
         syncStatusBarToConfig()
+        // Gap raised (or overlap flipped off): existing panes keep
+        // their flush frames until something moves. Spread them to
+        // the new padding once, same as the load-time untangle.
+        if GCTConfig.current.windowGap > oldGap
+            || (!GCTConfig.current.allowWindowOverlap && oldOverlap) {
+            untangleLoadedPanes()
+        }
         // Remote hosts changed: reconnect (new hosts join, removed ones
         // clear, dropped ones retry). Unchanged: still retry dead ones.
         if GCTConfig.current.remotes != oldRemotes {
@@ -1279,9 +1288,13 @@ final class CanvasView: NSView {
         let world = worldPoint(event)
         if let pane = topPane(at: world) {
             // Titlebar right-click: pane/group membership menu (the
-            // terminal keeps left-clicks). Surface right-clicks still
+            // terminal keeps left-clicks). Border right-clicks land
+            // here too: resizeZone covers side/bottom chrome, and the
+            // titlebar carve-out in resizeZone returns nil on the
+            // top-center band — any chrome right-click that isn't a
+            // resize grab shows the menu. Surface right-clicks still
             // forward to the terminal (vim/tmux expect them).
-            if pane.isInTitlebar(world),
+            if !pane.surfaceContains(world),
                pane.resizeZone(at: world, screenTolerance: camera.screenToWorldDistance(5)) == nil {
                 focusPane(pane.id)
                 showTitlebarMenu(pane.id, at: event)
@@ -1399,8 +1412,8 @@ final class CanvasView: NSView {
         guard let b = groupBounds(id) else { return }
         showCanvasMenu(at: event, world: CGPoint(x: b.midX, y: b.midY))
     }
-    // Titlebar right-click: membership for THIS pane. Same-owner groups
-    // get an "Add to <name>" entry (or "Remove from <name>" when
+    // Titlebar/chrome right-click: membership for THIS pane. Same-owner
+    // groups get an "Add to <name>" entry (or "Remove from <name>" when
     // already in it); "New group…" prompts for a name and starts a
     // group with this pane (+ a same-host staged selection when live).
     func showTitlebarMenu(_ id: PaneID, at event: NSEvent) {
@@ -1421,7 +1434,8 @@ final class CanvasView: NSView {
             menu.addItem(.separator())
         }
         let others = groupMetas.values.filter {
-            $0.id != current && hub.groupOwner(of: $0.id) == owner
+            $0.id != current && !$0.members.isEmpty
+                && hub.groupOwner(of: $0.id) == owner
         }.sorted { ($0.name ?? "") < ($1.name ?? "") }
         if !others.isEmpty {
             let add = NSMenuItem(title: "Add to group", action: nil, keyEquivalent: "")
@@ -1739,19 +1753,35 @@ final class CanvasView: NSView {
         }
     }
 
+    // Trackpad vs wheel: smooth-scroll mice (Logitech etc.) report
+    // precise deltas just like a trackpad, but only real touch devices
+    // tag events with a scroll phase or momentum phase. Wheels zoom.
+    private func isTrackpadScroll(_ event: NSEvent) -> Bool {
+        !event.phase.isEmpty || !event.momentumPhase.isEmpty
+    }
+
     override func scrollWheel(with event: NSEvent) {
         // Hover routes the scroll: over a terminal surface it goes to the
         // terminal (scrollback, alt-screen, mouse reporting — the core
         // decides). Everywhere else is map-like: a trackpad two-finger
         // drag pans, a mouse wheel zooms at the cursor, and pinch
-        // (magnify) zooms. No modifier needed. Deltas already honor the
-        // user's scroll-direction preference; momentum-phase events take
-        // the same path, giving inertial pan/zoom for free.
+        // (magnify) zooms. Wheel vs trackpad splits on scroll phase
+        // (smooth-scroll mice report precise deltas but no phase). No
+        // modifier needed. Deltas already honor the user's
+        // scroll-direction preference; momentum-phase events take the
+        // same path, giving inertial pan for free.
         // Shape mirrors Ghostty's own SurfaceView: raw deltas (2x for
         // precise devices), precision+momentum packed into scroll mods.
         if GCTConfig.current.scrollOnTerminalHover {
             let world = worldPoint(event)
-            if let pane = topPane(at: world), pane.surfaceContains(world) {
+            // Momentum tail of a canvas pan keeps panning even as the
+            // cursor crosses a terminal: killing it there feels like
+            // the canvas snags. Fresh (non-momentum) scrolls over a
+            // terminal still go to the terminal.
+            let coasting = event.momentumPhase != []
+                && event.phase == []
+            if !coasting, let pane = topPane(at: world),
+               pane.surfaceContains(world) {
                 let m = event.hasPreciseScrollingDeltas ? 2.0 : 1.0
                 pane.host?.mouseScroll(x: event.scrollingDeltaX * m,
                                        y: event.scrollingDeltaY * m,
@@ -1764,8 +1794,14 @@ final class CanvasView: NSView {
             guard !isPaneZoomed else { return }
             cancelCameraAnim()
             let p = viewPoint(event)
-            if event.hasPreciseScrollingDeltas {
-                camera.offset.x -= event.scrollingDeltaX
+            if isTrackpadScroll(event) {
+                // Grab-style on both axes (matches left-drag empty-space
+                // pan, which adds the pointer delta): vertical deltas
+                // arrive preference-inverted (natural scroll) so they
+                // subtract; horizontal deltas don't (platform quirk), so
+                // they add. Symmetric `-=` reads scrollbar-style on X —
+                // a left/right flick coasts the wrong way.
+                camera.offset.x += event.scrollingDeltaX
                 camera.offset.y -= event.scrollingDeltaY
             } else {
                 camera.zoom(at: p, factor: exp(-event.scrollingDeltaY / 400))
@@ -1774,14 +1810,14 @@ final class CanvasView: NSView {
             applyCamera()
             return
         }
-        // Legacy path (scroll-on-terminal-hover = false): precise
-        // two-finger scroll pans, shift+wheel (which macOS delivers as a
+        // Legacy path (scroll-on-terminal-hover = false): trackpad
+        // scroll pans, shift+wheel (which macOS delivers as a
         // horizontal scroll) goes to the terminal, plain wheel zooms.
-        if event.hasPreciseScrollingDeltas
+        if isTrackpadScroll(event)
             && event.modifierFlags.intersection([.shift, .control, .option, .command]).isEmpty {
             guard !isPaneZoomed else { return }
             cancelCameraAnim()
-            camera.offset.x -= event.scrollingDeltaX
+            camera.offset.x += event.scrollingDeltaX
             camera.offset.y -= event.scrollingDeltaY
             rebasePanDrag(around: viewPoint(event))
             applyCamera()

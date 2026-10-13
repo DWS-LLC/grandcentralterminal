@@ -243,6 +243,19 @@ extension PaneView {
         let nearE = abs(worldPoint.x - r.maxX) <= grab
         let nearS = abs(worldPoint.y - r.minY) <= grab
         let nearN = abs(worldPoint.y - r.maxY) <= grab
+        // Titlebar body moves: the top-edge strip overlaps the titlebar,
+        // so a bare .n hit would steal titlebar grabs and bury the
+        // titlebar right-click menu. Corners and side edges still resize;
+        // the top-center band falls through to move.
+        if worldPoint.y >= r.maxY - PaneView.titleBarHeight
+            && worldPoint.y <= r.maxY
+            && worldPoint.x >= r.minX && worldPoint.x <= r.maxX {
+            if nearW && nearN { return .nw }
+            if nearE && nearN { return .ne }
+            if nearW { return .w }
+            if nearE { return .e }
+            return nil
+        }
         switch (nearW, nearE, nearS, nearN) {
         case (true, false, false, true): return .nw
         case (false, true, false, true): return .ne

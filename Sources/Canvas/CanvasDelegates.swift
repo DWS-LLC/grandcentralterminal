@@ -28,6 +28,10 @@ extension CanvasView: CanvasConnDelegate {
             } else if !mappedPanes.isEmpty {
                 if !GCTConfig.current.allowWindowOverlap {
                     untangleLoadedPanes()
+                } else if GCTConfig.current.windowGap > 0 {
+                    // Overlap allowed + gap raised: existing panes were
+                    // placed flush; spread them to the new padding once.
+                    untangleLoadedPanes()
                 }
                 fitAll()
             }
@@ -87,6 +91,15 @@ extension CanvasView: CanvasConnDelegate {
 
     func connGroupMeta(_ meta: GroupMeta, owner: String) {
         let g = hub.inboundGroup(meta, owner: owner)
+        // Belt + suspenders with the daemon's delete-on-empty: an empty
+        // member list here means the group is gone (stale daemon, race).
+        guard !g.members.isEmpty else {
+            groupViews[g.id]?.removeFromSuperview()
+            groupViews.removeValue(forKey: g.id)
+            groupMetas.removeValue(forKey: g.id)
+            hub.forgetGroup(g.id)
+            return
+        }
         groupMetas[g.id] = g
         ensureGroupView(g.id)
         refreshGroupViews()

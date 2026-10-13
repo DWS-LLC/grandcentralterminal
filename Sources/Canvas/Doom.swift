@@ -190,9 +190,12 @@ final class DoomController {
             win.deminiaturize(nil)
             // Regardless (not keyAndOrderFront): the active Space may
             // belong to a fullscreen app — order there, not ours.
+            // Level, same as the main path: fullscreen sits above .normal.
+            win.level = .popUpMenu
             win.orderFrontRegardless()
             win.makeKey()
             NSApp.activate(ignoringOtherApps: true)
+            win.level = .floating
             afterVisible()
             return
         }
@@ -226,12 +229,19 @@ final class DoomController {
         // would land on our home Space, hidden behind fullscreen).
         // collectionBehavior (canJoinAllSpaces + fullScreenAuxiliary)
         // keeps it legal there; activate takes keyboard focus.
+        // Level, not just order: a fullscreen Space sits above .normal,
+        // so without the bump the summoned frame renders behind the
+        // fullscreen app and ctrl-space looks dead. Ghostty's quick
+        // terminal does the same dance (popUpMenu in, floating after).
+        win.level = .popUpMenu
         win.orderFrontRegardless()
         win.makeKey()
         NSApp.activate(ignoringOtherApps: true)
         runAnimation(duration: cfg.animationDuration, frame: final, alpha: 1) { [weak self] in
-            self?.animating = false
-            self?.afterVisible()
+            guard let self else { return }
+            self.animating = false
+            self.window?.level = .floating
+            self.afterVisible()
         }
     }
 
@@ -261,6 +271,7 @@ final class DoomController {
             guard let self, let win = self.window else { return }
             win.orderOut(nil)
             win.alphaValue = 1
+            win.level = .normal
             self.animating = false
             self.canvas?.refreshOcclusion()
         }

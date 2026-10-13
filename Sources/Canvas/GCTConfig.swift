@@ -402,6 +402,8 @@ struct GCTConfig {
     // 0 = flush). Collision resolves (create/move/resize, keyboard
     // grow, group shoves) keep at least this much air; snapping still
     // lands flush, then the gap resolve pushes back out to the gap.
+    // Raising it re-spreads existing panes on reload-config (and on
+    // next launch); lowering it only affects future moves.
     var windowGap: CGFloat = 0
     // Magnetic window snapping: dragging or resizing a pane within
     // snap-radius pulls it flush with nearby panes and lights
@@ -724,6 +726,8 @@ struct GCTConfig {
     allow-window-overlap = false
     # Minimum padding between windows in world points (0-256, default 0
     # = flush). Every collision resolve keeps at least this much air.
+    # Raising it re-spreads existing panes on reload-config (and next
+    # launch); lowering it only affects future moves.
     window-gap = 0
     # Magnetic window snapping (on by default): dragging or resizing a
     # pane within snap-radius pulls it flush with nearby panes and
