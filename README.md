@@ -89,10 +89,14 @@ gctd --port=7420 --token=<token>   # point the mac canvas at it via [host.<name>
   - dead keys, accents, and IME composition work: keys route through the
     text input system, preedit renders inline at the cursor, commit lands
     as typed input, and composition keys (⌫, ^H) only affect the preedit
- - Panes carry a titlebar-color border on the left/right/bottom edges
-   (`[titlebar] border-width`, default 4pt — wider stays grabbable for
-   edge/corner resizes even zoomed out) and a configurable drop shadow
-   (`shadow-opacity` 0 turns it off, `shadow-radius` blurs).
+- Panes carry a titlebar-color border on the left/right/bottom edges
+  (`[titlebar] border-width`, default 4pt — wider stays grabbable for
+  edge/corner resizes even zoomed out) and a configurable drop shadow
+  (`shadow-opacity` 0 turns it off, `shadow-radius` blurs). Programs
+  speaking [OSC 7501 program status](https://www.superlogical.com/rex/docs/build/program-status)
+  show their state right-aligned in the titlebar (`◌ 40%` working,
+  `▲` blocked, `✓` done, `✕` error, plus the program's message) —
+  per pane, local and remote, cleared when you type into the pane.
 - Status bar (`[statusbar]`, off by default): top/bottom overlay of
   xbar-compatible plugin components — any executable in
   `~/.config/gct/statusbar/` named `{name}.{interval}.{ext}`

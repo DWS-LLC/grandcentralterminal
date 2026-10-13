@@ -72,6 +72,13 @@ extension CanvasView: CanvasConnDelegate {
 
     func connOutput(_ id: PaneID, _ data: Data, owner: String) {
         let local = hub.localPane(remote: id, owner: owner)
+        let r = programStatus.ingest(data, pane: local)
+        if r.queryReply {
+            // Program asked whether OSC 7501 is supported: the reply is
+            // fixed bytes with nothing from any report (spec §Security).
+            hub.sendInput(local, ProgramStatusStore.queryReply)
+        }
+        if r.changed { panes[local]?.programStatus = programStatus.summary(for: local) }
         panes[local]?.host?.feed(data)
     }
 

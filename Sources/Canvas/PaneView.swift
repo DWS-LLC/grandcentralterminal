@@ -14,6 +14,9 @@ final class PaneView: NSView {
     let surfaceHostView = NSView(frame: .zero)
     private let titlebar = NSView(frame: .zero)
     private let titleLabel = CATextLayer()
+    private let statusLabel = CATextLayer()
+    // OSC 7501 program status, right-aligned in the titlebar (nil = none).
+    var programStatus: ProgramStatusStore.Summary? { didSet { applyChrome() } }
 
     var isFocused = false { didSet { applyChrome() } }
     // Multi-select: staged by right-drag/shift+click, acts as a unit for
@@ -46,6 +49,10 @@ final class PaneView: NSView {
         titleLabel.alignmentMode = .left
         titleLabel.truncationMode = .end
         titlebar.layer?.addSublayer(titleLabel)
+        statusLabel.contentsScale = NSScreen.main?.backingScaleFactor ?? 2
+        statusLabel.alignmentMode = .right
+        statusLabel.truncationMode = .start
+        titlebar.layer?.addSublayer(statusLabel)
 
         surfaceHostView.wantsLayer = true
         surfaceHostView.autoresizingMask = []
@@ -133,8 +140,21 @@ final class PaneView: NSView {
         let textH = min(PaneView.titleBarHeight - 6, GCTTheme.current.titleFont.pointSize + 3)
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        titleLabel.frame = CGRect(x: 8, y: (PaneView.titleBarHeight - textH) / 2,
-                                  width: max(0, w - 16), height: textH)
+        if programStatus != nil {
+            // Status docks right (8pt margin, half the bar max); the
+            // title takes the rest. Narrow panes squeeze the status
+            // first, truncating its head toward the message tail.
+            let statusW = min(w / 2, statusLabel.preferredFrameSize().width)
+            statusLabel.frame = CGRect(x: w - 8 - statusW,
+                                       y: (PaneView.titleBarHeight - textH) / 2,
+                                       width: statusW, height: textH)
+            titleLabel.frame = CGRect(x: 8, y: (PaneView.titleBarHeight - textH) / 2,
+                                      width: max(0, w - 16 - statusW - 8), height: textH)
+        } else {
+            titleLabel.frame = CGRect(x: 8, y: (PaneView.titleBarHeight - textH) / 2,
+                                      width: max(0, w - 16), height: textH)
+            statusLabel.frame = .zero
+        }
         CATransaction.commit()
     }
 
@@ -185,6 +205,24 @@ final class PaneView: NSView {
         }
         titleLabel.font = t.titleFont
         titleLabel.fontSize = t.titleFont.pointSize
+        // Program status: same font, theme text color. blocked/error
+        // borrow attention colors so they read without clicking in.
+        statusLabel.string = programStatus?.text
+        let scol: NSColor
+        if accent {
+            scol = .white
+        } else if programStatus?.state == .blocked {
+            scol = hostColor ?? .systemOrange
+        } else if programStatus?.state == .error {
+            scol = .systemRed
+        } else if let hc = hostColor {
+            scol = hc
+        } else {
+            scol = (isFocused || isZoomed) ? t.titlebarTextFocused : t.titlebarTextUnfocused
+        }
+        statusLabel.foregroundColor = scol.cgColor
+        statusLabel.font = t.titleFont
+        statusLabel.fontSize = t.titleFont.pointSize
         layoutChrome()
     }
 

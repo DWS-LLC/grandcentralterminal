@@ -61,6 +61,9 @@ final class CanvasView: NSView {
     let hub = HostHub()
     var conn: CanvasConn? { hub.conn(forOwner: "local") }
     private(set) var ghosttyApp: GhosttyApp?
+    // OSC 7501 program-status records: one store for every pane on every
+    // host (canvas-local; the daemon never sees these bytes).
+    let programStatus = ProgramStatusStore()
 
     // Drag state machine.
     private enum Drag {
@@ -2231,6 +2234,9 @@ final class CanvasView: NSView {
         guard let id = focusedID, let pane = panes[id] else { return }
         let text = NSPasteboard.general.string(forType: .string) ?? ""
         pane.host?.text(text)
+        if programStatus.noteInput(id) {
+            panes[id]?.programStatus = programStatus.summary(for: id)
+        }
     }
 
     private func copyFromFocused() {
@@ -2438,6 +2444,7 @@ final class CanvasView: NSView {
     }
 
     func removePane(_ id: PaneID) {
+        programStatus.remove(id)
         guard let pane = panes[id] else { return }
         if markedHost === pane.host { dropComposition() }
         pane.host?.close()
@@ -2468,6 +2475,16 @@ final class CanvasView: NSView {
                                delegate: self, fontSize: fontSize)
         host.connSend = { [weak self] id, data in
             self?.hub.sendInput(id, data)
+            // Keystrokes mean the user has seen any done/error report.
+            // Main-thread: the write callback fires on ghostty's IO thread.
+            // (The OSC 7501 query auto-reply bypasses connSend, so it
+            // never self-clears.)
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                if self.programStatus.noteInput(id) {
+                    self.panes[id]?.programStatus = self.programStatus.summary(for: id)
+                }
+            }
         }
         pane.install(host: host)
         refreshCellMetrics(host)
