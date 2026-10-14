@@ -676,7 +676,7 @@ struct GCTConfig {
         let kb = t["keybinds"] ?? [:]
         for action in GCTAction.allCases {
             guard let spec = kb[action.rawValue] else { continue }
-            if spec.isEmpty || spec.lowercased() == "none" {
+            if spec.lowercased() == "none" {
                 binds[action] = nil
             } else if let bind = GCTKeybind(spec) {
                 binds[action] = bind

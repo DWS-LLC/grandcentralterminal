@@ -16,7 +16,7 @@ extension CanvasView {
 
     func paneRects() -> [PaneID: Rect] {
         var out = [PaneID: Rect]()
-        for (id, p) in panes { out[id] = NSRectOverlap.from(p.frame) }
+        for (id, p) in panes { out[id] = NSRectOverlap.from(worldFrame(p)) }
         return out
     }
 
@@ -25,7 +25,7 @@ extension CanvasView {
     // Live group rectangle from current pane frames (union + padding).
     func groupBounds(_ id: GroupID) -> NSRect? {
         guard let g = groupMetas[id] else { return nil }
-        let frames = g.members.compactMap { panes[$0]?.frame }
+        let frames = g.members.compactMap { panes[$0].map(worldFrame) }
             .map { NSRectOverlap.from($0) }
         guard let b = GroupGeometry.bounds(frames: frames) else { return nil }
         return NSRectOverlap.to(b)

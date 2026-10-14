@@ -71,11 +71,13 @@ final class PaneView: NSView {
     // Daemon rects arrive pre-resolved (the daemon arbitrates layout):
     // apply as-is. The != guard breaks the echo loop (our own setRect ->
     // movePane -> broadcast -> update). Must run on main (frame mutation).
-    // INVARIANT: meta.rect == frame, always.
+    // INVARIANT: meta.rect == frame, except while zoomed (setZoomFrame).
     func update(meta: PaneMeta) {
         let r = NSRect(x: meta.rect.x, y: meta.rect.y,
                        width: meta.rect.w, height: meta.rect.h)
-        if r != frame {
+        // A zoomed pane's frame is the local fullscreen; meta.rect keeps
+        // the real one until unzoom.
+        if r != frame, !isZoomed {
             assert(Thread.isMainThread, "update(meta:) off main")
             setRect(r, notifySurface: true)
         }
@@ -94,6 +96,14 @@ final class PaneView: NSView {
         applyChrome()
     }
 
+    // Local-only frame (focus zoom): meta.rect stays the real rect, so
+    // placement and daemon moves never see the fullscreen one.
+    func setZoomFrame(_ rect: NSRect) {
+        frame = rect
+        layoutChrome()
+        syncSurfaceSize()
+    }
+
     func setRect(_ rect: NSRect, notifySurface: Bool) {
         frame = rect
         meta.rect = Rect(x: rect.minX, y: rect.minY, w: rect.width, h: rect.height)
@@ -104,12 +114,39 @@ final class PaneView: NSView {
     // Resize the ghostty surface to match the content view's backing size.
     func syncSurfaceSize() {
         guard let host else { return }
-        let scale = window?.backingScaleFactor
+        let backing = window?.backingScaleFactor
             ?? NSScreen.main?.backingScaleFactor ?? 2
+        // A vector-zoomed surface keeps its camera-matched scale.
+        let scale = host.scaleOverride ?? backing
         host.setScale(scale)
         let px = UInt32(max(1, surfaceHostView.frame.width * scale))
         let py = UInt32(max(1, surfaceHostView.frame.height * scale))
         host.setSize(width: px, height: py)
+    }
+
+    // Vector zoom: lower bound where tiny cells stop being worth it, and
+    // caps so a zoomed-in pane never allocates a giant drawable.
+    private static let minRenderZoom: CGFloat = 0.5
+    private static let maxDrawableSide: CGFloat = 8192
+    private static let maxDrawablePixels: CGFloat = 24_000_000
+    private static let zoomTolerance: CGFloat = 0.015
+
+    // Re-render the terminal sharp at the camera's scale. Cheap no-op when
+    // already within tolerance. Returns false if the grid refused to hold.
+    @discardableResult
+    func syncRenderZoom(camera: CGFloat) -> Bool {
+        guard let host else { return true }
+        let points = surfaceHostView.bounds.size
+        guard points.width > 0, points.height > 0 else { return true }
+
+        let backing = window?.backingScaleFactor
+            ?? NSScreen.main?.backingScaleFactor ?? 2
+        let sideCap = Self.maxDrawableSide / (max(points.width, points.height) * backing)
+        let areaCap = (Self.maxDrawablePixels / (points.width * points.height)).squareRoot() / backing
+        let zoom = min(max(camera, Self.minRenderZoom), max(1, min(sideCap, areaCap)))
+        guard abs(zoom / CGFloat(host.zoom) - 1) > Self.zoomTolerance else { return true }
+
+        return host.renderZoom(Double(zoom), base: backing, points: points) == .applied
     }
 
     override func layout() {

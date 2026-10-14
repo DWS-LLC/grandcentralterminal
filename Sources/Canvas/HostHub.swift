@@ -54,7 +54,7 @@ final class HostHub {
     }
 
     func disconnect(owner: String) {
-        conns.removeValue(forKey: owner)
+        conns.removeValue(forKey: owner)?.close()
     }
 
     func owners() -> [String] { Array(conns.keys).sorted() }

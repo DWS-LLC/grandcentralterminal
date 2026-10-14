@@ -83,7 +83,19 @@ final class GhosttyApp: @unchecked Sendable {
         ghostty_config_load_default_files(cfg)
         ghostty_config_load_recursive_files(cfg)
         ghostty_config_finalize(cfg)
+        logDiagnostics(cfg)
         return cfg
+    }
+
+    // Keys the embedded ghostty rejected from the user's config (typos,
+    // app-only options): surfaced so a "my setting does nothing" has an answer.
+    private static func logDiagnostics(_ cfg: ghostty_config_t?) {
+        let count = ghostty_config_diagnostics_count(cfg)
+        for i in 0..<count {
+            let d = ghostty_config_get_diagnostic(cfg, i)
+            guard let msg = d.message else { continue }
+            NSLog("[gct] ghostty config: \(String(cString: msg))")
+        }
     }
 
     private static func background(of cfg: ghostty_config_t?) -> NSColor? {
@@ -125,7 +137,6 @@ final class GhosttyApp: @unchecked Sendable {
         # Grand Central Terminal defaults
         background = #000000
         foreground = #c8c8c8
-        font-family = Menlo
         font-size = 13
         window-padding-x = 8
         window-padding-y = 6

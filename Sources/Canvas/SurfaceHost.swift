@@ -17,7 +17,20 @@ final class SurfaceHost: @unchecked Sendable {
     // Content scale the surface was last configured with; divides pixel
     // metrics back into points.
     private(set) var scale: Double
+    // Vector zoom: the camera zoom this surface is rendered at, and the
+    // exact content scale that kept its grid intact (nil = plain backing
+    // scale). See renderZoom(_:base:points:).
+    private(set) var zoom = 1.0
+    private(set) var scaleOverride: Double?
+    private weak var hostView: NSView?
+    // Last occlusion state from the canvas; zoom re-renders hide and restore it.
+    private var visible = true
     private let lock = NSLock()
+    // Grid last reported to the daemon. Resize callbacks land on main
+    // after the fact, so they report the grid as it is NOW: a zoom
+    // re-render that probes scales and settles on the same grid sends
+    // nothing, only a real change goes out.
+    private var reportedGrid: (cols: UInt16, rows: UInt16)?
     // Serial queue contract: ghostty_surface_write_output must be
     // serialized per surface. All feeds go through here.
     private let feedQueue = DispatchQueue(label: "gct.surface.feed")
@@ -30,6 +43,7 @@ final class SurfaceHost: @unchecked Sendable {
         self.paneID = paneID
         self.delegate = delegate
         self.scale = scale
+        self.hostView = hostView
 
         var cfg = ghostty_surface_config_new()
         cfg.platform_tag = GHOSTTY_PLATFORM_MACOS
@@ -44,10 +58,10 @@ final class SurfaceHost: @unchecked Sendable {
             let bytes = Data(bytes: data, count: Int(len))  // copy before hops
             host.connSend?(host.paneID, bytes)
         }
-        cfg.resize_callback = { surface, cols, rows, _, _ in
+        cfg.resize_callback = { surface, _, _, _, _ in
             guard let surface, let host = SurfaceHost.from(surface) else { return }
             DispatchQueue.main.async {
-                host.delegate?.surfaceResize(host, cols, rows)
+                host.reportIfMoved()
             }
         }
 
@@ -90,6 +104,97 @@ final class SurfaceHost: @unchecked Sendable {
         ghostty_surface_set_content_scale(s, scale, scale)
     }
 
+    // Tell the daemon only when the grid really moved.
+    private func reportIfMoved() {
+        guard let g = grid() else { return }
+        guard reportedGrid?.cols != g.cols || reportedGrid?.rows != g.rows else { return }
+        reportedGrid = (g.cols, g.rows)
+        delegate?.surfaceResize(self, g.cols, g.rows)
+    }
+
+    private func grid() -> (cols: UInt16, rows: UInt16)? {
+        guard let s = surfaceIfOpen() else { return nil }
+        let size = ghostty_surface_size(s)
+        return (size.columns, size.rows)
+    }
+
+    // Content scales tried around the ideal one, in order (fractions).
+    // Cell pixels are whole numbers, so the exact camera scale can shift
+    // the grid by a column; a nudge of a few percent keeps it.
+    private static let scaleNudges: [Double] =
+        [0, 0.005, -0.005, 0.01, -0.01, 0.015, -0.015, 0.02, -0.02, 0.03, -0.03, 0.04, -0.04]
+    private static let unitZoomTolerance = 0.01
+
+    enum ZoomFit { case applied, gridUnstable }
+
+    // Vector zoom: re-render at `base * zoom` (fonts re-rasterized, not
+    // magnified). The layer is the IOSurface itself and its drawable is
+    // bounds * contentsScale, so the layer scale follows. The grid must
+    // not change (a SIGWINCH per zoom step would redraw tmux): probe
+    // nearby scales until it matches, else restore and report unstable.
+    func renderZoom(_ zoom: Double, base: Double, points: CGSize) -> ZoomFit {
+        assert(Thread.isMainThread)
+        guard let s = surfaceIfOpen(), let target = grid() else { return .gridUnstable }
+
+        // No flashing: while probing, the renderer is told it is hidden so
+        // it draws nothing mid-probe (its mailbox applies font + size in
+        // order, then the visible message redraws once with the final
+        // state); one CATransaction so the layer commits once; the old
+        // frame is stretched to the new bounds until the new one lands.
+        ghostty_surface_set_occlusion(s, false)
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        hostView?.layer?.contentsGravity = .resize
+        defer {
+            CATransaction.commit()
+            ghostty_surface_set_occlusion(s, visible)
+            restoreGravityLater()
+        }
+
+        // Back at 1x: exact backing scale, whatever grid that yields.
+        if abs(zoom - 1) < Self.unitZoomTolerance {
+            apply(scale: base, points: points)
+            self.zoom = 1
+            scaleOverride = nil
+            return .applied
+        }
+
+        let prior = scale
+        for nudge in Self.scaleNudges {
+            let candidate = base * zoom * (1 + nudge)
+            apply(scale: candidate, points: points)
+            guard let g = grid(), g.cols == target.cols, g.rows == target.rows else { continue }
+
+            self.zoom = zoom
+            scaleOverride = candidate
+            return .applied
+        }
+
+        apply(scale: prior, points: points)
+        return .gridUnstable
+    }
+
+    // ghostty pins top-left gravity so resizes never stretch; put it back
+    // once the re-rendered frame has had time to land.
+    private static let gravityRestoreDelay: TimeInterval = 0.3
+    private var gravityWork: DispatchWorkItem?
+
+    private func restoreGravityLater() {
+        gravityWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            self?.hostView?.layer?.contentsGravity = .topLeft
+        }
+        gravityWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.gravityRestoreDelay, execute: work)
+    }
+
+    private func apply(scale sc: Double, points: CGSize) {
+        hostView?.layer?.contentsScale = sc
+        setScale(sc)
+        setSize(width: UInt32(max(1, points.width * sc)),
+                height: UInt32(max(1, points.height * sc)))
+    }
+
     func setSize(width px: UInt32, height py: UInt32) {
         assert(Thread.isMainThread)
         guard let s = surfaceIfOpen() else { return }
@@ -116,6 +221,7 @@ final class SurfaceHost: @unchecked Sendable {
     // visibility: off-screen panes, miniaturized/hidden window.
     func setOcclusion(_ visible: Bool) {
         assert(Thread.isMainThread)
+        self.visible = visible
         guard let s = surfaceIfOpen() else { return }
         ghostty_surface_set_occlusion(s, visible)
     }

@@ -43,8 +43,8 @@ extension CanvasView: CanvasConnDelegate {
         // Panes we asked for get focus + camera. Ones spawned by gctd,
         // agents, or other clients must not steal focus or yank the view
         // (unless nothing is focused yet).
-        let mine = takeOwnPaneAsk()
-        makePaneView(m, focus: mine || focusedID == nil)
+        let mine = takeOwnPaneAsk(owner: owner)
+        makePaneView(m, focus: mine || focusedID == nil ? .focus : .keep)
         guard mine, GCTConfig.current.moveFocusOnNewWindow else { return }
         followFocus(m.id)
     }

@@ -55,6 +55,13 @@ final class CanvasConn: @unchecked Sendable {
     // it before entering the read loop.
     private var pendingWelcome: Frame?
 
+    // Silence the delegate first: the read thread's EOF would otherwise
+    // report connClosed for an owner that may already have a fresh conn.
+    func close() {
+        delegate = nil
+        conn.close()
+    }
+
     func start() {
         _ = conn.send(tag: .hello, json: Hello(version: ProtoVersion))
         Thread(block: { [weak self] in
