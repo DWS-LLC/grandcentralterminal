@@ -229,7 +229,7 @@ final class CanvasView: NSView {
         if cmd.trimmingCharacters(in: .whitespaces).isEmpty {
             cmd = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
         }
-        hub.createPane(CreatePane(
+        askPane(CreatePane(
             rect: Rect(x: r.minX, y: r.minY, w: r.width, h: r.height),
             cwd: cwd,
             name: exe.split(separator: "/").last.map(String.init),
@@ -284,7 +284,8 @@ final class CanvasView: NSView {
     private func snapClears(_ snapped: NSRect, obstacles: [Rect],
                             moving: PaneID?) -> Bool {
         let want = NSRectOverlap.from(snapped)
-        let clean = gapResolve(want, obstacles: obstacles)
+        let clean = Overlap.resolve(want, obstacles: obstacles,
+                                    gap: Double(snapGap()))
         guard abs(clean.x - want.x) < 0.5, abs(clean.y - want.y) < 0.5 else {
             return false
         }
@@ -294,6 +295,33 @@ final class CanvasView: NSView {
             moving: moving, memberOf: gid, candidate: want,
             panes: paneRects(), groups: groupMetas,
             floating: floatingPanes())
+    }
+
+    // `r` snapped both axes; when that fails `clears`, keep whichever
+    // single axis still clears (the nearer one) instead of dropping the
+    // whole snap. nil = neither axis works.
+    //   x clears, y doesn't -> slide along the neighbour's edge, x-only
+    private func clearingSnap(_ r: SnapEngine.Result, from rect: NSRect,
+                              clears: (NSRect) -> Bool) -> SnapEngine.Result? {
+        if clears(r.rect) { return r }
+
+        var xOnly = rect
+        xOnly.origin.x = r.rect.minX
+        var yOnly = rect
+        yOnly.origin.y = r.rect.minY
+        let xShift = abs(r.rect.minX - rect.minX)
+        let yShift = abs(r.rect.minY - rect.minY)
+
+        var options = [(shift: CGFloat, result: SnapEngine.Result)]()
+        if xShift > 0, clears(xOnly) {
+            options.append((xShift, SnapEngine.Result(
+                rect: xOnly, guidesX: r.guidesX, guidesY: [])))
+        }
+        if yShift > 0, clears(yOnly) {
+            options.append((yShift, SnapEngine.Result(
+                rect: yOnly, guidesX: [], guidesY: r.guidesY)))
+        }
+        return options.min { $0.shift < $1.shift }?.result
     }
 
     // Config snapping-type -> engine anchors.
@@ -377,12 +405,14 @@ final class CanvasView: NSView {
         let others = snapTargetsForPane(moving: moving)
         let r = SnapEngine.snapMove(rect, others: others, radius: radius,
                                     mode: snapMode, gap: snapGap())
-        guard snapClears(r.rect, obstacles: obstacles, moving: moving) else {
+        guard let ok = clearingSnap(r, from: rect, clears: {
+            snapClears($0, obstacles: obstacles, moving: moving)
+        }) else {
             hideSnapGuides()
             return rect
         }
-        showSnapGuides(x: r.guidesX, y: r.guidesY, near: r.rect)
-        return r.rect
+        showSnapGuides(x: ok.guidesX, y: ok.guidesY, near: ok.rect)
+        return ok.rect
     }
 
     // Keybind snap: move the focused pane to its NEAREST snap target,
@@ -431,12 +461,14 @@ final class CanvasView: NSView {
         let others = snapTargetsForBlock(ids: ids)
         let r = SnapEngine.snapMove(union, others: others, radius: radius,
                                     mode: snapMode, gap: gap)
-        guard snapClears(r.rect, obstacles: obstacles, moving: nil) else {
+        guard let ok = clearingSnap(r, from: union, clears: {
+            snapClears($0, obstacles: obstacles, moving: nil)
+        }) else {
             hideSnapGuides()
             return .zero
         }
-        showSnapGuides(x: r.guidesX, y: r.guidesY, near: r.rect)
-        return CGPoint(x: r.rect.minX - union.minX, y: r.rect.minY - union.minY)
+        showSnapGuides(x: ok.guidesX, y: ok.guidesY, near: ok.rect)
+        return CGPoint(x: ok.rect.minX - union.minX, y: ok.rect.minY - union.minY)
     }
 
     // Resize-side snap: only the zone's moving edges pull. Runs BEFORE
@@ -546,6 +578,16 @@ final class CanvasView: NSView {
         // Remote hosts changed: reconnect (new hosts join, removed ones
         // clear, dropped ones retry). Unchanged: still retry dead ones.
         if GCTConfig.current.remotes != oldRemotes {
+            // Edited endpoint/token: drop the stale conn so it redials.
+            for h in GCTConfig.current.remotes {
+                let edited = oldRemotes.contains {
+                    $0.name == h.name
+                        && ($0.host != h.host || $0.port != h.port || $0.token != h.token)
+                }
+                guard edited else { continue }
+                removeOwnerPanes(owner: h.name)
+                hub.disconnect(owner: h.name)
+            }
             syncRemotes()
         } else {
             for h in GCTConfig.current.remotes where hub.conn(forOwner: h.name) == nil {
@@ -558,7 +600,23 @@ final class CanvasView: NSView {
             GCTConfig.current.doom.toggle?.mods != oldDoomToggle?.mods {
             NotificationCenter.default.post(name: .gctDoomHotkeyChanged, object: nil)
         }
+        warnDoomNeedsRelaunch()
         NSLog("[gct] config reloaded from \(GCTConfig.path)")
+    }
+
+    // The window's non-activating style is fixed at launch (doom mode
+    // only). A reload that flips [doom] enabled leaves it stale, so say
+    // so instead of silently half-applying.
+    private func warnDoomNeedsRelaunch() {
+        guard let window else { return }
+        let launchedDoom = window.styleMask.contains(.nonactivatingPanel)
+        guard GCTConfig.current.doom.enabled != launchedDoom else { return }
+
+        let alert = NSAlert()
+        alert.messageText = "Relaunch to apply doom mode"
+        alert.informativeText = "[doom] enabled changed. It only takes effect on launch."
+        alert.addButton(withTitle: "OK")
+        alert.beginSheetModal(for: window)
     }
 
     // Match the status bar's existence to the (possibly reloaded) flag:
@@ -567,10 +625,11 @@ final class CanvasView: NSView {
         if GCTConfig.current.statusbarEnabled, statusBar == nil {
             setupStatusBar()
         } else if !GCTConfig.current.statusbarEnabled, let bar = statusBar {
+            bar.tearDown()
             bar.removeFromSuperview()
             statusBar = nil
         } else {
-            statusBar?.applyTheme()
+            statusBar?.reload()
             layoutStatusBar()
         }
     }
@@ -769,8 +828,17 @@ final class CanvasView: NSView {
     }
 
     // MARK: Mouse
+    // A press that moved focus to another pane; the camera follows on
+    // release if it stayed a click (never mid-drag: the camera moving
+    // under the cursor would corrupt move/resize/selection math).
+    private var pendingClickFocus: (id: PaneID, at: CGPoint)?
+    private static let clickSlop: CGFloat = 4
+
     override func mouseDown(with event: NSEvent) {
+        // A click that reaches the canvas is outside the switcher.
+        if let s = switcher, s.window != nil { s.dismiss() }
         window?.makeFirstResponder(self)
+        pendingClickFocus = nil
         let world = worldPoint(event)
         if let pane = topPane(at: world, grab: camera.screenToWorldDistance(5)) {
             // Shift+click on chrome (titlebar/border, NOT the terminal
@@ -783,7 +851,9 @@ final class CanvasView: NSView {
                 drag = .none
                 return
             }
+            let hadFocus = focusedID == pane.id
             focusPane(pane.id)
+            if !hadFocus { pendingClickFocus = (pane.id, viewPoint(event)) }
             // Plain click on an unselected pane drops the staging (the
             // titlebar drag path above keeps it for block moves).
             if !event.modifierFlags.contains(.shift), !selectedIDs.contains(pane.id) {
@@ -1040,9 +1110,9 @@ final class CanvasView: NSView {
             let selIDs = Set(targets.keys)
             let selGroups = Set(selIDs.compactMap { groupOf($0) })
             // Snap clearance: `foreign` minus the selection's own group
-            // borders (the selected members live inside those). Selections
-            // never overlap other frames, so the full gap always applies.
-            let selGap = CGFloat(currentGap())
+            // borders (the selected members live inside those). Same air
+            // as single-pane snaps: none when overlap is allowed.
+            let selGap = snapGap()
             var snapObstacles = [Rect]()
             for (id, r) in rects where targets[id] == nil && !floating.contains(id) {
                 snapObstacles.append(r)
@@ -1074,11 +1144,27 @@ final class CanvasView: NSView {
                 }
                 // Each member must still clear the padding + non-selected
                 // frames after the shift, else the snap is dropped.
-                let shiftClears = slidTargets.values.allSatisfy { m in
-                    snapClears(m.offsetBy(dx: sdx2, dy: sdy2),
-                               obstacles: snapObstacles, moving: nil)
+                // Per axis: a failing y shift keeps the clean x one.
+                func shiftClears(_ dx: CGFloat, _ dy: CGFloat) -> Bool {
+                    slidTargets.values.allSatisfy { m in
+                        snapClears(m.offsetBy(dx: dx, dy: dy),
+                                   obstacles: snapObstacles, moving: nil)
+                    }
                 }
-                if !shiftClears { sdx2 = 0; sdy2 = 0 }
+                if !shiftClears(sdx2, sdy2) {
+                    let xOK = sdx2 != 0 && shiftClears(sdx2, 0)
+                    let yOK = sdy2 != 0 && shiftClears(0, sdy2)
+                    if xOK && yOK {
+                        // Keep the nearer axis, as the combined test failed.
+                        if abs(sdx2) <= abs(sdy2) { sdy2 = 0 } else { sdx2 = 0 }
+                    } else if xOK {
+                        sdy2 = 0
+                    } else if yOK {
+                        sdx2 = 0
+                    } else {
+                        sdx2 = 0; sdy2 = 0
+                    }
+                }
                 var snapped = union1
                 snapped.origin.x += cdx + Double(sdx2)
                 snapped.origin.y += cdy + Double(sdy2)
@@ -1287,6 +1373,13 @@ final class CanvasView: NSView {
     }
 
     override func mouseUp(with event: NSEvent) {
+        defer { pendingClickFocus = nil }
+        if let click = pendingClickFocus, panes[click.id] != nil, !isPaneZoomed {
+            let up = viewPoint(event)
+            if hypot(up.x - click.at.x, up.y - click.at.y) <= Self.clickSlop {
+                followClick(click.id)
+            }
+        }
         // Opt-click (armed, never dragged): clear the arm, no pane.
         if pendingCreate != nil, isIdleDrag {
             pendingCreate = nil
@@ -1315,6 +1408,10 @@ final class CanvasView: NSView {
             pane.host?.mouseButton(GHOSTTY_MOUSE_RELEASE, button, mods)
         }
         if case .move(let id, _) = drag, let pane = panes[id] {
+            hub.movePane(MovePane(id: id, rect: pane.meta.rect,
+                            allowOverlap: GCTConfig.current.allowWindowOverlap, gap: currentGap()))
+        }
+        if case .resize(let id, _, _) = drag, let pane = panes[id] {
             hub.movePane(MovePane(id: id, rect: pane.meta.rect,
                             allowOverlap: GCTConfig.current.allowWindowOverlap, gap: currentGap()))
         }
@@ -1362,7 +1459,7 @@ final class CanvasView: NSView {
             // top-center band — any chrome right-click that isn't a
             // resize grab shows the menu. Surface right-clicks still
             // forward to the terminal (vim/tmux expect them).
-            if pane.isInTitlebar(world),
+            if !pane.surfaceContains(world),
                pane.resizeZone(at: world, screenTolerance: camera.screenToWorldDistance(5)) == nil {
                 focusPane(pane.id)
                 showTitlebarMenu(pane.id, at: event)
@@ -1510,11 +1607,9 @@ final class CanvasView: NSView {
             let sub = NSMenu(title: "Add to group")
             sub.autoenablesItems = false
             for g in others {
-                let fits = canJoin(id, g.id)
-                let item = NSMenuItem(title: (g.name ?? "Group") + (fits ? "" : " (no room)"),
+                let item = NSMenuItem(title: g.name ?? "Group",
                                       action: #selector(addPaneToGroupMenu(_:)),
                                       keyEquivalent: "")
-                item.isEnabled = fits
                 item.target = self
                 item.representedObject = id.uuid.uuidString + "|" + g.id.uuid.uuidString
                 sub.addItem(item)
@@ -1550,7 +1645,7 @@ final class CanvasView: NSView {
             group.target = self
             menu.addItem(group)
 
-            let close = NSMenuItem(title: "Close \(sel.count) panes",
+            let close = NSMenuItem(title: "Close \(sel.count) \(sel.count == 1 ? "pane" : "panes")",
                                    action: #selector(closeSelectionFromMenu(_:)),
                                    keyEquivalent: "")
             close.target = self
@@ -1690,9 +1785,8 @@ final class CanvasView: NSView {
               let u = UUID(uuidString: s) else { return }
         ungroup(GroupID(u))
     }
-    // "pane|group": add the pane to the group's members (same host;
-    // the daemon admits it when the grown bounds stay clear, evicting
-    // it from any other group).
+    // "pane|group": add the pane to the group's members (same host),
+    // making room as needed; evicts it from any other group.
     @objc func addPaneToGroupMenu(_ sender: NSMenuItem) {
         guard let s = sender.representedObject as? String else { return }
         let parts = s.split(separator: "|").map(String.init)
@@ -1703,9 +1797,10 @@ final class CanvasView: NSView {
         guard panes[pid] != nil, var g = groupMetas[gid],
               hub.groupOwner(of: gid) == hub.owner(of: pid) else { return }
         guard !g.members.contains(pid) else { return }
-        // The daemon refuses a join whose grown border would hit a loose
-        // pane or another group; say so now instead of a silent revert.
-        guard canJoin(pid, gid) else { NSSound.beep(); return }
+        // Never refuse: make room first (park the pane against the group,
+        // push whatever its grown border would hit), then join. Moves go
+        // out before the membership so the daemon's admission sees them.
+        applyJoinPlan(pid, gid)
         g.members.append(pid)
         groupMetas[gid] = g
         refreshGroupViews()
@@ -1728,13 +1823,25 @@ final class CanvasView: NSView {
         clearGroupBounds(pid)
     }
 
-    // Would `pid` fit into `gid` (same check the daemon runs)?
-    private func canJoin(_ pid: PaneID, _ gid: GroupID) -> Bool {
-        guard let g = groupMetas[gid] else { return false }
-        return GroupLayout.admits(
-            pid, into: gid, members: g.members,
-            joining: Set(g.members + [pid]),
-            groups: groupMetas, panes: paneRects())
+    // Relocate the joiner and shove blockers per GroupLayout.joinPlan.
+    // Applied live and persisted per pane (same as member shoves).
+    private func applyJoinPlan(_ pid: PaneID, _ gid: GroupID) {
+        guard let plan = GroupLayout.joinPlan(
+            pid, into: gid, panes: paneRects(), groups: groupMetas,
+            floating: floatingPanes(), gap: currentGap()) else { return }
+
+        var moves = plan.moves
+        moves[pid] = plan.rect
+        for (mid, r) in moves {
+            guard let pane = panes[mid] else { continue }
+            let frame = NSRectOverlap.to(r)
+            guard frame != pane.frame else { continue }
+            pane.setRect(frame, notifySurface: true)
+            hub.movePane(MovePane(
+                id: mid, rect: r,
+                allowOverlap: GCTConfig.current.allowWindowOverlap, gap: currentGap()))
+        }
+        refreshOcclusion()
     }
 
     // A pane removed from the middle of a group still sits inside the
@@ -1792,7 +1899,7 @@ final class CanvasView: NSView {
             r = NSRectOverlap.to(gapResolve(NSRectOverlap.from(r),
                                             obstacles: obstacles))
         }
-        hub.createPane(CreatePane(
+        askPane(CreatePane(
             rect: Rect(x: r.minX, y: r.minY, w: r.width, h: r.height),
             cwd: cwd,
             allowOverlap: GCTConfig.current.allowWindowOverlap, gap: currentGap()), owner: "local")
@@ -1820,7 +1927,7 @@ final class CanvasView: NSView {
             r = NSRectOverlap.to(gapResolve(NSRectOverlap.from(r),
                                             obstacles: obstacles))
         }
-        hub.createPane(CreatePane(
+        askPane(CreatePane(
             rect: Rect(x: r.minX, y: r.minY, w: r.width, h: r.height),
             allowOverlap: GCTConfig.current.allowWindowOverlap, gap: currentGap()), owner: owner)
     }
@@ -1833,7 +1940,7 @@ final class CanvasView: NSView {
         let mods = GhosttyMods(event.modifierFlags)
         let hovered = topPane(at: world)
         if GCTConfig.current.focusFollowsMouse, let h = hovered,
-           h.id != focusedID, !isResizingOrMoving {
+           h.id != focusedID, !isResizingOrMoving, switcher?.window == nil {
             focusPane(h.id, raise: false)
         }
         if let h = hovered {
@@ -2018,7 +2125,7 @@ final class CanvasView: NSView {
         }
         // App shortcuts first, from the config's keybinds.
         if let action = GCTAction.allCases.first(where: {
-            GCTConfig.current.keybinds[$0]?.matches(event) ?? false
+            GCTConfig.current.keybinds[$0]?.matchesLocal(event) ?? false
         }) {
             perform(action)
             return
@@ -2032,7 +2139,19 @@ final class CanvasView: NSView {
         handleKey(event, to: host)
     }
 
+    // Actions that read or write the focused pane's world frame. A pane
+    // zoom parks that frame at fake fullscreen geometry, so restore the
+    // real one first.
+    private static let frameActions: Set<GCTAction> = [
+        .newPane, .moveFocusAbove, .moveFocusBelow, .moveFocusLeft,
+        .moveFocusRight, .openNewAbove, .openNewBelow, .openNewLeft,
+        .openNewRight, .growAbove, .growBelow, .growLeft, .growRight,
+        .shrinkAbove, .shrinkBelow, .shrinkLeft, .shrinkRight,
+        .cameraZoomPane, .moveWindowToSnap, .toggleFloating,
+    ]
+
     private func perform(_ action: GCTAction) {
+        if Self.frameActions.contains(action) { exitZoomRestore() }
         switch action {
         case .newPane: newPane()
         case .closePane: closeSelectedOrFocused()
@@ -2056,6 +2175,7 @@ final class CanvasView: NSView {
         case .switcher: toggleSwitcher()
         case .fitAll: exitZoomThenFit()
         case .zoomPane: toggleZoomPane()
+        case .cameraZoomPane: cameraZoomFocused()
         case .copy: copyFromFocused()
         case .paste: pasteIntoFocused()
         case .groupSelection: groupStagedSelection()
@@ -2419,7 +2539,7 @@ final class CanvasView: NSView {
         // remote one the owning daemon knows (nil = no join).
         let remoteJoin = inheritGroup.flatMap { hub.remoteGroupID($0, owner: owner) }
         let r = newPaneRect(direction: direction, ignoringGroup: inheritGroup)
-        hub.createPane(CreatePane(
+        askPane(CreatePane(
             rect: Rect(x: r.minX, y: r.minY, w: r.width, h: r.height),
             cwd: cwd,
             allowOverlap: GCTConfig.current.allowWindowOverlap, gap: currentGap(),
@@ -2440,7 +2560,7 @@ final class CanvasView: NSView {
             r = NSRectOverlap.to(gapResolve(NSRectOverlap.from(r),
                                             obstacles: obstacles))
         }
-        hub.createPane(CreatePane(
+        askPane(CreatePane(
             rect: Rect(x: r.minX, y: r.minY, w: r.width, h: r.height),
             cwd: cwd,
             allowOverlap: GCTConfig.current.allowWindowOverlap, gap: currentGap()), owner: "local")
@@ -2575,7 +2695,7 @@ final class CanvasView: NSView {
         refreshGroupViews()
     }
 
-    func makePaneView(_ meta: PaneMeta) {
+    func makePaneView(_ meta: PaneMeta, focus: Bool = true) {
         guard panes[meta.id] == nil else { return }
         let pane = PaneView(meta: meta)
         let scale = window?.backingScaleFactor
@@ -2611,7 +2731,7 @@ final class CanvasView: NSView {
         // Attach after the surface exists; the daemon answers with the
         // scrollback ring, then live output.
         hub.attachPane(AttachPane(id: meta.id, cols: 80, rows: 24))
-        focusPane(meta.id)
+        if focus { focusPane(meta.id) }
 
         // One layout pass later, push the real pixel size.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
@@ -2871,12 +2991,57 @@ final class CanvasView: NSView {
         }
         guard let target = best?.id else { return }
         focusPane(target)
+        followFocus(target)
+    }
+
+    // Camera response to a keyboard/switcher/scripted/new-pane focus
+    // move: zoom-fit when camera-fits-focus-move, else recenter at the
+    // current scale when camera-follows-focus-move, else stay put.
+    func followFocus(_ id: PaneID) {
         let cfg = GCTConfig.current
         if cfg.cameraFitsFocusMove {
-            zoomToPane(target)
+            zoomToPane(id)
         } else if cfg.cameraFollowsFocusMove {
-            centerOnPane(target)
+            centerOnPane(id)
         }
+    }
+
+    // Camera response to a mouse click that moved focus (config
+    // camera-on-focus-click).
+    private func followClick(_ id: PaneID) {
+        switch GCTConfig.current.cameraOnFocusClick {
+        case .none: break
+        case .center: centerOnPane(id)
+        case .fit: zoomToPane(id)
+        }
+    }
+
+    // Camera-only zoom into the focused pane (camera-zoom-pane): the
+    // pane nearly fills the viewport, capped by zoom-max. Unlike
+    // zoom-pane the pane keeps its size and the camera moves.
+    func cameraZoomFocused() {
+        guard let id = focusedID else { return }
+        zoomToPane(id, margin: Self.cameraZoomMargin)
+    }
+
+    // Own create requests awaiting their paneCreated echo. The daemon
+    // broadcasts every new pane to every client; this tells ours from an
+    // agent's or another client's. Stale asks (create refused) expire.
+    private static let ownPaneAskTTL: TimeInterval = 5
+    private static let cameraZoomMargin: CGFloat = 0.96
+    private var ownPaneAsks = [Date]()
+
+    func askPane(_ req: CreatePane, owner: String) {
+        ownPaneAsks.append(Date())
+        hub.createPane(req, owner: owner)
+    }
+
+    func takeOwnPaneAsk() -> Bool {
+        let cutoff = Date().addingTimeInterval(-Self.ownPaneAskTTL)
+        ownPaneAsks.removeAll { $0 < cutoff }
+        guard !ownPaneAsks.isEmpty else { return false }
+        ownPaneAsks.removeFirst()
+        return true
     }
 
     // Recenter the camera on a pane without changing the zoom. Targets the
@@ -2935,14 +3100,17 @@ final class CanvasView: NSView {
         // the PTY + re-renders the grid sharp at full size.
         camera = Camera(offset: .zero, scale: 1.0)
         applyCamera()
-        let r = NSRect(origin: .zero, size: viewportSize)
+        // Clear of a bottom bar (y-up: origin sits above it); a top bar
+        // is already excluded by viewportSize at origin 0.
+        let barH = statusBar?.superview != nil ? statusBar?.barHeight ?? 0 : 0
+        let originY = GCTConfig.current.statusbarPosition == .bottom ? barH : 0
+        let r = NSRect(origin: CGPoint(x: 0, y: originY), size: viewportSize)
         pane.setRect(r, notifySurface: true)
         pane.isZoomed = true
         bringToFront(id)
         refreshOcclusion()
-        hub.movePane(MovePane(id: id, rect: Rect(x: r.minX, y: r.minY,
-            w: r.width, h: r.height),
-            allowOverlap: true))
+        // Local-only: the daemon keeps the real rect so a crash or second
+        // client never sees (or saves) the fullscreen frame.
     }
     // Restore the saved frame + camera. Returns false when not zoomed.
     @discardableResult
@@ -2958,9 +3126,6 @@ final class CanvasView: NSView {
         applyCamera()
         pane.setRect(frame, notifySurface: true)
         refreshOcclusion()
-        hub.movePane(MovePane(id: id, rect: Rect(x: frame.minX, y: frame.minY,
-            w: frame.width, h: frame.height),
-            allowOverlap: GCTConfig.current.allowWindowOverlap, gap: currentGap()))
         return true
     }
 
@@ -3076,12 +3241,7 @@ final class CanvasView: NSView {
                                            width: 640, height: 480))
         s.onSelect = { [weak self] id in
             self?.focusPane(id)
-            let cfg = GCTConfig.current
-            if cfg.cameraFitsFocusMove {
-                self?.zoomToPane(id)
-            } else if cfg.cameraFollowsFocusMove {
-                self?.centerOnPane(id)
-            }
+            self?.followFocus(id)
         }
         s.onDismiss = { [weak self] in
             self?.window?.makeFirstResponder(self)

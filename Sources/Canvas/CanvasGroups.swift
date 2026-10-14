@@ -257,14 +257,16 @@ extension CanvasView {
 
         let alert = NSAlert()
         alert.alertStyle = .warning
-        alert.messageText = "Close \(ids.count) panes?"
+        alert.messageText = "Close \(ids.count) \(ids.count == 1 ? "pane" : "panes")?"
         alert.informativeText = "Their running shells and agents will be killed."
         alert.addButton(withTitle: "Close")
         alert.addButton(withTitle: "Cancel")
         alert.beginSheetModal(for: window) { [weak self] response in
             guard let self, response == .alertFirstButtonReturn else { return }
-            self.clearSelection()
-            for id in ids { self.closePane(id) }
+            // The selection may have changed while the sheet was up:
+            // drop only the panes being closed, keep whatever else is staged.
+            self.setSelected(self.selectedIDs.subtracting(ids))
+            for id in ids where self.panes[id] != nil { self.closePane(id) }
         }
     }
 }

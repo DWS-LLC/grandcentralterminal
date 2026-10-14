@@ -335,6 +335,17 @@ final class StatusBarView: NSView {
 
     func refresh() { positionCells() }
 
+    // Config reload: components/plugins may have changed.
+    func reload() { rebuild() }
+
+    // Stop the rescan watcher and every plugin timer before the bar is
+    // dropped; run-loop timers outlive their owner otherwise.
+    func tearDown() {
+        watcher?.invalidate()
+        watcher = nil
+        for cell in cells { (cell as? StatusBarCellView)?.invalidate() }
+    }
+
     override func setFrameSize(_ newSize: NSSize) {
         super.setFrameSize(newSize)
         positionCells()

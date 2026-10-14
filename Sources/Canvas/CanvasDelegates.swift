@@ -22,7 +22,7 @@ extension CanvasView: CanvasConnDelegate {
                 // Empty canvas: seed one pane at the origin.
                 firstRunHandled = true
                 let r = newPaneRect()
-                hub.createPane(CreatePane(
+                askPane(CreatePane(
                     rect: Rect(x: r.minX, y: r.minY, w: r.width, h: r.height),
                     allowOverlap: GCTConfig.current.allowWindowOverlap, gap: Double(GCTConfig.current.windowGap)), owner: "local")
             } else if !mappedPanes.isEmpty {
@@ -40,17 +40,13 @@ extension CanvasView: CanvasConnDelegate {
 
     func connPaneCreated(_ meta: PaneMeta, owner: String) {
         let m = hub.inboundPane(meta, owner: owner)
-        makePaneView(m)
-        // makePaneView focuses the new pane; camera follows only when the
-        // new-window focus move fires, honoring the same flags as
-        // directional moves (fit wins when both are set).
-        guard GCTConfig.current.moveFocusOnNewWindow else { return }
-        let cfg = GCTConfig.current
-        if cfg.cameraFitsFocusMove {
-            zoomToPane(m.id)
-        } else if cfg.cameraFollowsFocusMove {
-            centerOnPane(m.id)
-        }
+        // Panes we asked for get focus + camera. Ones spawned by gctd,
+        // agents, or other clients must not steal focus or yank the view
+        // (unless nothing is focused yet).
+        let mine = takeOwnPaneAsk()
+        makePaneView(m, focus: mine || focusedID == nil)
+        guard mine, GCTConfig.current.moveFocusOnNewWindow else { return }
+        followFocus(m.id)
     }
 
     func connPaneMeta(_ meta: PaneMeta, owner: String) {
@@ -124,12 +120,7 @@ extension CanvasView: CanvasConnDelegate {
         let local = hub.localPane(remote: id, owner: owner)
         guard panes[local] != nil else { return }
         focusPane(local, raise: true)
-        let cfg = GCTConfig.current
-        if cfg.cameraFitsFocusMove {
-            zoomToPane(local)
-        } else if cfg.cameraFollowsFocusMove {
-            centerOnPane(local)
-        }
+        followFocus(local)
     }
 
     // Scripted camera/action (gctd camera / gctd do).

@@ -62,7 +62,6 @@ final class DoomHotkey {
     /// (already taken). Callers must treat false as loud failure.
     func register(bind: GCTKeybind) -> Bool {
         guard let code = bind.carbonKeyCode else { return false }
-        DoomHotkey.current = self
         var spec = EventTypeSpec(
             eventClass: OSType(kEventClassKeyboard),
             eventKind: UInt32(kEventHotKeyPressed))
@@ -79,6 +78,9 @@ final class DoomHotkey {
             self.handlerRef = nil
             return false
         }
+        // Only a live registration may own `current`: a failed one
+        // would deallocate and leave the old hotkey firing into nil.
+        DoomHotkey.current = self
         return true
     }
 

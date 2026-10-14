@@ -350,6 +350,91 @@ public enum GroupLayout {
         return true
     }
 
+    // Where a forced join lands: the joiner's frame plus every pane that
+    // had to be pushed out of the grown group bounds.
+    public struct JoinPlan {
+        public var rect: Rect
+        public var moves: [PaneID: Rect]
+    }
+
+    // Add-to-group never refuses. When `id` already fits, nothing moves.
+    // Otherwise it is placed flush against the group (nearest side first)
+    // and whatever the grown bounds would hit — loose panes AND foreign
+    // groups, as rigid blocks — is pushed away from the group:
+    //
+    //        before                      after (joiner -> right side)
+    //   [ G1 ][ G2 ]   [ X ]  [J]      [ G1 ][ G2 ][ J ]  [ X ]
+    //                                               (X shoved right)
+    //
+    // Nil only when no side verifies (callers fall back to a plain join).
+    public static func joinPlan(_ id: PaneID, into gid: GroupID,
+                                panes: [PaneID: Rect],
+                                groups: [GroupID: GroupMeta],
+                                floating: Set<PaneID> = [],
+                                gap: Double = 0) -> JoinPlan? {
+        guard let own = panes[id], let target = groups[gid] else { return nil }
+        let members = target.members.filter { $0 != id && panes[$0] != nil }
+        guard !members.isEmpty else { return nil }
+
+        if admits(id, into: gid, members: members,
+                  joining: Set(members + [id]), groups: groups, panes: panes) {
+            return JoinPlan(rect: own, moves: [:])
+        }
+
+        // The joiner leaves its donor group; the target is measured
+        // without it first (the base the joiner snuggles against).
+        var stripped = groups
+        for (did, var d) in stripped {
+            d.members.removeAll { $0 == id }
+            stripped[did] = d
+        }
+        stripped[gid] = GroupMeta(id: gid, members: members)
+        guard let base = bounds(groups: stripped, panes: panes)[gid] else {
+            return nil
+        }
+
+        // Extra point so float noise never reads as padding contact.
+        let air = gap + 1
+        let midX = base.x + (base.w - own.w) / 2
+        let midY = base.y + (base.h - own.h) / 2
+        let sides: [(Rect, Overlap.Axis, Int)] = [
+            (Rect(x: base.x + base.w + air, y: midY, w: own.w, h: own.h), .horizontal, 1),
+            (Rect(x: base.x - air - own.w, y: midY, w: own.w, h: own.h), .horizontal, -1),
+            (Rect(x: midX, y: base.y + base.h + air, w: own.w, h: own.h), .vertical, 1),
+            (Rect(x: midX, y: base.y - air - own.h, w: own.w, h: own.h), .vertical, -1),
+        ]
+        let cx = own.x + own.w / 2, cy = own.y + own.h / 2
+        func dist(_ r: Rect) -> Double {
+            let dx = r.x + r.w / 2 - cx, dy = r.y + r.h / 2 - cy
+            return dx * dx + dy * dy
+        }
+
+        var joined = stripped
+        joined[gid] = GroupMeta(id: gid, members: members + [id])
+        for (cand, axis, sign) in sides.sorted(by: { dist($0.0) < dist($1.0) }) {
+            var rects = panes
+            rects[id] = cand
+            guard let grown = bounds(groups: joined, panes: rects)[gid] else {
+                continue
+            }
+
+            // allowOverlap false: the grown block is exclusive.
+            let moves = shoveAside(
+                grown: grown, moving: id, memberOf: [gid], panes: rects,
+                groups: joined, axis: axis, sign: sign,
+                allowOverlap: false, floating: floating, gap: gap)
+            for (pid, r) in moves { rects[pid] = r }
+
+            guard admits(id, into: gid, members: members,
+                         joining: Set(members + [id]),
+                         groups: stripped, panes: rects) else {
+                continue
+            }
+            return JoinPlan(rect: cand, moves: moves)
+        }
+        return nil
+    }
+
     // Obstacles for moving/resizing `moving` (a member of `memberOf`).
     // Foreign groups appear ONCE, as their bounds (which already cover
     // their members' frames + padding). Listing member frames alongside

@@ -77,6 +77,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // changes (no relaunch). Structural keys still need one.
         NotificationCenter.default.addObserver(
             forName: .gctDoomHotkeyChanged, object: nil, queue: .main) { [weak doom] _ in
+            // Disabled doom has no global hotkey; arming one would toggle
+            // a window that was never meant to hide.
+            guard GCTConfig.current.doom.enabled else { return }
             doom?.reregisterHotkey(bind: GCTConfig.current.doom.toggle)
         }
         if GCTConfig.current.doom.enabled {
@@ -216,6 +219,8 @@ func killDaemonAndQuit() {
 }
 
 // Minimal app menu: Cmd+Q only (terminal key handling is our own).
+// Hide/Minimize carry no key equivalent: they are always enabled, so a
+// shortcut would shadow the cmd+h/cmd+m keybinds before keyDown.
 let app = NSApplication.shared
 let menu = NSMenu()
 let appMenuItem = NSMenuItem()
@@ -227,7 +232,7 @@ appMenu.addItem(NSMenuItem(
 appMenu.addItem(.separator())
 appMenu.addItem(NSMenuItem(
     title: "Hide Grand Central Terminal", action: #selector(NSApplication.hide(_:)),
-    keyEquivalent: "h"))
+    keyEquivalent: ""))
 appMenuItem.submenu = appMenu
 
 // Edit: standard responder-chain items so the rename/group sheets and
@@ -249,7 +254,7 @@ menu.addItem(windowMenuItem)
 let windowMenu = NSMenu(title: "Window")
 windowMenu.addItem(NSMenuItem(
     title: "Minimize", action: #selector(NSWindow.performMiniaturize(_:)),
-    keyEquivalent: "m"))
+    keyEquivalent: ""))
 windowMenuItem.submenu = windowMenu
 app.windowsMenu = windowMenu
 app.mainMenu = menu

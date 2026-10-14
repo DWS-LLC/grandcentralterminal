@@ -190,6 +190,12 @@ struct GCTKeybind {
         return chars == key
     }
 
+    // In-app shortcut match: characters, or the virtual keycode for named
+    // keys without one (arrows, F-keys).
+    func matchesLocal(_ event: NSEvent) -> Bool {
+        matches(event) || (key.isEmpty && matchesKeyCode(event))
+    }
+
     // Carbon modifiers for RegisterEventHotKey (HIToolbox values:
     // cmdKey 1<<8, shiftKey 1<<9, optionKey 1<<11, controlKey 1<<12).
     var carbonModifiers: UInt32 {
@@ -212,6 +218,8 @@ struct GCTKeybind {
         "esc": ("\u{1b}", 53),
         "delete": ("\u{7f}", 51),
         "backspace": ("\u{7f}", 51),
+        "left": ("", 123), "right": ("", 124),
+        "down": ("", 125), "up": ("", 126),
         "f1": ("", 122), "f2": ("", 120),
         "f3": ("", 99), "f4": ("", 118),
         "f5": ("", 96), "f6": ("", 97),
@@ -308,6 +316,11 @@ enum GCTNewWindowDim: Equatable {
     }
 }
 
+// Camera response to a mouse click that moves focus to another pane.
+enum GCTClickCamera: String {
+    case none, center, fit
+}
+
 // Screen-space status bar edge.
 enum GCTStatusbarPosition: String {
     case top, bottom
@@ -361,6 +374,7 @@ enum GCTAction: String, CaseIterable {
     case switcher = "switcher"
     case fitAll = "fit-all"
     case zoomPane = "zoom-pane"
+    case cameraZoomPane = "camera-zoom-pane"
     case copy = "copy"
     case paste = "paste"
     case groupSelection = "group-selection"
@@ -430,8 +444,13 @@ struct GCTConfig {
     // step (e.g. 2 = two cells per press).
     var resizeStepCells = 1
     var resizeStepPoints: CGFloat = 40
-    // Animate the camera to center a pane created with cmd+t.
+    // Animate the camera to a pane created from this canvas (cmd+t,
+    // open-new-window-*, drag-to-create, right-click menu).
     var moveFocusOnNewWindow = true
+    // Clicking another pane to focus it: leave the camera, center it, or
+    // zoom to fit it. Applied on release, and only for a click (a drag
+    // never moves the camera under the cursor).
+    var cameraOnFocusClick = GCTClickCamera.center
     // Directional focus moves (cmd+h/j/k/l): center the newly focused
     // pane, and/or zoom to fit it. Independent; both default true (fit
     var cameraFollowsFocusMove = true
@@ -478,8 +497,13 @@ struct GCTConfig {
     // Read the config file, creating it with defaults if missing.
     static func load() -> GCTConfig {
         let url = URL(fileURLWithPath: path)
-        if FileManager.default.fileExists(atPath: path),
-           let text = try? String(contentsOf: url, encoding: .utf8) {
+        if FileManager.default.fileExists(atPath: path) {
+            // Unreadable (non-UTF-8 save, perms): keep what we have. Never
+            // overwrite a user's file with the template.
+            guard let text = try? String(contentsOf: url, encoding: .utf8) else {
+                NSLog("[gct] \(path) unreadable (UTF-8 only) — keeping current config")
+                return current
+            }
             return parse(text)
         }
         let dir = url.deletingLastPathComponent()
@@ -499,17 +523,17 @@ struct GCTConfig {
         }
 
         if let v = root["allow-window-overlap"] {
-            cfg.allowWindowOverlap = v.lowercased() == "true"
+            cfg.allowWindowOverlap = flag(v, cfg.allowWindowOverlap)
         }
         if let v = root["allow-mouse-drag-to-push"] {
-            cfg.allowMouseDragToPush = v.lowercased() == "true"
+            cfg.allowMouseDragToPush = flag(v, cfg.allowMouseDragToPush)
         }
         if let s = root["window-gap"], let n = Double(s),
            (0.0...256.0).contains(n) {
             cfg.windowGap = CGFloat(n)
         }
         if let v = root["snapping"] {
-            cfg.snapping = v.lowercased() == "true"
+            cfg.snapping = flag(v, cfg.snapping)
         }
         if let v = root["snapping-type"],
            let t = GCTSnapType(rawValue: v.lowercased()) {
@@ -520,7 +544,7 @@ struct GCTConfig {
             cfg.snapRadius = CGFloat(n)
         }
         if let v = root["show-snap-guides"] {
-            cfg.showSnapGuides = v.lowercased() == "true"
+            cfg.showSnapGuides = flag(v, cfg.showSnapGuides)
         }
         cfg.snapGuideColor = colorSpec(root["snap-guide-color"])
         if let v = root["new-window-open-direction"],
@@ -538,19 +562,23 @@ struct GCTConfig {
             cfg.resizeStepPoints = CGFloat(n)
         }
         if let v = root["move-focus-on-new-window"] {
-            cfg.moveFocusOnNewWindow = v.lowercased() == "true"
+            cfg.moveFocusOnNewWindow = flag(v, cfg.moveFocusOnNewWindow)
         }
         if let v = root["camera-follows-focus-move"] {
-            cfg.cameraFollowsFocusMove = v.lowercased() == "true"
+            cfg.cameraFollowsFocusMove = flag(v, cfg.cameraFollowsFocusMove)
         }
         if let v = root["camera-fits-focus-move"] {
-            cfg.cameraFitsFocusMove = v.lowercased() == "true"
+            cfg.cameraFitsFocusMove = flag(v, cfg.cameraFitsFocusMove)
+        }
+        if let v = root["camera-on-focus-click"],
+           let c = GCTClickCamera(rawValue: v.lowercased()) {
+            cfg.cameraOnFocusClick = c
         }
         if let v = root["focus-follows-mouse"] {
-            cfg.focusFollowsMouse = v.lowercased() == "true"
+            cfg.focusFollowsMouse = flag(v, cfg.focusFollowsMouse)
         }
         if let v = root["scroll-on-terminal-hover"] {
-            cfg.scrollOnTerminalHover = v.lowercased() == "true"
+            cfg.scrollOnTerminalHover = flag(v, cfg.scrollOnTerminalHover)
         }
         if let s = root["zoom-min"], let n = Double(s), (0.005...1.0).contains(n) {
             cfg.zoomMin = CGFloat(n)
@@ -565,7 +593,7 @@ struct GCTConfig {
         }
         let sb = t["statusbar"] ?? [:]
         if let v = sb["enabled"] {
-            cfg.statusbarEnabled = v.lowercased() == "true"
+            cfg.statusbarEnabled = flag(v, cfg.statusbarEnabled)
         }
         if let v = sb["position"],
            let p = GCTStatusbarPosition(rawValue: v.lowercased()) {
@@ -620,7 +648,7 @@ struct GCTConfig {
 
         let dm = t["doom"] ?? [:]
         if let v = dm["enabled"] {
-            cfg.doom.enabled = v.lowercased() == "true"
+            cfg.doom.enabled = flag(v, cfg.doom.enabled)
         }
         if let v = dm["toggle"], let b = GCTKeybind(v) {
             cfg.doom.toggle = b
@@ -638,16 +666,19 @@ struct GCTConfig {
             cfg.doom.screen = s
         }
         if let v = dm["start-hidden"] {
-            cfg.doom.startHidden = v.lowercased() == "true"
+            cfg.doom.startHidden = flag(v, cfg.doom.startHidden)
         }
         if let v = dm["launch-at-login"] {
-            cfg.doom.launchAtLogin = v.lowercased() == "true"
+            cfg.doom.launchAtLogin = flag(v, cfg.doom.launchAtLogin)
         }
 
         var binds = defaultKeybinds
         let kb = t["keybinds"] ?? [:]
         for action in GCTAction.allCases {
-            if let spec = kb[action.rawValue], let bind = GCTKeybind(spec) {
+            guard let spec = kb[action.rawValue] else { continue }
+            if spec.isEmpty || spec.lowercased() == "none" {
+                binds[action] = nil
+            } else if let bind = GCTKeybind(spec) {
                 binds[action] = bind
             }
         }
@@ -667,6 +698,16 @@ struct GCTConfig {
         }
         cfg.remotes = remotes.sorted { $0.name < $1.name }
         return cfg
+    }
+
+    // true/false (also yes/no, on/off, 1/0); anything else keeps the
+    // default instead of silently reading as false.
+    private static func flag(_ raw: String, _ fallback: Bool) -> Bool {
+        switch raw.lowercased() {
+        case "true", "yes", "on", "1": return true
+        case "false", "no", "off", "0": return false
+        default: return fallback
+        }
     }
 
     // nil when unset or "default"; "ghostty" and hex pass through.
@@ -701,6 +742,7 @@ struct GCTConfig {
             .switcher: GCTKeybind("cmd+p")!,
             .fitAll: GCTKeybind("cmd+0")!,
             .zoomPane: GCTKeybind("cmd+z")!,
+            .cameraZoomPane: GCTKeybind("cmd+shift+z")!,
             .copy: GCTKeybind("cmd+c")!,
             .paste: GCTKeybind("cmd+v")!,
             .groupSelection: GCTKeybind("cmd+g")!,
@@ -760,14 +802,20 @@ struct GCTConfig {
     # press: resize-step-cells = 2 moves two cells.
     resize-step-cells = 1
     resize-step-points = 40
-    # Animate the camera to center a pane created with cmd+t or an
-    # open-new-window-* bind (when its focus move fires).
+    # Animate the camera to a pane you create here (cmd+t, open-new-window-*,
+    # drag-to-create, right-click menu). Panes spawned by gctd/agents or
+    # other clients never move the camera. The new pane is always focused.
     move-focus-on-new-window = true
-    # Directional focus moves (cmd+h/j/k/l): center the newly focused
-    # pane, and/or zoom to fit it. Independent; both default true (fit
-    # implies centered, so both true just zooms to fit).
+    # Keyboard focus moves (cmd+h/j/k/l, switcher, gctd focus) and new
+    # windows: center the newly focused pane, and/or zoom to fit it. Fit
+    # implies centered, so the default (both true) zooms to fit; set
+    # follows = true, fits = false to only recenter, both false to keep
+    # the camera still.
     camera-follows-focus-move = true
     camera-fits-focus-move = true
+    # Clicking another pane to focus it: "none", "center" (keep zoom) or
+    # "fit" (zoom to fit). Runs on release, only for a click, never a drag.
+    camera-on-focus-click = "center"
     # Focus the pane under the cursor on mouse motion (same name as
     # ghostty's focus-follows-mouse). Off by default: click to focus.
     focus-follows-mouse = false
@@ -865,7 +913,9 @@ struct GCTConfig {
 
     [keybinds]
     # App shortcuts. Modifiers cmd, ctrl, alt, shift joined with "+"; the
-    # last part is the key, e.g. new-pane = "cmd+shift+t".
+    # last part is the key, e.g. new-pane = "cmd+shift+t". Arrow keys
+    # (left/right/up/down) and f1-f12 work too. Set any bind to "none"
+    # to unbind it; removing a key restores its default.
     new-pane = "cmd+t"
     close-pane = "cmd+w"
     rename-pane = "cmd+r"
@@ -896,6 +946,10 @@ struct GCTConfig {
     # Focus zoom: the pane fills the viewport sharp (surface reflows +
     # re-renders, never a raster upscale). Toggle restores frame + camera.
     zoom-pane = "cmd+z"
+    # Camera zoom: scale the canvas so the focused pane fills the view
+    # (camera only; the pane keeps its size, so the raster is magnified up
+    # to zoom-max). fit-all or any camera move gets you back.
+    camera-zoom-pane = "cmd+shift+z"
     copy = "cmd+c"
     paste = "cmd+v"
     # Terminal groups: right-drag empty space rubber-bands panes into a
@@ -916,10 +970,10 @@ struct GCTConfig {
     toggle-floating = "cmd+f"
     # Snapping: flip magnetic window snapping at runtime (session-only;
     # never moves already-placed panes). Default bind below; rebind or
-    # delete to unbind.
+    # set "none" to unbind.
     toggle-snapping = "cmd+shift+s"
     # Snap the focused window to its nearest snap target, even when
-    # snapping is off. Rebind or delete to unbind.
+    # snapping is off. Rebind, or set "none" to unbind.
     move-window-to-snap = "cmd+shift+m"
     # Config: re-read config.toml and apply live (theme, keybinds,
     # snapping/overlap policy, doom hotkey). Doom structural keys
