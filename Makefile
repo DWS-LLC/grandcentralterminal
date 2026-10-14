@@ -46,6 +46,7 @@ build:
 	cp "$(SWIFT_BUILD)/gctd" "$(BUNDLE)/Contents/MacOS/"
 	cp "$(SWIFT_BUILD)/ptyexec" "$(BUNDLE)/Contents/MacOS/"
 	cp Resources/AppIcon.icns "$(BUNDLE)/Contents/Resources/"
+	cp SKILL.md "$(BUNDLE)/Contents/Resources/"
 	mkdir -p "$(SUPPORT)/bin" "$(SUPPORT)/skills/gct"
 	# Rename-swap, never overwrite in place: the daemon executes from this
 	# path, and an in-place rewrite of a running image invalidates its code

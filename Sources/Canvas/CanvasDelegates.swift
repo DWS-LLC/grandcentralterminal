@@ -193,6 +193,7 @@ extension CanvasView: CanvasConnDelegate {
 
     // Spawn gctd if it isn't already listening.
     static func ensureDaemon() {
+        DaemonInstall.stage()
         let probe = connectUnixSocket(CanvasPaths.sockPath)
         if probe >= 0 {
             _ = Darwin.close(probe)  // probe only; don't leak the fd

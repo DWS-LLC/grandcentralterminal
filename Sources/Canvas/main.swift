@@ -16,6 +16,7 @@ final class CanvasWindow: NSPanel {
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc func showAbout(_ sender: Any?) { GCTAbout.show() }
+    @objc func installCLI(_ sender: Any?) { DaemonInstall.report(DaemonInstall.installCLI()) }
 
     var window: NSWindow!
     var canvas: CanvasView!
@@ -64,6 +65,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Daemon first (or reuse the running one), then connect.
         CanvasView.ensureDaemon()
         view.setup()
+        DispatchQueue.main.async { DaemonInstall.offerOnce() }
 
         // Theme last: the "ghostty" canvas background needs ghostty's
         // resolved config. Applied before the window is shown.
@@ -231,6 +233,10 @@ let appMenu = NSMenu()
 appMenu.addItem(NSMenuItem(
     title: "About Grand Central Terminal",
     action: #selector(AppDelegate.showAbout(_:)),
+    keyEquivalent: ""))
+appMenu.addItem(NSMenuItem(
+    title: "Install gctd Command…",
+    action: #selector(AppDelegate.installCLI(_:)),
     keyEquivalent: ""))
 appMenu.addItem(.separator())
 appMenu.addItem(NSMenuItem(
