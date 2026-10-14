@@ -318,6 +318,38 @@ public enum GroupLayout {
         }
         return out
     }
+    // Group admission, shared by canvas (pre-check) and daemon (verdict):
+    // may `id` join `gid` after `members`? Yes when the grown bounds stay
+    // clear of foreign groups and of panes that aren't joining. `joining`
+    // panes are leaving their donor groups, so donors are measured
+    // without them (else moving a pane between adjacent groups would
+    // always clash with the border it is about to leave).
+    public static func admits(_ id: PaneID, into gid: GroupID,
+                              members: [PaneID], joining: Set<PaneID>,
+                              groups: [GroupID: GroupMeta],
+                              panes: [PaneID: Rect]) -> Bool {
+        var trialGroups = groups
+        trialGroups[gid] = GroupMeta(id: gid, members: members + [id])
+        guard let grown = bounds(groups: trialGroups, panes: panes)[gid] else {
+            return true
+        }
+
+        var donors = groups
+        donors.removeValue(forKey: gid)
+        for (did, var d) in donors {
+            d.members.removeAll { joining.contains($0) || $0 == id }
+            donors[did] = d
+        }
+        for (_, b) in bounds(groups: donors, panes: panes)
+            where Overlap.overlaps(grown, b) {
+            return false
+        }
+        for (pid, r) in panes where pid != id && !joining.contains(pid) {
+            if Overlap.overlaps(grown, r) { return false }
+        }
+        return true
+    }
+
     // Obstacles for moving/resizing `moving` (a member of `memberOf`).
     // Foreign groups appear ONCE, as their bounds (which already cover
     // their members' frames + padding). Listing member frames alongside

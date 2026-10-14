@@ -126,10 +126,25 @@ final class SurfaceHost: @unchecked Sendable {
          ghostty_surface_set_focus(s, focused)
      }
 
+    // macOS virtual keycodes of modifier-only keys (shift, ctrl, alt,
+    // cmd, caps lock, fn): pressing them is not typing.
+    private static let modifierKeycodes: Set<UInt32> =
+        [0x36, 0x37, 0x38, 0x39, 0x3A, 0x3B, 0x3C, 0x3D, 0x3E, 0x3F]
+
+    // Typing = a key press/repeat that isn't a bare modifier or a Cmd
+    // shortcut (Cmd+C, Cmd+Tab are app actions, not input to the pane).
+    private static func isTyping(_ event: ghostty_input_key_s) -> Bool {
+        if event.action == GHOSTTY_ACTION_RELEASE { return false }
+        if event.mods.rawValue & GHOSTTY_MODS_SUPER.rawValue != 0 { return false }
+        return !modifierKeycodes.contains(event.keycode)
+    }
+
     func key(_ event: ghostty_input_key_s) -> Bool {
         assert(Thread.isMainThread)
         guard let s = surfaceIfOpen() else { return false }
-        userInput?(paneID)
+        if Self.isTyping(event) {
+            userInput?(paneID)
+        }
         return ghostty_surface_key(s, event)
     }
 

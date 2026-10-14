@@ -143,6 +143,13 @@ final class ProgramStatusStore {
                 i += 1
             }
         }
+        if source == .replay {
+            // History is not news: the user already saw (or will never
+            // need) old done/error. Only in-flight states survive.
+            st.records = st.records.filter {
+                $0.value.state == .working || $0.value.state == .blocked
+            }
+        }
         st.last = summarize(st)
         panes[pane] = st
         return IngestResult(changed: st.last != before, queryReply: reply)

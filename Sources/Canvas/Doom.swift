@@ -195,8 +195,12 @@ final class DoomController {
             win.orderFrontRegardless()
             win.makeKey()
             NSApp.activate(ignoringOtherApps: true)
-            win.level = .floating
-            afterVisible()
+            // Drop to .floating only after the Space switch settles, as
+            // the main path does after its animation.
+            DispatchQueue.main.async { [weak self] in
+                self?.window?.level = .floating
+                self?.afterVisible()
+            }
             return
         }
         let screen = targetScreen() ?? win.screen ?? NSScreen.main

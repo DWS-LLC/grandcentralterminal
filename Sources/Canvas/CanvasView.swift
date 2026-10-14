@@ -86,6 +86,13 @@ final class CanvasView: NSView {
         case create(anchor: CGPoint)
     }
     private var drag = Drag.none
+    // Who owns the current trackpad scroll gesture, momentum tail
+    // included. Decided on the first event of a gesture so inertia
+    // follows the fingers' target, not wherever the cursor drifts to.
+    private enum ScrollOwner {
+        case none, canvas, terminal(PaneID)
+    }
+    private var scrollOwner = ScrollOwner.none
     // Window snapping: guide overlay + drag-create state. Overlay views
     // are created lazily (first snap event) so startup stays identical.
     private var snapOverlay: SnapOverlay?
@@ -264,6 +271,31 @@ final class CanvasView: NSView {
         Double(GCTConfig.current.windowGap)
     }
 
+    // Air a snap must leave between facing edges. Panes only block each
+    // other when overlap is off; with it on, snaps may land flush.
+    private func snapGap() -> CGFloat {
+        GCTConfig.current.allowWindowOverlap ? 0 : CGFloat(currentGap())
+    }
+
+    // True when `snapped` still clears everything the collision resolve
+    // cleared: obstacle padding, and for a group member the grown group
+    // bounds. A snap that fails this would be pushed back by the daemon
+    // on mouse-up (the pane jumping off its guide), so it's dropped.
+    private func snapClears(_ snapped: NSRect, obstacles: [Rect],
+                            moving: PaneID?) -> Bool {
+        let want = NSRectOverlap.from(snapped)
+        let clean = gapResolve(want, obstacles: obstacles)
+        guard abs(clean.x - want.x) < 0.5, abs(clean.y - want.y) < 0.5 else {
+            return false
+        }
+        guard let moving, let gid = groupOf(moving) else { return true }
+
+        return !GroupLayout.grownClash(
+            moving: moving, memberOf: gid, candidate: want,
+            panes: paneRects(), groups: groupMetas,
+            floating: floatingPanes())
+    }
+
     // Config snapping-type -> engine anchors.
     private var snapMode: SnapEngine.Mode {
         switch GCTConfig.current.snappingType {
@@ -335,8 +367,8 @@ final class CanvasView: NSView {
     // the collision resolve: snapping is a drag-time nudge, never a pass
     // through other windows, and over-eager snaps that the resolve
     // pushed back drop their guides (the rect no longer sits on them).
-    private func snapMovedRect(_ rect: NSRect,
-                               moving: PaneID) -> NSRect {
+    private func snapMovedRect(_ rect: NSRect, moving: PaneID,
+                               obstacles: [Rect]) -> NSRect {
         guard GCTConfig.current.snapping else { hideSnapGuides(); return rect }
         let radius = camera.screenToWorldDistance(GCTConfig.current.snapRadius)
         // Grouped (even solo): siblings only — empty means no snap, no
@@ -344,7 +376,11 @@ final class CanvasView: NSView {
         // into grouped members from outside.
         let others = snapTargetsForPane(moving: moving)
         let r = SnapEngine.snapMove(rect, others: others, radius: radius,
-                                    mode: snapMode)
+                                    mode: snapMode, gap: snapGap())
+        guard snapClears(r.rect, obstacles: obstacles, moving: moving) else {
+            hideSnapGuides()
+            return rect
+        }
         showSnapGuides(x: r.guidesX, y: r.guidesY, near: r.rect)
         return r.rect
     }
@@ -361,7 +397,7 @@ final class CanvasView: NSView {
         guard !others.isEmpty else { return }
         let r = SnapEngine.snapMove(pane.frame, others: others,
                                     radius: .greatestFiniteMagnitude,
-                                    mode: snapMode)
+                                    mode: snapMode, gap: snapGap())
         guard r.rect != pane.frame else { return }
         let clean = NSRectOverlap.to(gapResolve(
             NSRectOverlap.from(r.rect),
@@ -385,7 +421,8 @@ final class CanvasView: NSView {
     // border delta rigidly. Guides sit on the border's snapped edges.
     // Callers resolve first, then pass the post-resolve frames here.
     private func snapBlockDelta(members: [PaneID: NSRect],
-                                ids: Set<PaneID>) -> CGPoint {
+                                ids: Set<PaneID>, obstacles: [Rect],
+                                gap: CGFloat) -> CGPoint {
         guard GCTConfig.current.snapping else { hideSnapGuides(); return .zero }
         guard let union = groupBoundsFrom(members) else { return .zero }
         let radius = camera.screenToWorldDistance(GCTConfig.current.snapRadius)
@@ -393,7 +430,11 @@ final class CanvasView: NSView {
         // foreign borders only.
         let others = snapTargetsForBlock(ids: ids)
         let r = SnapEngine.snapMove(union, others: others, radius: radius,
-                                    mode: snapMode)
+                                    mode: snapMode, gap: gap)
+        guard snapClears(r.rect, obstacles: obstacles, moving: nil) else {
+            hideSnapGuides()
+            return .zero
+        }
         showSnapGuides(x: r.guidesX, y: r.guidesY, near: r.rect)
         return CGPoint(x: r.rect.minX - union.minX, y: r.rect.minY - union.minY)
     }
@@ -497,8 +538,9 @@ final class CanvasView: NSView {
         // Gap raised (or overlap flipped off): existing panes keep
         // their flush frames until something moves. Spread them to
         // the new padding once, same as the load-time untangle.
-        if GCTConfig.current.windowGap > oldGap
-            || (!GCTConfig.current.allowWindowOverlap && oldOverlap) {
+        // Skipped while overlap is allowed: that layout is deliberate.
+        if !GCTConfig.current.allowWindowOverlap
+            && (GCTConfig.current.windowGap > oldGap || oldOverlap) {
             untangleLoadedPanes()
         }
         // Remote hosts changed: reconnect (new hosts join, removed ones
@@ -897,7 +939,8 @@ final class CanvasView: NSView {
                         slid[m] = NSRect(x: r0.minX + sdx0, y: r0.minY + sdy0,
                                          width: r0.width, height: r0.height)
                     }
-                    let s = snapBlockDelta(members: slid, ids: Set(members))
+                    let s = snapBlockDelta(members: slid, ids: Set(members), obstacles: foreign,
+                                            gap: snapGap())
                     for m in members {
                         guard let pane = panes[m], let r0 = rects0[m] else { continue }
                         pane.setRect(NSRect(x: r0.minX + sdx0 + Double(s.x),
@@ -946,7 +989,8 @@ final class CanvasView: NSView {
                 free[m] = NSRect(x: r0.minX + dx, y: r0.minY + dy,
                                  width: r0.width, height: r0.height)
             }
-            let s = snapBlockDelta(members: free, ids: Set(members))
+            let s = snapBlockDelta(members: free, ids: Set(members),
+                                   obstacles: foreign, gap: snapGap())
             for m in members {
                 guard let pane = panes[m], let r0 = rects0[m] else { continue }
                 pane.setRect(NSRect(x: r0.minX + dx + s.x, y: r0.minY + dy + s.y,
@@ -995,6 +1039,18 @@ final class CanvasView: NSView {
             }
             let selIDs = Set(targets.keys)
             let selGroups = Set(selIDs.compactMap { groupOf($0) })
+            // Snap clearance: `foreign` minus the selection's own group
+            // borders (the selected members live inside those). Selections
+            // never overlap other frames, so the full gap always applies.
+            let selGap = CGFloat(currentGap())
+            var snapObstacles = [Rect]()
+            for (id, r) in rects where targets[id] == nil && !floating.contains(id) {
+                snapObstacles.append(r)
+            }
+            for (gid, b) in GroupLayout.bounds(groups: groupMetas, panes: rects)
+                where !selGroups.contains(gid) {
+                snapObstacles.append(b)
+            }
             let s: CGPoint
             if selGroups.count == 1, let only = selGroups.first,
                selIDs.isSubset(of: Set(groupMetas[only]?.members ?? [])) {
@@ -1010,11 +1066,19 @@ final class CanvasView: NSView {
                 let inRadius = camera.screenToWorldDistance(GCTConfig.current.snapRadius)
                 for m in slidTargets.values {
                     let r = SnapEngine.snapMove(m, others: siblings,
-                                                radius: inRadius, mode: snapMode)
+                                                radius: inRadius, mode: snapMode,
+                                                gap: selGap)
                     let dx = r.rect.minX - m.minX, dy = r.rect.minY - m.minY
                     if dx != 0, (sdx2 == 0 || abs(dx) < abs(sdx2)) { sdx2 = dx }
                     if dy != 0, (sdy2 == 0 || abs(dy) < abs(sdy2)) { sdy2 = dy }
                 }
+                // Each member must still clear the padding + non-selected
+                // frames after the shift, else the snap is dropped.
+                let shiftClears = slidTargets.values.allSatisfy { m in
+                    snapClears(m.offsetBy(dx: sdx2, dy: sdy2),
+                               obstacles: snapObstacles, moving: nil)
+                }
+                if !shiftClears { sdx2 = 0; sdy2 = 0 }
                 var snapped = union1
                 snapped.origin.x += cdx + Double(sdx2)
                 snapped.origin.y += cdy + Double(sdy2)
@@ -1023,18 +1087,19 @@ final class CanvasView: NSView {
                     let sx = m.minX + sdx2, mx = m.midX + sdx2, xx = m.maxX + sdx2
                     let sy = m.minY + sdy2, my = m.midY + sdy2, yy = m.maxY + sdy2
                     for o in siblings {
-                        for (a, t) in [(sx, o.minX), (sx, o.maxX), (xx, o.minX), (xx, o.maxX)]
-                            where snapMode != .center && abs(a - t) <= 0.5 && !gx.contains(t) { gx.append(t) }
+                        for (a, t) in [(sx, o.minX), (sx, o.maxX + selGap), (xx, o.minX - selGap), (xx, o.maxX)]
+                            where snapMode != .center && abs(a - t) <= 0.5 && !gx.contains(a) { gx.append(a) }
                         if snapMode != .edges, abs(mx - o.midX) <= 0.5, !gx.contains(o.midX) { gx.append(o.midX) }
-                        for (a, t) in [(sy, o.minY), (sy, o.maxY), (yy, o.minY), (yy, o.maxY)]
-                            where snapMode != .center && abs(a - t) <= 0.5 && !gy.contains(t) { gy.append(t) }
+                        for (a, t) in [(sy, o.minY), (sy, o.maxY + selGap), (yy, o.minY - selGap), (yy, o.maxY)]
+                            where snapMode != .center && abs(a - t) <= 0.5 && !gy.contains(a) { gy.append(a) }
                         if snapMode != .edges, abs(my - o.midY) <= 0.5, !gy.contains(o.midY) { gy.append(o.midY) }
                     }
                 }
                 showSnapGuides(x: gx, y: gy, near: snapped)
                 s = CGPoint(x: sdx2, y: sdy2)
             } else {
-                s = snapBlockDelta(members: slidTargets, ids: selIDs)
+                s = snapBlockDelta(members: slidTargets, ids: selIDs,
+                                   obstacles: snapObstacles, gap: selGap)
             }
             let sdx = cdx + Double(s.x)
             let sdy = cdy + Double(s.y)
@@ -1100,7 +1165,7 @@ final class CanvasView: NSView {
             // Snap AFTER the collision resolve: a drag-time nudge within
             // the radius, never a pass through other windows. Skipped on
             // the shove path above (that branch returns early).
-            rect = snapMovedRect(rect, moving: id)
+            rect = snapMovedRect(rect, moving: id, obstacles: obstacles)
             pane.setRect(rect, notifySurface: false)
             // Grouped member: the background rides live (bounds derive
             // from frames). Untracked drags leave the pink box behind
@@ -1297,7 +1362,7 @@ final class CanvasView: NSView {
             // top-center band — any chrome right-click that isn't a
             // resize grab shows the menu. Surface right-clicks still
             // forward to the terminal (vim/tmux expect them).
-            if !pane.surfaceContains(world),
+            if pane.isInTitlebar(world),
                pane.resizeZone(at: world, screenTolerance: camera.screenToWorldDistance(5)) == nil {
                 focusPane(pane.id)
                 showTitlebarMenu(pane.id, at: event)
@@ -1443,10 +1508,13 @@ final class CanvasView: NSView {
         if !others.isEmpty {
             let add = NSMenuItem(title: "Add to group", action: nil, keyEquivalent: "")
             let sub = NSMenu(title: "Add to group")
+            sub.autoenablesItems = false
             for g in others {
-                let item = NSMenuItem(title: g.name ?? "Group",
+                let fits = canJoin(id, g.id)
+                let item = NSMenuItem(title: (g.name ?? "Group") + (fits ? "" : " (no room)"),
                                       action: #selector(addPaneToGroupMenu(_:)),
                                       keyEquivalent: "")
+                item.isEnabled = fits
                 item.target = self
                 item.representedObject = id.uuid.uuidString + "|" + g.id.uuid.uuidString
                 sub.addItem(item)
@@ -1586,10 +1654,7 @@ final class CanvasView: NSView {
     }
 
     @objc func closeSelectionFromMenu(_ sender: NSMenuItem) {
-        let ids = liveSelected()
-        guard !ids.isEmpty else { return }
-        clearSelection()
-        for id in ids { closePane(id) }
+        closeSelection()
     }
 
     @objc func clearSelectionFromMenu(_ sender: NSMenuItem) {
@@ -1638,6 +1703,9 @@ final class CanvasView: NSView {
         guard panes[pid] != nil, var g = groupMetas[gid],
               hub.groupOwner(of: gid) == hub.owner(of: pid) else { return }
         guard !g.members.contains(pid) else { return }
+        // The daemon refuses a join whose grown border would hit a loose
+        // pane or another group; say so now instead of a silent revert.
+        guard canJoin(pid, gid) else { NSSound.beep(); return }
         g.members.append(pid)
         groupMetas[gid] = g
         refreshGroupViews()
@@ -1657,6 +1725,37 @@ final class CanvasView: NSView {
         refreshGroupViews()
         hub.updateGroup(UpdateGroup(id: gid, name: g.name,
                                       color: g.color, members: g.members))
+        clearGroupBounds(pid)
+    }
+
+    // Would `pid` fit into `gid` (same check the daemon runs)?
+    private func canJoin(_ pid: PaneID, _ gid: GroupID) -> Bool {
+        guard let g = groupMetas[gid] else { return false }
+        return GroupLayout.admits(
+            pid, into: gid, members: g.members,
+            joining: Set(g.members + [pid]),
+            groups: groupMetas, panes: paneRects())
+    }
+
+    // A pane removed from the middle of a group still sits inside the
+    // remaining border. Push it clear with the same resolve a drag uses,
+    // so no loose pane lies within a group (it would wedge group drags).
+    private func clearGroupBounds(_ pid: PaneID) {
+        guard let pane = panes[pid] else { return }
+        let obstacles = GroupLayout.moveObstacles(
+            moving: pid, memberOf: [], panes: paneRects(),
+            groups: groupMetas,
+            allowOverlap: GCTConfig.current.allowWindowOverlap,
+            floating: floatingPanes())
+        let clean = NSRectOverlap.to(gapResolve(
+            NSRectOverlap.from(pane.frame), obstacles: obstacles))
+        guard clean != pane.frame else { return }
+
+        pane.setRect(clean, notifySurface: false)
+        hub.movePane(MovePane(
+            id: pid, rect: pane.meta.rect,
+            allowOverlap: GCTConfig.current.allowWindowOverlap, gap: currentGap()))
+        refreshGroupViews()
     }
     // "pane": prompt for a name, start a group with this pane (+ a
     // live same-host staged selection). The daemon admits each member
@@ -1777,14 +1876,32 @@ final class CanvasView: NSView {
         // precise devices), precision+momentum packed into scroll mods.
         if GCTConfig.current.scrollOnTerminalHover {
             let world = worldPoint(event)
-            // Momentum tail of a canvas pan keeps panning even as the
-            // cursor crosses a terminal: killing it there feels like
-            // the canvas snags. Fresh (non-momentum) scrolls over a
-            // terminal still go to the terminal.
-            let coasting = event.momentumPhase != []
-                && event.phase == []
-            if !coasting, let pane = topPane(at: world),
-               pane.surfaceContains(world) {
+            // The gesture's first event picks the owner (terminal under
+            // the cursor, else canvas) and the momentum tail keeps it:
+            // a canvas pan coasts across terminals without snagging, a
+            // terminal flick keeps scrolling its scrollback. Wheel
+            // events carry no phases and re-pick every tick.
+            let momentum = event.momentumPhase != []
+            var unowned = false
+            if case .none = scrollOwner { unowned = true }
+            if !momentum && (unowned || event.phase.contains(.began) || event.phase == []) {
+                if let pane = topPane(at: world), pane.surfaceContains(world) {
+                    scrollOwner = .terminal(pane.id)
+                } else {
+                    scrollOwner = .canvas
+                }
+            }
+            // Release at the end of inertia, or right away for wheel
+            // ticks. A finger-lift (phase .ended) may still coast, so it
+            // keeps the owner; the next .began re-picks anyway.
+            defer {
+                let wheel = !momentum && event.phase == []
+                if wheel || event.momentumPhase.contains(.ended)
+                    || event.momentumPhase.contains(.cancelled) {
+                    scrollOwner = .none
+                }
+            }
+            if case .terminal(let id) = scrollOwner, let pane = panes[id] {
                 let m = event.hasPreciseScrollingDeltas ? 2.0 : 1.0
                 pane.host?.mouseScroll(x: event.scrollingDeltaX * m,
                                        y: event.scrollingDeltaY * m,
@@ -1990,7 +2107,8 @@ final class CanvasView: NSView {
         let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 280, height: 24))
         field.stringValue = initial
         alert.accessoryView = field
-        alert.beginSheetModal(for: window) { _ in
+        alert.beginSheetModal(for: window) { response in
+            guard response == .alertFirstButtonReturn else { return }
             let name = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
             done(name.isEmpty ? nil : name)
         }
@@ -2433,8 +2551,8 @@ final class CanvasView: NSView {
         let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 280, height: 24))
         field.stringValue = pane.meta.name ?? ""
         alert.accessoryView = field
-        alert.beginSheetModal(for: window) { [weak self] _ in
-            guard let self else { return }
+        alert.beginSheetModal(for: window) { [weak self] response in
+            guard let self, response == .alertFirstButtonReturn else { return }
             let name = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
             self.hub.renamePane(RenamePane(id: id, name: name.isEmpty ? nil : name))
         }

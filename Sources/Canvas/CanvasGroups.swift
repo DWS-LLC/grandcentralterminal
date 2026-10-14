@@ -242,12 +242,30 @@ extension CanvasView {
     // when the focused pane is part of it, else just the focused pane.
     func closeSelectedOrFocused() {
         if let f = focusedID, selectedIDs.contains(f), selectedIDs.count >= 2 {
-            let ids = liveSelected()
-            clearSelection()
-            for id in ids { closePane(id) }
+            closeSelection()
             return
         }
         if let id = focusedID { closePane(id) }
+    }
+
+    // Closing several panes kills every shell in them with no undo:
+    // ask first ("Close 6 panes?" sheet), close on confirm only.
+    func closeSelection() {
+        let ids = liveSelected()
+        guard !ids.isEmpty else { return }
+        guard let window else { return }
+
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "Close \(ids.count) panes?"
+        alert.informativeText = "Their running shells and agents will be killed."
+        alert.addButton(withTitle: "Close")
+        alert.addButton(withTitle: "Cancel")
+        alert.beginSheetModal(for: window) { [weak self] response in
+            guard let self, response == .alertFirstButtonReturn else { return }
+            self.clearSelection()
+            for id in ids { self.closePane(id) }
+        }
     }
 }
 

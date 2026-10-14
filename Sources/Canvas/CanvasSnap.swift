@@ -61,50 +61,81 @@ enum SnapEngine {
         case .all: return others.flatMap { [$0.minY, $0.midY, $0.maxY] }
         }
     }
+    // Which side of its rect an anchor sits on; facing sides (lo to hi)
+    // keep `gap` of air, aligned sides (lo to lo, mid to mid) don't.
+    private enum Side {
+        case lo, mid, hi
+    }
+
+    private typealias Anchor = (v: CGFloat, side: Side)
+
+    private static func anchors(_ lo: CGFloat, _ hi: CGFloat, _ mode: Mode) -> [Anchor] {
+        let mid = (lo + hi) / 2
+        switch mode {
+        case .center: return [(mid, .mid)]
+        case .edges: return [(lo, .lo), (hi, .hi)]
+        case .all: return [(lo, .lo), (mid, .mid), (hi, .hi)]
+        }
+    }
+
+    // Where `mover` lands against `target`:
+    //   mover.lo -> target.hi  =>  target.hi + gap  (mover sits after)
+    //   mover.hi -> target.lo  =>  target.lo - gap  (mover sits before)
+    private static func landing(_ mover: Side, _ target: Anchor,
+                                _ gap: CGFloat) -> CGFloat {
+        switch (mover, target.side) {
+        case (.lo, .hi): return target.v + gap
+        case (.hi, .lo): return target.v - gap
+        default: return target.v
+        }
+    }
+
+    // One axis of snapMove: nearest landing within radius, plus every
+    // mover anchor that ends up on a landing (a flush tile lights both
+    // shared edges, not just the nearest). Guides sit on the mover.
+    private static func snapAxis(_ movers: [Anchor], _ targets: [Anchor],
+                                 radius: CGFloat, gap: CGFloat)
+        -> (shift: CGFloat, guides: [CGFloat]) {
+        var shift: CGFloat = 0
+        var best = radius + 1
+        for m in movers {
+            for t in targets {
+                let d = landing(m.side, t, gap) - m.v
+                if abs(d) <= radius, abs(d) < best { best = abs(d); shift = d }
+            }
+        }
+        guard best <= radius else { return (0, []) }
+
+        var guides = [CGFloat]()
+        for m in movers {
+            for t in targets where abs(m.v + shift - landing(m.side, t, gap)) <= 0.5 {
+                let g = m.v + shift
+                if !guides.contains(where: { abs($0 - g) <= 0.5 }) { guides.append(g) }
+            }
+        }
+        return (shift, guides)
+    }
+
     // Move: translate `rect` so one of its mode anchors lands on the
     // nearest foreign anchor, same per axis. At most one shift per axis
-    // (the nearest).
+    // (the nearest). `gap` keeps window-gap air between facing edges so
+    // a snap never lands inside the padding the collision resolve holds.
     static func snapMove(_ rect: NSRect, others: [NSRect],
-                         radius: CGFloat, mode: Mode = .edges) -> Result {
+                         radius: CGFloat, mode: Mode = .edges,
+                         gap: CGFloat = 0) -> Result {
         guard radius > 0, !others.isEmpty else {
             return Result(rect: rect, guidesX: [], guidesY: [])
         }
-        let xt = xTargets(others, mode), yt = yTargets(others, mode)
-        var dx: CGFloat = 0, dy: CGFloat = 0
-        var gx = [CGFloat](), gy = [CGFloat]()
-        var bestX = radius + 1
-        for m in moveAnchors(rect, mode).x {
-            if let t = nearest(m, xt, radius), abs(t - m) < bestX {
-                bestX = abs(t - m); dx = t - m
-            }
-        }
-        var bestY = radius + 1
-        for m in moveAnchors(rect, mode).y {
-            if let t = nearest(m, yt, radius), abs(t - m) < bestY {
-                bestY = abs(t - m); dy = t - m
-            }
-        }
-        if bestX <= radius {
-            // Every alignment the shift achieves: a flush tile lights
-            // both shared edges, not just the nearest anchor.
-            var seen = Set<CGFloat>()
-            for m in moveAnchors(rect, mode).x {
-                for t in xt where abs(m + dx - t) <= 0.5 {
-                    if seen.insert(t).inserted { gx.append(t) }
-                }
-            }
-        }
-        if bestY <= radius {
-            var seen = Set<CGFloat>()
-            for m in moveAnchors(rect, mode).y {
-                for t in yt where abs(m + dy - t) <= 0.5 {
-                    if seen.insert(t).inserted { gy.append(t) }
-                }
-            }
-        }
+        let xt = others.flatMap { anchors($0.minX, $0.maxX, mode) }
+        let yt = others.flatMap { anchors($0.minY, $0.maxY, mode) }
+        let x = snapAxis(anchors(rect.minX, rect.maxX, mode), xt,
+                         radius: radius, gap: gap)
+        let y = snapAxis(anchors(rect.minY, rect.maxY, mode), yt,
+                         radius: radius, gap: gap)
+
         var out = rect
-        out.origin.x += dx; out.origin.y += dy
-        return Result(rect: out, guidesX: gx, guidesY: gy)
+        out.origin.x += x.shift; out.origin.y += y.shift
+        return Result(rect: out, guidesX: x.guides, guidesY: y.guides)
     }
 
     // Resize: snap only the edges the zone moves. Opposite edges stay

@@ -351,24 +351,9 @@ final class Server {
             // pair, the normal grouping case).
             let joining = Set(wanted)
             func clearAdding(_ id: PaneID) -> Bool {
-                var trial = g
-                trial.members = admitted + [id]
-                var trialGroups = groups
-                trialGroups[req.id] = trial
-                guard let grown = GroupLayout.bounds(
-                    groups: trialGroups, panes: rects)[req.id] else {
-                    return true
-                }
-                let liveBounds = GroupLayout.bounds(groups: groups,
-                                                    panes: rects)
-                for (gid, b) in liveBounds where gid != req.id {
-                    if Overlap.overlaps(grown, b) { return false }
-                }
-                for (pid, r) in rects
-                    where pid != id && !joining.contains(pid) {
-                    if Overlap.overlaps(grown, r) { return false }
-                }
-                return true
+                GroupLayout.admits(id, into: req.id, members: admitted,
+                                   joining: joining, groups: groups,
+                                   panes: rects)
             }
             for id in current where wanted.contains(id) {
                 if clearAdding(id) { admitted.append(id); admittedSet.insert(id) }
@@ -581,22 +566,10 @@ final class Server {
         let joining = Set(wanted)
         var admitted = [PaneID]()
         for id in wanted {
-            let trial = GroupMeta(id: gid, members: admitted + [id])
-            var trialGroups = groups
-            trialGroups[gid] = trial
-            guard let grown = GroupLayout.bounds(
-                groups: trialGroups, panes: rects)[gid] else { continue }
-            let liveBounds = GroupLayout.bounds(groups: groups, panes: rects)
-            var clash = liveBounds.contains {
-                Overlap.overlaps(grown, $0.value)
-            }
-            if !clash {
-                clash = rects.contains {
-                    $0.key != id && !joining.contains($0.key)
-                        && Overlap.overlaps(grown, $0.value)
-                }
-            }
-            if !clash { admitted.append(id) }
+            let clear = GroupLayout.admits(
+                id, into: gid, members: admitted, joining: joining,
+                groups: groups, panes: rects)
+            if clear { admitted.append(id) }
         }
         let fresh = Set(admitted)
         for (id, var other) in groups {

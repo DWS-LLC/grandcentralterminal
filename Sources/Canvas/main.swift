@@ -5,7 +5,11 @@ import Common
 
 // Borderless windows are not key by default; without a key window nothing
 // ever receives keyDown.
-final class CanvasWindow: NSWindow {
+// NSPanel, not NSWindow: only panels (with .nonactivatingPanel) can be
+// ordered onto another app's fullscreen Space. A plain NSWindow, even
+// with canJoinAllSpaces + fullScreenAuxiliary, gets pushed back to its
+// home Space and doom looks dead over fullscreen apps.
+final class CanvasWindow: NSPanel {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { true }
 }
@@ -25,11 +29,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Config first; created with defaults if it doesn't exist yet.
         GCTConfig.current = GCTConfig.load()
 
+        // Non-activating only in doom mode: it is what lets the summoned
+        // window float over a fullscreen app. Normal mode keeps ordinary
+        // activation.
+        var mask: NSWindow.StyleMask = [.borderless, .miniaturizable]
+        if GCTConfig.current.doom.enabled {
+            mask.insert(.nonactivatingPanel)
+        }
         let win = CanvasWindow(
             contentRect: screen,
-            styleMask: [.borderless, .miniaturizable],
+            styleMask: mask,
             backing: .buffered,
             defer: false)
+        // Panels hide when the app deactivates by default: the canvas
+        // must stay put behind other windows.
+        win.hidesOnDeactivate = false
+        win.isFloatingPanel = false
+        win.becomesKeyOnlyIfNeeded = false
         win.title = "Grand Central Terminal"
         win.backgroundColor = .black  // replaced by the theme below
         win.isOpaque = false  // applyTheme sets true when background is opaque
@@ -177,6 +193,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
     @objc func dockQuitDaemon(_ sender: Any?) {
+        let alert = NSAlert()
+        alert.alertStyle = .critical
+        alert.messageText = "Quit the daemon?"
+        alert.informativeText = "Every running terminal, shell and agent will be killed."
+        alert.addButton(withTitle: "Kill All & Quit")
+        alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
         killDaemonAndQuit()
     }
 }
@@ -201,7 +224,34 @@ let appMenu = NSMenu()
 appMenu.addItem(NSMenuItem(
     title: "Quit Grand Central Terminal", action: #selector(NSApplication.terminate(_:)),
     keyEquivalent: "q"))
+appMenu.addItem(.separator())
+appMenu.addItem(NSMenuItem(
+    title: "Hide Grand Central Terminal", action: #selector(NSApplication.hide(_:)),
+    keyEquivalent: "h"))
 appMenuItem.submenu = appMenu
+
+// Edit: standard responder-chain items so the rename/group sheets and
+// the switcher filter get cmd+c/v/x/a/z. Disabled (and so passed on to
+// the terminal key handling) whenever no text field is first responder.
+let editMenuItem = NSMenuItem()
+menu.addItem(editMenuItem)
+let editMenu = NSMenu(title: "Edit")
+editMenu.addItem(NSMenuItem(title: "Undo", action: Selector(("undo:")), keyEquivalent: "z"))
+editMenu.addItem(.separator())
+editMenu.addItem(NSMenuItem(title: "Cut", action: #selector(NSText.cut(_:)), keyEquivalent: "x"))
+editMenu.addItem(NSMenuItem(title: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c"))
+editMenu.addItem(NSMenuItem(title: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v"))
+editMenu.addItem(NSMenuItem(title: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a"))
+editMenuItem.submenu = editMenu
+
+let windowMenuItem = NSMenuItem()
+menu.addItem(windowMenuItem)
+let windowMenu = NSMenu(title: "Window")
+windowMenu.addItem(NSMenuItem(
+    title: "Minimize", action: #selector(NSWindow.performMiniaturize(_:)),
+    keyEquivalent: "m"))
+windowMenuItem.submenu = windowMenu
+app.windowsMenu = windowMenu
 app.mainMenu = menu
 
 let delegate = AppDelegate()

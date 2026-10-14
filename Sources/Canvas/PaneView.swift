@@ -51,7 +51,7 @@ final class PaneView: NSView {
         titlebar.layer?.addSublayer(titleLabel)
         statusLabel.contentsScale = NSScreen.main?.backingScaleFactor ?? 2
         statusLabel.alignmentMode = .right
-        statusLabel.truncationMode = .start
+        statusLabel.truncationMode = .end
         titlebar.layer?.addSublayer(statusLabel)
 
         surfaceHostView.wantsLayer = true
@@ -143,7 +143,7 @@ final class PaneView: NSView {
         if programStatus != nil {
             // Status docks right (8pt margin, half the bar max); the
             // title takes the rest. Narrow panes squeeze the status
-            // first, truncating its head toward the message tail.
+            // first, truncating its tail (the state glyph stays put).
             let statusW = min(w / 2, statusLabel.preferredFrameSize().width)
             statusLabel.frame = CGRect(x: w - 8 - statusW,
                                        y: (PaneView.titleBarHeight - textH) / 2,
@@ -209,12 +209,14 @@ final class PaneView: NSView {
         // borrow attention colors so they read without clicking in.
         statusLabel.string = programStatus?.text
         let scol: NSColor
-        if accent {
-            scol = .white
-        } else if programStatus?.state == .blocked {
-            scol = hostColor ?? .systemOrange
+        // Attention states win over accent/host tint; on the blue accent
+        // titlebar red/orange vanish, so they get light variants.
+        if programStatus?.state == .blocked {
+            scol = accent ? .systemYellow : .systemOrange
         } else if programStatus?.state == .error {
-            scol = .systemRed
+            scol = accent ? .systemPink : .systemRed
+        } else if accent {
+            scol = .white
         } else if let hc = hostColor {
             scol = hc
         } else {

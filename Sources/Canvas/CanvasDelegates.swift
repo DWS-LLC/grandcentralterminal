@@ -26,11 +26,9 @@ extension CanvasView: CanvasConnDelegate {
                     rect: Rect(x: r.minX, y: r.minY, w: r.width, h: r.height),
                     allowOverlap: GCTConfig.current.allowWindowOverlap, gap: Double(GCTConfig.current.windowGap)), owner: "local")
             } else if !mappedPanes.isEmpty {
+                // Overlap allowed = the layout is the user's; never
+                // rearrange it on (re)connect.
                 if !GCTConfig.current.allowWindowOverlap {
-                    untangleLoadedPanes()
-                } else if GCTConfig.current.windowGap > 0 {
-                    // Overlap allowed + gap raised: existing panes were
-                    // placed flush; spread them to the new padding once.
                     untangleLoadedPanes()
                 }
                 fitAll()
