@@ -1,9 +1,17 @@
 # Changelog
 
-## Unreleased
+## v0.4.0
 
 ### Added
 - `proxy` key on `[host.<name>]`: reach a remote daemon through an ssh jump host (`ssh -W host:port proxy`).
+- MIT license.
+- Releases are also published to GitHub (DWS-LLC/grandcentralterminal).
+
+### Fixed
+- ctrl+tab and ctrl+return key equivalents now go to the terminal instead of the menu.
+
+### Changed
+- README rewritten; config, keybindings, usage, agents, remote and build docs moved to `docs/`. The demo reel is gone.
 
 ## v0.3.1
 
