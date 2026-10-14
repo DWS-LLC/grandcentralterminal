@@ -76,7 +76,7 @@ git tag v0.3.0 && git push origin v0.3.0
 
 CI secrets: `APPLE_CERT_P12_B64` (base64 Developer ID `.p12`),
 `APPLE_CERT_PASSWORD`, `KEYCHAIN_PASSWORD`, `APPLE_ID`, `APPLE_TEAM_ID`,
-`NOTARY_PASSWORD` (app-specific password), `GITHUB_RELEASE_TOKEN`
+`NOTARY_PASSWORD` (app-specific password), `RELEASE_TOKEN`
 (contents:write on the GitHub mirror). Runner labels in
 `.forgejo/workflows/release.yml` are `macos-arm64` and `linux`; rename to match
 yours.

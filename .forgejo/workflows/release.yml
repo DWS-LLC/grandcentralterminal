@@ -9,7 +9,7 @@
 # Required repo secrets (/{owner}/{repo}/settings/actions/secrets):
 #   APPLE_CERT_P12_B64  base64 of the Developer ID Application .p12
 #   APPLE_CERT_PASSWORD password for the .p12 (empty string when none)
-#   GITHUB_RELEASE_TOKEN token with contents:write on the GitHub mirror
+#   RELEASE_TOKEN token with contents:write on the GitHub mirror
 #
 # Runner labels: `macos-arm64` (challenger-macos-arm64) and `linux`.
 # Rename to match your runner labels if they differ.
@@ -51,7 +51,7 @@ jobs:
             "build/GrandCentralTerminal-${VER}-macos-arm64.zip"
         env:
           GITHUB_REPO: tanishq-dubey/grandcentralterminal
-          GITHUB_TOKEN: ${{ secrets.GITHUB_RELEASE_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.RELEASE_TOKEN }}
 
   linux:
     runs-on: linux
@@ -79,4 +79,4 @@ jobs:
           ./scripts/github-release-upload.sh "$TAG" "${ART[0]}"
         env:
           GITHUB_REPO: tanishq-dubey/grandcentralterminal
-          GITHUB_TOKEN: ${{ secrets.GITHUB_RELEASE_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.RELEASE_TOKEN }}
