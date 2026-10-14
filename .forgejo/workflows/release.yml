@@ -50,7 +50,7 @@ jobs:
           ./scripts/github-release-upload.sh "$TAG" \
             "build/GrandCentralTerminal-${VER}-macos-arm64.zip"
         env:
-          GITHUB_REPO: tanishq-dubey/grandcentralterminal
+          GITHUB_REPO: DWS-LLC/grandcentralterminal
           GITHUB_TOKEN: ${{ secrets.RELEASE_TOKEN }}
 
   linux:
@@ -78,5 +78,5 @@ jobs:
           ART=(build/gctd-"${VER}"-linux-*.tar.gz)
           ./scripts/github-release-upload.sh "$TAG" "${ART[0]}"
         env:
-          GITHUB_REPO: tanishq-dubey/grandcentralterminal
+          GITHUB_REPO: DWS-LLC/grandcentralterminal
           GITHUB_TOKEN: ${{ secrets.RELEASE_TOKEN }}

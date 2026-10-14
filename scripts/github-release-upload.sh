@@ -4,7 +4,7 @@
 # Usage: github-release-upload.sh <tag> <file> [name]
 #
 # Env:
-#   GITHUB_REPO   e.g. tanishq-dubey/grandcentralterminal
+#   GITHUB_REPO   e.g. DWS-LLC/grandcentralterminal
 #   GITHUB_TOKEN  token with contents:write on that repo
 set -euo pipefail
 

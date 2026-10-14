@@ -64,7 +64,7 @@ It's a central terminal for your terminals, and it's grand. The daemon is
 ## Install
 
 Grab a build from the
-[releases page](https://github.com/tanishq-dubey/grandcentralterminal/releases).
+[releases page](https://github.com/DWS-LLC/grandcentralterminal/releases).
 
 macOS (arm64): unzip `GrandCentralTerminal-<ver>-macos-arm64.zip`, drag the
 app to `/Applications`, open it. It's signed and notarized. Then run
