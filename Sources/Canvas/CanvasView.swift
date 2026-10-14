@@ -71,6 +71,7 @@ final class CanvasView: NSView {
     // OSC 7501 program-status records: one store for every pane on every
     // host (canvas-local; the daemon never sees these bytes).
     let programStatus = ProgramStatusStore()
+    let arrange = ArrangeState()
 
     // Drag state machine.
     private enum Drag {
@@ -857,6 +858,7 @@ final class CanvasView: NSView {
             dropComposition()
         }
         focusedID = id
+        arrange.noteFocus(id)
         // An explicit focus move exits a pane zoom: restore the zoomed
         // pane's frame + camera before going somewhere new.
         if zoomSavedPane != nil, zoomSavedPane != id {
@@ -1777,6 +1779,11 @@ final class CanvasView: NSView {
             remote.submenu = submenu
             menu.addItem(remote)
         }
+        let arrangeScope: ArrangeScope = !sel.isEmpty ? .selection
+            : groupBG.map { .group($0.id) } ?? .all
+        menu.addItem(.separator())
+        GCTMenus.arrangeItems(scope: arrangeScope, target: self).forEach(menu.addItem)
+        menu.addItem(.separator())
         let snap = NSMenuItem(
             title: GCTConfig.current.snapping
                 ? "Snapping: on" : "Snapping: off",
@@ -1817,7 +1824,10 @@ final class CanvasView: NSView {
         let parts = s.split(separator: "|").map(String.init)
         guard parts.count == 2, let u = UUID(uuidString: parts[0]),
               let hex = GroupStyle.sanitizedColor(parts[1]) else { return }
-        let id = GroupID(u)
+        recolorGroup(GroupID(u), hex: hex)
+    }
+
+    func recolorGroup(_ id: GroupID, hex: String) {
         guard var g = groupMetas[id] else { return }
         g.color = hex
         groupMetas[id] = g
@@ -2735,6 +2745,7 @@ final class CanvasView: NSView {
 
     func removePane(_ id: PaneID) {
         programStatus.remove(id)
+        arrange.forget(id)
         guard let pane = panes[id] else { return }
         if markedHost === pane.host { dropComposition() }
         pane.host?.close()
@@ -2772,6 +2783,7 @@ final class CanvasView: NSView {
         // real input counts: terminal auto-replies (focus, DSR) go through
         // connSend and must not clear it.
         host.userInput = { [weak self] id in
+            self?.arrange.noteInput(id)
             guard let self, self.programStatus.noteInput(id) else { return }
             self.panes[id]?.programStatus = self.programStatus.summary(for: id)
         }

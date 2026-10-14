@@ -372,7 +372,8 @@ arrive via `resize_callback` and go to the daemon as `TIOCSWINSZ`. See
 | drag empty space | pan |
 | opt-drag empty space | draw a new pane (free corner snaps, live cols×rows pill) |
 | right-drag empty space | rubber-band panes into a staged multi-select (no grouping yet) |
-| right-click canvas/group background | one menu, always: selection actions (when live) + group actions (on background) + new pane here + snapping on/off |
+| right-click canvas/group background | one menu, always: selection actions (when live) + group actions (on background) + new pane here + Arrange By / As + snapping on/off |
+| Arrange menu (menubar) | one-shot tidy of the selection, else the focused group, else everything: sort by clean-up / name / directory / status / last focused / activity, as rows / columns / grid; Undo Arrange reverts |
 | right-click window chrome | add to / remove from named group, new group |
 | shift+click titlebar | toggle pane in multi-select |
 | drag selected titlebar | move the whole selection as a rigid block |

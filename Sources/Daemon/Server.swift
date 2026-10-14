@@ -116,6 +116,11 @@ final class Server {
 
     // Shared accept path: registers the peer, spawns its serve thread.
     // TCP callers pass trusted: false so serve() demands the token first.
+    // arrangePanes applies client rects as-is; reject NaN/inf and empty ones.
+    private static func sane(_ r: Rect) -> Bool {
+        r.x.isFinite && r.y.isFinite && r.w.isFinite && r.h.isFinite && r.w > 0 && r.h > 0
+    }
+
     private func acceptConn(_ cfd: Int32, trusted: Bool) {
         let remote = Remote(conn: Conn(fd: cfd))
         remote.trusted = trusted
@@ -293,6 +298,23 @@ final class Server {
             let saved = snapshotLocked()
             lock.unlock()
             for r in targets { _ = r.conn.send(tag: .paneMeta, json: meta) }
+            state.scheduleSave(saved)
+
+        case .arrangePanes:
+            guard let req: ArrangePanes = frame.decode() else { return }
+            lock.lock()
+            var updated = [PaneMeta]()
+            for m in req.moves {
+                guard let pane = panes[m.id], Self.sane(m.rect) else { continue }
+                pane.meta.rect = m.rect
+                updated.append(pane.meta)
+            }
+            let targets = remotes
+            let saved = snapshotLocked()
+            lock.unlock()
+            for meta in updated {
+                for r in targets { _ = r.conn.send(tag: .paneMeta, json: meta) }
+            }
             state.scheduleSave(saved)
 
         case .paneCwd:

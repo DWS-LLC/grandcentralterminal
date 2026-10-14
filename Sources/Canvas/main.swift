@@ -15,6 +15,8 @@ final class CanvasWindow: NSPanel {
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    @objc func showAbout(_ sender: Any?) { GCTAbout.show() }
+
     var window: NSWindow!
     var canvas: CanvasView!
     var doom: DoomController?
@@ -227,6 +229,11 @@ let appMenuItem = NSMenuItem()
 menu.addItem(appMenuItem)
 let appMenu = NSMenu()
 appMenu.addItem(NSMenuItem(
+    title: "About Grand Central Terminal",
+    action: #selector(AppDelegate.showAbout(_:)),
+    keyEquivalent: ""))
+appMenu.addItem(.separator())
+appMenu.addItem(NSMenuItem(
     title: "Quit Grand Central Terminal", action: #selector(NSApplication.terminate(_:)),
     keyEquivalent: "q"))
 appMenu.addItem(.separator())
@@ -248,6 +255,14 @@ editMenu.addItem(NSMenuItem(title: "Copy", action: #selector(NSText.copy(_:)), k
 editMenu.addItem(NSMenuItem(title: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v"))
 editMenu.addItem(NSMenuItem(title: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a"))
 editMenuItem.submenu = editMenu
+
+let groupMenuItem = NSMenuItem()
+menu.addItem(groupMenuItem)
+groupMenuItem.submenu = GCTMenus.groupMenu()
+
+let arrangeMenuItem = NSMenuItem()
+menu.addItem(arrangeMenuItem)
+arrangeMenuItem.submenu = GCTMenus.arrangeMenu()
 
 let windowMenuItem = NSMenuItem()
 menu.addItem(windowMenuItem)

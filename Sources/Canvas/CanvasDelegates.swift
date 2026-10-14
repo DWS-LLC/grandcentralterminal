@@ -73,6 +73,7 @@ extension CanvasView: CanvasConnDelegate {
             hub.sendInput(local, ProgramStatusStore.queryReply)
         }
         if r.changed { panes[local]?.programStatus = programStatus.summary(for: local) }
+        if source == .live { arrange.noteOutput(local) }
         panes[local]?.host?.feed(data)
     }
 

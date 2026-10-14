@@ -41,6 +41,7 @@ build:
 	rm -rf "$(BUNDLE)"
 	mkdir -p "$(BUNDLE)/Contents/MacOS" "$(BUNDLE)/Contents/Resources"
 	cp Resources/Info.plist "$(BUNDLE)/Contents/Info.plist"
+	SHA=$$(git rev-parse --short HEAD 2>/dev/null || echo dev); /usr/libexec/PlistBuddy -c "Add :GCTGitSHA string $$SHA" "$(BUNDLE)/Contents/Info.plist"
 	cp "$(SWIFT_BUILD)/GrandCentralTerminal" "$(BUNDLE)/Contents/MacOS/"
 	cp "$(SWIFT_BUILD)/gctd" "$(BUNDLE)/Contents/MacOS/"
 	cp "$(SWIFT_BUILD)/ptyexec" "$(BUNDLE)/Contents/MacOS/"

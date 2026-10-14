@@ -186,6 +186,18 @@ final class HostHub {
         c.movePane(MovePane(id: remote, rect: req.rect, allowOverlap: req.allowOverlap, gap: req.gap))
     }
 
+    /// One batch per owning daemon; each daemon only sees its own panes.
+    func arrangePanes(_ moves: [PaneRect]) {
+        var batches = [String: [PaneRect]]()
+        for m in moves {
+            guard let owner = paneOwner[m.id], let remote = paneRemote[m.id] else { continue }
+            batches[owner, default: []].append(PaneRect(id: remote, rect: m.rect))
+        }
+        for (owner, batch) in batches {
+            conns[owner]?.arrangePanes(ArrangePanes(moves: batch))
+        }
+    }
+
     func paneCwd(_ req: PaneCwd) {
         guard let (c, remote) = remotePane(req.id) else { return }
         c.paneCwd(PaneCwd(id: remote, cwd: req.cwd))

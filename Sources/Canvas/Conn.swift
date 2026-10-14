@@ -28,6 +28,8 @@ final class CanvasConn: @unchecked Sendable {
     // Owner label for pane routing ("local" or the remote host name).
     // The hub tags every inbound meta with it; see HostHub.
     let owner: String
+    // Daemon protocol revision, learned from its welcome (old daemons: 1).
+    private var peerVersion: UInt16 = 1
 
     init?(sockPath: String, owner: String = "local") {
         let fd = connectUnixSocket(sockPath)
@@ -84,6 +86,7 @@ final class CanvasConn: @unchecked Sendable {
         switch frame.tag {
         case .welcome, .paneList:
             if let w: Welcome = frame.decode() {
+                peerVersion = w.version
                 delegate?.connWelcome(w.panes, w.groups, owner: owner)
             }
         case .paneCreated:
@@ -119,6 +122,17 @@ final class CanvasConn: @unchecked Sendable {
     func closePane(_ id: PaneID) { conn.send(tag: .closePane, json: PaneRef(id: id)) }
     func renamePane(_ req: RenamePane) { conn.send(tag: .renamePane, json: req) }
     func movePane(_ req: MovePane) { conn.send(tag: .movePane, json: req) }
+    // An old daemon drops the connection on an unknown tag, so it gets one
+    // movePane per pane instead.
+    func arrangePanes(_ req: ArrangePanes) {
+        guard peerVersion >= ArrangeProtoVersion else {
+            for m in req.moves {
+                movePane(MovePane(id: m.id, rect: m.rect, allowOverlap: true, gap: 0))
+            }
+            return
+        }
+        conn.send(tag: .arrangePanes, json: req)
+    }
     func paneCwd(_ req: PaneCwd) { conn.send(tag: .paneCwd, json: req) }
     func setFloating(_ req: SetFloating) { conn.send(tag: .setFloating, json: req) }
     func sendInput(_ id: PaneID, _ data: Data) {

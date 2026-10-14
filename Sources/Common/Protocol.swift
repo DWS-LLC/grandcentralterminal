@@ -6,7 +6,9 @@
 
 import Foundation
 
-public let ProtoVersion: UInt16 = 1
+public let ProtoVersion: UInt16 = 2
+// First protocol revision whose daemon understands MsgTag.arrangePanes.
+public let ArrangeProtoVersion: UInt16 = 2
 
 public enum MsgTag: UInt8 {
     // client -> daemon
@@ -30,6 +32,7 @@ public enum MsgTag: UInt8 {
     case dumpPane    = 18 // JSON DumpPane (read-only ring snapshot)
     case focusPane   = 19 // JSON PaneRef (agent asks canvas to focus)
     case canvasCommand = 20 // JSON CanvasCommand (scripted camera/action)
+    case arrangePanes = 21 // JSON ArrangePanes (exact batch placement)
 
     // daemon -> client
     case welcome     = 64 // JSON Welcome
@@ -192,6 +195,20 @@ public struct MovePane: Codable, Sendable {
         allowOverlap = try c.decodeIfPresent(Bool.self, forKey: .allowOverlap) ?? false
         gap = try c.decodeIfPresent(Double.self, forKey: .gap) ?? 0
     }
+}
+
+public struct PaneRect: Codable, Sendable {
+    public var id: PaneID
+    public var rect: Rect
+    public init(id: PaneID, rect: Rect) { self.id = id; self.rect = rect }
+}
+
+// Atomic batch placement: the client already solved the layout, so the
+// daemon applies every rect as-is (no per-move arbitration, which would
+// shove panes around mid-rearrangement).
+public struct ArrangePanes: Codable, Sendable {
+    public var moves: [PaneRect]
+    public init(moves: [PaneRect]) { self.moves = moves }
 }
 
 public struct PaneCwd: Codable, Sendable {
