@@ -40,8 +40,6 @@ enum AgentSkill {
         let dir = (self0 as NSString).deletingLastPathComponent
         out.append(dir + "/../skills/gct/SKILL.md")
         out.append(dir + "/skills/gct/SKILL.md")
-        // Release bundle: Contents/MacOS/gctd -> Contents/Resources.
-        out.append(dir + "/../Resources/SKILL.md")
         // Repo checkout: Sources/Daemon -> root.
         let checkout = ((dir as NSString).deletingLastPathComponent as NSString)
             .deletingLastPathComponent

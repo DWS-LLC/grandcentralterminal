@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.3.1
+
+### Fixed
+- Skill install failed on zip installs ("skill source not found"): the app now stages `SKILL.md` into Application Support alongside the daemon.
+
 ## v0.3.0
 
 ### Fixed

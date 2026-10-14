@@ -45,6 +45,26 @@ enum DaemonInstall {
             guard !fm.contentsEqual(atPath: src, andPath: dst) else { continue }
             swap(src, dst)
         }
+
+        stageSkill()
+    }
+
+    // The daemon reads the skill from Support/skills/gct (../skills from
+    // bin/); the bundle copy is only the source.
+    private static func stageSkill() {
+        let fm = FileManager.default
+        guard let src = Bundle.main.path(forResource: "SKILL", ofType: "md") else { return }
+        let dir = CanvasPaths.supportDir + "/skills/gct"
+        let dst = dir + "/SKILL.md"
+        guard !fm.contentsEqual(atPath: src, andPath: dst) else { return }
+
+        try? fm.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        try? fm.removeItem(atPath: dst)
+        do {
+            try fm.copyItem(atPath: src, toPath: dst)
+        } catch {
+            NSLog("[gct] stage skill failed: \(error)")
+        }
     }
 
     // cp to .new, then rename over dst: rewriting a running image in place
