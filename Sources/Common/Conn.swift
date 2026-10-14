@@ -62,7 +62,7 @@ public final class Conn: @unchecked Sendable {
         guard let payload = readExact(Int(len)) else { return nil }
         guard let tag = MsgTag(rawValue: payload[0]) else { return nil }
 
-        if tag == .inputPane || tag == .outputPane {
+        if tag == .inputPane || tag == .outputPane || tag == .replayPane {
             guard payload.count >= 17 else { return nil }
             // Portable UUID load: uuid_t isn't constructible under the
             // static SDK's C import, so go through the 16 raw bytes.

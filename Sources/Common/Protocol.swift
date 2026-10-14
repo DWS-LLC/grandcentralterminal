@@ -45,6 +45,7 @@ public enum MsgTag: UInt8 {
     case paneDump      = 74 // JSON PaneDump (reply to dumpPane)
     case paneFocus     = 75 // JSON PaneRef (daemon -> canvas: focus this)
     case canvasRelay   = 76 // JSON CanvasCommand (daemon -> canvas: run this)
+    case replayPane    = 77 // data: uuid + ring snapshot (history, not live)
 }
 
 public struct PaneID: Hashable, Sendable, CustomStringConvertible {

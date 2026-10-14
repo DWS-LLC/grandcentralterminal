@@ -2234,9 +2234,6 @@ final class CanvasView: NSView {
         guard let id = focusedID, let pane = panes[id] else { return }
         let text = NSPasteboard.general.string(forType: .string) ?? ""
         pane.host?.text(text)
-        if programStatus.noteInput(id) {
-            panes[id]?.programStatus = programStatus.summary(for: id)
-        }
     }
 
     private func copyFromFocused() {
@@ -2475,18 +2472,17 @@ final class CanvasView: NSView {
                                delegate: self, fontSize: fontSize)
         host.connSend = { [weak self] id, data in
             self?.hub.sendInput(id, data)
-            // Keystrokes mean the user has seen any done/error report.
-            // Main-thread: the write callback fires on ghostty's IO thread.
-            // (The OSC 7501 query auto-reply bypasses connSend, so it
-            // never self-clears.)
-            DispatchQueue.main.async { [weak self] in
-                guard let self else { return }
-                if self.programStatus.noteInput(id) {
-                    self.panes[id]?.programStatus = self.programStatus.summary(for: id)
-                }
-            }
+        }
+        // Keystrokes mean the user has seen any done/error report. Only
+        // real input counts: terminal auto-replies (focus, DSR) go through
+        // connSend and must not clear it.
+        host.userInput = { [weak self] id in
+            guard let self, self.programStatus.noteInput(id) else { return }
+            self.panes[id]?.programStatus = self.programStatus.summary(for: id)
         }
         pane.install(host: host)
+        // Reports may have landed before this view existed (attach/restore).
+        pane.programStatus = programStatus.summary(for: meta.id)
         refreshCellMetrics(host)
         applyPendingGridFixup(pane)
         panes[meta.id] = pane

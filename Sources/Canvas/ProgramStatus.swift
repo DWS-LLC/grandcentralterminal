@@ -40,9 +40,15 @@ final class ProgramStatusStore {
         var queryReply: Bool
     }
 
+    private static let esc: UInt8 = 0x1B
+    private static let osc7501: [UInt8] = [0x5D, 0x37, 0x35, 0x30, 0x31, 0x3B]  // ] 7501 ;
+    private static let osc133: [UInt8] = [0x5D, 0x31, 0x33, 0x33, 0x3B]         // ] 133 ;
+    private static let maxReport = 4096       // spec: whole sequence limit
+    private static let maxPending = 4300      // carry cap, a bit over maxReport
+    private static let splitOpener = 8        // tail short enough to be a cut opener
+
     /// Fixed reply to the `OSC 7501 ; ?` support query.
-    static let queryReply = Data([0x1B, 0x5D, 0x37, 0x35, 0x30, 0x31,
-                                  0x3B, 0x3F, 0x1B, 0x5C])
+    static let queryReply = Data([esc] + osc7501 + [0x3F, esc, 0x5C])
 
     private struct PaneState {
         var records = [String: ProgramRecord]()
@@ -58,10 +64,17 @@ final class ProgramStatusStore {
     /// Scan output bytes for OSC 7501 reports/queries (plus OSC 133;A prompt
     /// markers and RIS for record lifetimes). The bytes pass through to the
     /// terminal untouched; only the store changes.
-    func ingest(_ data: Data, pane: PaneID) -> IngestResult {
-        if data.isEmpty { return IngestResult(changed: false, queryReply: false) }
+    /// Replayed history never triggers a query reply: it already happened.
+    func ingest(_ data: Data, pane: PaneID, source: OutputSource) -> IngestResult {
+        let idle = IngestResult(changed: false, queryReply: false)
+        if data.isEmpty { return idle }
+
+        // Hot path (cat, build logs): no ESC and nothing pending = nothing to do.
+        let pending = panes[pane]?.carry.isEmpty == false
+        if !pending, !data.contains(Self.esc) { return idle }
+
         var st = panes[pane] ?? PaneState()
-        var buf = data
+        var buf = Data(data)  // zero-based: carry slices below index from 0
         if !st.carry.isEmpty {
             buf = st.carry + data
             st.carry.removeAll(keepingCapacity: false)
@@ -73,13 +86,13 @@ final class ProgramStatusStore {
             let n = raw.count
             var i = 0
             while i < n {
-                guard base[i] == 0x1B else { i += 1; continue }
+                guard base[i] == Self.esc else { i += 1; continue }
                 // Chunk tail that could be a split opener (or a lone
                 // ESC): hold it for the next chunk instead of skipping.
-                if n - i < 8 {
+                if n - i < Self.splitOpener {
                     let tail = (i..<n).map { base[$0] }
-                    let p7501: [UInt8] = [0x1B, 0x5D, 0x37, 0x35, 0x30, 0x31, 0x3B]
-                    let p133: [UInt8] = [0x1B, 0x5D, 0x31, 0x33, 0x33, 0x3B]
+                    let p7501 = [Self.esc] + Self.osc7501
+                    let p133 = [Self.esc] + Self.osc133
                     if p7501.prefix(tail.count).elementsEqual(tail)
                         || p133.prefix(tail.count).elementsEqual(tail)
                         || tail.count == 1 {
@@ -101,18 +114,18 @@ final class ProgramStatusStore {
                     case .partial:
                         // No terminator yet: hold the tail for the next chunk.
                         // Over the 4096 limit it can never complete: drop it.
-                        st.carry = n - i > 4300 ? Data() : buf[i..<n]
+                        st.carry = n - i > Self.maxPending ? Data() : buf[i..<n]
                         i = n
                     case .broken(let at):
                         i = at
                     case .done(let br, let end):
-                        if end - i > 4096 {
+                        if end - i > Self.maxReport {
                             i = end  // over-limit report: discarded whole
                             continue
                         }
                         if is7501 {
                             if br.count == 1, base[br.lowerBound] == 0x3F {
-                                reply = true  // support query
+                                reply = source == .live  // support query
                             } else {
                                 applyReport(base, br, &st)
                             }
@@ -139,7 +152,9 @@ final class ProgramStatusStore {
     /// Returns true when the visible summary changed.
     @discardableResult
     func noteInput(_ pane: PaneID) -> Bool {
-        guard var st = panes[pane] else { return false }
+        guard var st = panes[pane],
+              st.records.values.contains(where: { $0.state == .done || $0.state == .error })
+        else { return false }
         let before = st.last
         st.records = st.records.filter {
             $0.value.state != .done && $0.value.state != .error

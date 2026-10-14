@@ -3,11 +3,16 @@
 import Foundation
 import Common
 
+/// Live pty bytes vs the daemon's ring snapshot sent on attach.
+enum OutputSource {
+    case live, replay
+}
+
 protocol CanvasConnDelegate: AnyObject {
     func connWelcome(_ panes: [PaneMeta], _ groups: [GroupMeta], owner: String)
     func connPaneCreated(_ meta: PaneMeta, owner: String)
     func connPaneMeta(_ meta: PaneMeta, owner: String)
-    func connOutput(_ id: PaneID, _ data: Data, owner: String)
+    func connOutput(_ id: PaneID, _ data: Data, source: OutputSource, owner: String)
     func connPaneExit(_ id: PaneID, _ code: Int32, owner: String)
     func connGroupCreated(_ meta: GroupMeta, owner: String)
     func connGroupMeta(_ meta: GroupMeta, owner: String)
@@ -79,7 +84,9 @@ final class CanvasConn: @unchecked Sendable {
         case .paneMeta:
             if let m: PaneMeta = frame.decode() { delegate?.connPaneMeta(m, owner: owner) }
         case .outputPane:
-            if let id = frame.paneID { delegate?.connOutput(id, frame.data, owner: owner) }
+            if let id = frame.paneID { delegate?.connOutput(id, frame.data, source: .live, owner: owner) }
+        case .replayPane:
+            if let id = frame.paneID { delegate?.connOutput(id, frame.data, source: .replay, owner: owner) }
         case .paneExit:
             if let e: PaneExit = frame.decode() { delegate?.connPaneExit(e.id, e.code, owner: owner) }
         case .groupCreated:

@@ -10,6 +10,8 @@ final class SurfaceHost: @unchecked Sendable {
     weak var delegate: (any GhosttyAppDelegate)?
     // Set by CanvasView: keystrokes/encoded input -> daemon socket.
     var connSend: ((PaneID, Data) -> Void)?
+    // Fires on real user input only (key/text), never on terminal auto-replies.
+    var userInput: ((PaneID) -> Void)?
 
     private var surfaceStore: UnsafeMutableRawPointer?
     // Content scale the surface was last configured with; divides pixel
@@ -127,12 +129,14 @@ final class SurfaceHost: @unchecked Sendable {
     func key(_ event: ghostty_input_key_s) -> Bool {
         assert(Thread.isMainThread)
         guard let s = surfaceIfOpen() else { return false }
+        userInput?(paneID)
         return ghostty_surface_key(s, event)
     }
 
     func text(_ str: String) {
         assert(Thread.isMainThread)
         guard let s = surfaceIfOpen(), !str.isEmpty else { return }
+        userInput?(paneID)
         str.withCString { ptr in
             ghostty_surface_text(s, ptr, UInt(strlen(ptr)))
         }

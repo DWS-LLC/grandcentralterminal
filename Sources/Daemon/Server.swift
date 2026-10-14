@@ -222,7 +222,7 @@ final class Server {
             // this are serialized by the server lock.
             let snap = pane.ring.snapshot()
             if !snap.isEmpty {
-                _ = remote.conn.sendData(tag: .outputPane, paneID: req.id, data: snap)
+                _ = remote.conn.sendData(tag: .replayPane, paneID: req.id, data: snap)
             }
 
         case .detachPane:
