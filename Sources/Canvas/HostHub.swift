@@ -46,7 +46,8 @@ final class HostHub {
     /// (CanvasConn's init gates on the welcome).
     func connectRemote(_ h: GCTRemoteHost, delegate: CanvasConnDelegate) -> Bool {
         guard let c = CanvasConn(tcpHost: h.host, port: h.port,
-                                 token: h.token, owner: h.name) else { return false }
+                                 token: h.token, owner: h.name,
+                                 proxy: h.proxy) else { return false }
         c.delegate = delegate
         conns[h.name] = c
         c.start()

@@ -38,15 +38,20 @@ final class CanvasConn: @unchecked Sendable {
         self.owner = owner
     }
 
-    init?(tcpHost: String, port: UInt16, token: String, owner: String) {
-        let fd = connectTCP(host: tcpHost, port: port)
+    init?(tcpHost: String, port: UInt16, token: String, owner: String, proxy: String = "") {
+        let fd = proxy.isEmpty
+            ? connectTCP(host: tcpHost, port: port)
+            : connectSSHProxy(proxy: proxy, host: tcpHost, port: port)
         guard fd >= 0 else { return nil }
         conn = Conn(fd: fd)
         self.owner = owner
         _ = conn.send(tag: .hello, json: Hello(token: token.isEmpty ? nil : token))
         // Gate early: a bad token gets errorReply, never a welcome.
         // Don't block long — the read thread reports connClosed on drop.
-        if let first = conn.readFrame() {
+        let first = conn.readFrame()
+        // A proxied ssh that failed (bad auth/route) just EOFs: reject it.
+        if first == nil && !proxy.isEmpty { return nil }
+        if let first {
             guard first.tag == .welcome || first.tag == .paneList,
                   let _: Welcome = first.decode() else { return nil }
             pendingWelcome = first

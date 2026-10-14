@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+### Added
+- `proxy` key on `[host.<name>]`: reach a remote daemon through an ssh jump host (`ssh -W host:port proxy`).
+
 ## v0.3.1
 
 ### Fixed

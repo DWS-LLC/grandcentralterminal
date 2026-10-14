@@ -231,6 +231,16 @@ port = 7420
 token = "<token>"
 ```
 
+Behind a bastion? Set `proxy` and the canvas runs `ssh -W host:port proxy`
+for you (key/agent auth only, no prompts; `host` is as the bastion sees it):
+
+```toml
+[host.enterprise]
+host = "10.0.0.5"
+token = "<token>"
+proxy = "dubey@bastion"   # or an ~/.ssh/config alias
+```
+
 Remote panes behave like local ones (PTYs live on the remote; scrollback,
 resize, groups, and persistence all work), with three rules: groups are
 same-host only (mixed selections group the largest same-host subset),

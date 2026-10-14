@@ -693,8 +693,10 @@ struct GCTConfig {
             var port = GCTDefaultPort
             if let s = vals["port"], let n = UInt16(s), n > 0 { port = n }
             let token = vals["token"] ?? ""
+            let proxy = vals["proxy"]?.trimmingCharacters(in: .whitespaces) ?? ""
             remotes.append(GCTRemoteHost(name: name, host: h, port: port,
-                                         token: token, color: colorSpec(vals["color"])))
+                                         token: token, proxy: proxy,
+                                         color: colorSpec(vals["color"])))
         }
         cfg.remotes = remotes.sorted { $0.name < $1.name }
         return cfg
@@ -987,10 +989,13 @@ struct GCTConfig {
     # windows (hex like "#f59e0b", "default" = auto from the palette).
     # Right-click empty canvas for "New remote pane" per host.
     # Reload-config reconnects when these change.
+    # proxy = ssh jump host (user@bastion or an ~/.ssh/config alias); the
+    # canvas runs `ssh -W host:port proxy`, key auth only (no prompts).
     # [host.enterprise]
     # host = "127.0.0.1"
     # port = 17421
     # token = "s3cret"
+    # proxy = "me@bastion.example.com"
     # color = "#f59e0b"
     """
 }
@@ -1001,6 +1006,7 @@ struct GCTRemoteHost: Equatable {
     var host: String       // TCP address (hostname/IP, ssh-tunnel endpoint ok)
     var port: UInt16 = GCTDefaultPort
     var token: String = ""
+    var proxy: String = "" // ssh jump host ("user@bastion" or ~/.ssh/config alias); "" = direct
     var color: String?     // hex like "#f59e0b"; nil = auto from palette
 }
  // MARK: - Appearance + resolved theme
