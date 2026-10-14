@@ -123,6 +123,9 @@ final class CanvasView: NSView {
     // so preedit cleanup always targets the surface that shows it.
     private var markedHost: SurfaceHost?
     private var keyTextAccumulator: [String]?
+    // Timestamp of the last ctrl/cmd event that performKeyEquivalent
+    // declined; AppKit re-offers the same event, which we then claim.
+    private var lastEquivTime: TimeInterval?
     // Korean IMEs: a lone high surrogate delivered by insertText, waiting
     // for its trail half.
     private var pendingLeadSurrogate: LeadSurrogate?
@@ -2297,6 +2300,57 @@ final class CanvasView: NSView {
             let name = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
             done(name.isEmpty ? nil : name)
         }
+    }
+
+    // AppKit offers key events to performKeyEquivalent before keyDown and
+    // swallows the ones it has a use for (ctrl+tab = key-view loop,
+    // ctrl+return = default button, ctrl+/ = nothing). Claim them so the
+    // terminal sees them. Mirrors Ghostty's macOS SurfaceView.
+    //   ctrl+/  -> ^_      ctrl+return -> \r (verbatim, mods kept)
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        guard event.type == .keyDown, focusedHost != nil else { return false }
+        let mods = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        let text: String
+
+        switch event.charactersIgnoringModifiers {
+        case "\r":
+            guard mods.contains(.control) else { return false }
+            text = "\r"
+        case "/":
+            guard mods.contains(.control),
+                  mods.isDisjoint(with: [.shift, .command, .option]) else { return false }
+            text = "_"
+        default:
+            // Menu key equivalents (cmd+q) must still run, so decline the
+            // first offer; AppKit re-sends unclaimed events to keyDown path
+            // via a second performKeyEquivalent with the same timestamp.
+            guard event.timestamp != 0,
+                  !mods.isDisjoint(with: [.command, .control]) else {
+                lastEquivTime = nil
+                return false
+            }
+            guard lastEquivTime == event.timestamp else {
+                lastEquivTime = event.timestamp
+                return false
+            }
+            lastEquivTime = nil
+            text = event.characters ?? ""
+        }
+
+        guard let ev = NSEvent.keyEvent(
+            with: .keyDown,
+            location: event.locationInWindow,
+            modifierFlags: event.modifierFlags,
+            timestamp: event.timestamp,
+            windowNumber: event.windowNumber,
+            context: nil,
+            characters: text,
+            charactersIgnoringModifiers: text,
+            isARepeat: event.isARepeat,
+            keyCode: event.keyCode) else { return false }
+
+        keyDown(with: ev)
+        return true
     }
 
     override func flagsChanged(with event: NSEvent) {
