@@ -70,6 +70,8 @@ move-focus-on-new-window = true
 # fit it. Independent; both true just zooms to fit.
 camera-follows-focus-move = true
 camera-fits-focus-move = true
+# Zoom to fit a pane after resizing it (mouse or keyboard).
+camera-fits-resize = true
 
 # Focus the pane under the cursor on mouse motion (ghostty's name for it).
 focus-follows-mouse = false

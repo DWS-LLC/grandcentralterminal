@@ -36,6 +36,7 @@ final class Server {
     // Canvas window-gap (LayoutPolicy); floor for every placement.
     private var layoutGap: Double = 0
     private static let maxGap: Double = 256
+    private static let maxTitleClearance: Double = 256
 
     init(state: StateStore, sockPath: String, tcpPort: UInt16? = nil,
          token: String = "") {
@@ -324,6 +325,9 @@ final class Server {
             guard let req: LayoutPolicy = frame.decode() else { return }
             lock.lock(); defer { lock.unlock() }
             layoutGap = min(max(req.gap, 0), Self.maxGap)
+            if let c = req.titleClearance {
+                GroupGeometry.titleClearance = min(max(c, 0), Self.maxTitleClearance)
+            }
 
         case .paneCwd:
             // OSC 7 from remote panes; local panes are polled in-process.

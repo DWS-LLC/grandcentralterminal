@@ -455,6 +455,8 @@ struct GCTConfig {
     // pane, and/or zoom to fit it. Independent; both default true (fit
     var cameraFollowsFocusMove = true
     var cameraFitsFocusMove = true
+    // Zoom to fit a pane after resizing it (mouse or keyboard).
+    var cameraFitsResize = true
     // Hover behavior: focus-follows-mouse focuses the pane under the
     // cursor on motion (same name as ghostty); scroll-on-terminal-hover
     // routes wheel/trackpad scroll to the hovered terminal, else pan
@@ -569,6 +571,9 @@ struct GCTConfig {
         }
         if let v = root["camera-fits-focus-move"] {
             cfg.cameraFitsFocusMove = flag(v, cfg.cameraFitsFocusMove)
+        }
+        if let v = root["camera-fits-resize"] {
+            cfg.cameraFitsResize = flag(v, cfg.cameraFitsResize)
         }
         if let v = root["camera-on-focus-click"],
            let c = GCTClickCamera(rawValue: v.lowercased()) {
@@ -815,6 +820,8 @@ struct GCTConfig {
     # the camera still.
     camera-follows-focus-move = true
     camera-fits-focus-move = true
+    # Zoom to fit a pane after you resize it (mouse or keyboard).
+    camera-fits-resize = true
     # Clicking another pane to focus it: "none", "center" (keep zoom) or
     # "fit" (zoom to fit). Runs on release, only for a click, never a drag.
     camera-on-focus-click = "center"

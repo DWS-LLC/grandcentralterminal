@@ -9,8 +9,7 @@ extension CanvasView: CanvasConnDelegate {
     func connWelcome(_ panes: [PaneMeta], _ groups: [GroupMeta], owner: String) {
         let mappedPanes = panes.map { hub.inboundPane($0, owner: owner) }
         let mappedGroups = groups.map { hub.inboundGroup($0, owner: owner) }
-        hub.setLayoutPolicy(LayoutPolicy(gap: Double(GCTConfig.current.windowGap)),
-                            owner: owner)
+        hub.setLayoutPolicy(layoutPolicy(), owner: owner)
         for meta in mappedPanes {
             makePaneView(meta)
         }

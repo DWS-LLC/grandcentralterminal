@@ -477,5 +477,10 @@ public struct CanvasCommand: Codable, Sendable {
 
 public struct LayoutPolicy: Codable, Sendable {
     public var gap: Double
-    public init(gap: Double) { self.gap = gap }
+    // Group title headroom (GroupGeometry.titleClearance); nil from
+    // canvases that predate it.
+    public var titleClearance: Double?
+    public init(gap: Double, titleClearance: Double? = nil) {
+        self.gap = gap; self.titleClearance = titleClearance
+    }
 }

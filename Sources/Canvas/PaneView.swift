@@ -5,7 +5,15 @@ import AppKit
 import Common
 
 final class PaneView: NSView {
-    static let titleBarHeight: CGFloat = 22
+    private static let baseTitleBarHeight: CGFloat = 22
+    private static let baseTitleFontSize: CGFloat = 12
+
+    // Scales with the title font (22pt at 12pt, 44pt at 24pt); never
+    // shrinks below the base so small fonts keep the old bar.
+    static var titleBarHeight: CGFloat {
+        let size = GCTTheme.current.titleFont.pointSize
+        return max(baseTitleBarHeight, ceil(size * baseTitleBarHeight / baseTitleFontSize))
+    }
 
     let id: PaneID
     private(set) var meta: PaneMeta
@@ -147,6 +155,32 @@ final class PaneView: NSView {
         guard abs(zoom / CGFloat(host.zoom) - 1) > Self.zoomTolerance else { return true }
 
         return host.renderZoom(Double(zoom), base: backing, points: points) == .applied
+    }
+
+    // Vector titles: CATextLayer rasterizes at contentsScale, and the
+    // camera only scales that bitmap. Re-rasterize at backing * camera
+    // once it rests (2x backing at 4x zoom = 8x contents), so zoomed-in
+    // titles stay crisp. Never below backing; capped in pixels.
+    private static let maxTextPixels: CGFloat = 4_000_000
+
+    func syncTitleZoom(camera: CGFloat) {
+        for label in [titleLabel, statusLabel] {
+            Self.setTextScale(label, camera: camera, window: window)
+        }
+    }
+
+    static func setTextScale(_ label: CATextLayer, camera: CGFloat, window: NSWindow?) {
+        let backing = window?.backingScaleFactor
+            ?? NSScreen.main?.backingScaleFactor ?? 2
+        let points = max(1, label.bounds.width * label.bounds.height)
+        let cap = (maxTextPixels / points).squareRoot()
+        let scale = max(backing, min(backing * camera, cap))
+        guard label.contentsScale != scale else { return }
+
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        label.contentsScale = scale
+        CATransaction.commit()
     }
 
     override func layout() {

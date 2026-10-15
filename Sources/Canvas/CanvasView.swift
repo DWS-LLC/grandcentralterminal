@@ -183,6 +183,11 @@ final class CanvasView: NSView {
         // Border width is theme state: applyChrome relayouts before
         // repainting, then the surface follows the inset terminal frame.
         for pane in panes.values { pane.applyChrome(); pane.syncSurfaceSize() }
+
+        // Group headroom follows the title font (see PaneView.titleBarHeight).
+        GroupGeometry.titleClearance = Double(PaneView.titleBarHeight)
+        refreshGroupViews()
+
         statusBar?.applyTheme()
         layoutStatusBar()
     }
@@ -280,6 +285,11 @@ final class CanvasView: NSView {
 
     private func currentGap() -> Double {
         Double(GCTConfig.current.windowGap)
+    }
+
+    // Placement policy pushed to every daemon on connect and reload.
+    func layoutPolicy() -> LayoutPolicy {
+        LayoutPolicy(gap: currentGap(), titleClearance: Double(PaneView.titleBarHeight))
     }
 
     // Air a snap must leave between facing edges. Panes only block each
@@ -579,7 +589,7 @@ final class CanvasView: NSView {
         applyTheme()
         syncStatusBarToConfig()
         for owner in hub.owners() {
-            hub.setLayoutPolicy(LayoutPolicy(gap: currentGap()), owner: owner)
+            hub.setLayoutPolicy(layoutPolicy(), owner: owner)
         }
         // Gap raised (or overlap flipped off): existing panes keep
         // their flush frames until something moves. Spread them to
@@ -754,6 +764,17 @@ final class CanvasView: NSView {
             guard bounds.intersects(NSRect(origin: origin, size: size)) else { continue }
 
             pane.syncRenderZoom(camera: camera.scale)
+            pane.syncTitleZoom(camera: camera.scale)
+        }
+
+        // Group titles are text layers too; same settle, same frustum.
+        for group in groupViews.values where !group.isHidden {
+            let origin = camera.worldToScreen(group.frame.origin)
+            let size = group.frame.size
+                .applying(CGAffineTransform(scaleX: camera.scale, y: camera.scale))
+            guard bounds.intersects(NSRect(origin: origin, size: size)) else { continue }
+
+            group.syncTitleZoom(camera: camera.scale)
         }
     }
 
@@ -1468,6 +1489,9 @@ final class CanvasView: NSView {
             }
         default:
             break
+        }
+        if case .resize(let id, _, let rect0) = drag, panes[id]?.frame != rect0 {
+            followResize(id)
         }
         if case .multiMove(let members, _, _) = drag {
             for m in members {
@@ -2813,7 +2837,8 @@ final class CanvasView: NSView {
         if zoomSavedPane == id { zoomSavedFrame = nil; zoomSavedCam = nil; zoomSavedPane = nil }
         if focusedID == id {
             focusedID = nil
-            if let last = zOrder.last { focusPane(last) }
+            // Focus falls to the top pane; the camera goes with it.
+            if let last = zOrder.last { focusPane(last); followFocus(last) }
         }
         refreshGroupViews()
     }
@@ -3037,6 +3062,7 @@ final class CanvasView: NSView {
             allowOverlap: GCTConfig.current.allowWindowOverlap, gap: currentGap()))
         refreshGroupViews()
         refreshOcclusion()
+        followResize(id)
     }
 
     // Keyboard grow-shove along one axis: push blockers out of the way.
@@ -3140,6 +3166,13 @@ final class CanvasView: NSView {
         case .center: centerOnPane(id)
         case .fit: zoomToPane(id)
         }
+    }
+
+    // Camera response to a finished resize (mouse release or keyboard
+    // step): zoom-fit the new size when camera-fits-resize.
+    private func followResize(_ id: PaneID) {
+        guard GCTConfig.current.cameraFitsResize, !isPaneZoomed else { return }
+        zoomToPane(id)
     }
 
     // Camera-only zoom into the focused pane (camera-zoom-pane): the

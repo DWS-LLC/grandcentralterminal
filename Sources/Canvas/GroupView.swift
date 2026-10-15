@@ -13,7 +13,7 @@ import Common
 
 final class GroupView: NSView {
     // Match the panes so the family reads as one.
-    static let titleBarHeight: CGFloat = 22
+    static var titleBarHeight: CGFloat { PaneView.titleBarHeight }
     static let borderWidth: CGFloat = 4
     static let cornerRadius: CGFloat = 6
 
@@ -65,6 +65,11 @@ final class GroupView: NSView {
         frame = bounds
         applyChrome()
         layoutChrome()
+    }
+
+    // Crisp title at the camera's zoom (see PaneView.syncTitleZoom).
+    func syncTitleZoom(camera: CGFloat) {
+        PaneView.setTextScale(titleLabel, camera: camera, window: window)
     }
 
     override func layout() {

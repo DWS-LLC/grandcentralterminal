@@ -256,7 +256,9 @@ public enum GroupGeometry {
     public static let padding: Double = 16
     // Extra headroom above the topmost member for the group titlebar.
     // Matches the pane titlebar height so the family reads as one.
-    public static let titleClearance: Double = 22
+    // Tracks the title font: the canvas sets it on theme refresh, the
+    // daemon learns it via LayoutPolicy.
+    public static var titleClearance: Double = 22
 
     // Union bounds of members + padding (+ title clearance on top). Nil
     // when fewer than one member frame is present (group hidden).
