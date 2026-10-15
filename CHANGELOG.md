@@ -5,6 +5,10 @@
 ### Added
 - Auto-update from GitHub releases: checks daily and via "Check for Updates…", verifies the Developer ID signature, then replaces the app and restarts the daemon with it (running panes end).
 
+### Fixed
+- `gctd open`/`move` respect `window-gap` (the canvas pushes it to the daemon).
+- Grouping never refuses for lack of room: loose panes and foreign groups are shoved out of the new border.
+
 ## v0.4.0
 
 ### Added

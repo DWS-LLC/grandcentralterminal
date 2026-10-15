@@ -33,6 +33,9 @@ final class Server {
     // live panes on load and on every pane exit/close.
     private var groups = [GroupID: GroupMeta]()
     private var remotes = [Remote]()
+    // Canvas window-gap (LayoutPolicy); floor for every placement.
+    private var layoutGap: Double = 0
+    private static let maxGap: Double = 256
 
     init(state: StateStore, sockPath: String, tcpPort: UInt16? = nil,
          token: String = "") {
@@ -270,7 +273,7 @@ final class Server {
                 moving: req.id, memberOf: memberOf.map { Set([$0]) } ?? [],
                 panes: rects, groups: metas,
                 allowOverlap: req.allowOverlap, floating: floating)
-            rect = Overlap.resolve(rect, obstacles: obstacles, gap: req.gap)
+            rect = Overlap.resolve(rect, obstacles: obstacles, gap: gapLocked(req.gap))
             // bounds over anything foreign — another group's bounds or a
             // loose pane. Slide along the grown bounds first (mirrors the
             // canvas static drags so the stream converges); hold the
@@ -316,6 +319,11 @@ final class Server {
                 for r in targets { _ = r.conn.send(tag: .paneMeta, json: meta) }
             }
             state.scheduleSave(saved)
+
+        case .layoutPolicy:
+            guard let req: LayoutPolicy = frame.decode() else { return }
+            lock.lock(); defer { lock.unlock() }
+            layoutGap = min(max(req.gap, 0), Self.maxGap)
 
         case .paneCwd:
             // OSC 7 from remote panes; local panes are polled in-process.
@@ -453,7 +461,8 @@ final class Server {
                     memberOf: memberOf.map { Set([$0]) } ?? [],
                     panes: rects, groups: metas,
                     allowOverlap: req.allowOverlap, floating: floating)
-                var rect = Overlap.resolve(pane.meta.rect, obstacles: obstacles, gap: req.gap)
+                var rect = Overlap.resolve(pane.meta.rect, obstacles: obstacles,
+                                          gap: gapLocked(req.gap))
                 if let memberOf,
                    GroupLayout.grownClash(moving: req.id, memberOf: memberOf,
                                           candidate: rect,
@@ -578,21 +587,10 @@ final class Server {
                                  members: [PaneID]) -> GroupMeta {
         let live = Set(panes.keys)
         let wanted = members.filter { live.contains($0) }
-        let rects = paneRectsLocked()
-        // Admit in request order, keeping each only while the trial
-        // bounds stay clear of foreign groups and non-joining panes.
-        // `wanted` panes are joining, not foreign (same fix as
-        // updateGroup: padding overhangs of adjacent joiners must not
-        // refuse each other).
+        // Every live pane is admitted; blockers are shoved out of the new
+        // border below (grouping never fails for lack of room).
         let gid = GroupID()
-        let joining = Set(wanted)
-        var admitted = [PaneID]()
-        for id in wanted {
-            let clear = GroupLayout.admits(
-                id, into: gid, members: admitted, joining: joining,
-                groups: groups, panes: rects)
-            if clear { admitted.append(id) }
-        }
+        let admitted = wanted
         let fresh = Set(admitted)
         for (id, var other) in groups {
             let before = other.members.count
@@ -614,6 +612,17 @@ final class Server {
                             ?? GroupStyle.palette[groups.count % GroupStyle.palette.count],
                           members: admitted)
         groups[g.id] = g
+
+        // Donors already lost the joiners above, so their shrunken bounds
+        // are what gets shoved. Moves broadcast before groupCreated.
+        let moves = GroupLayout.makeRoom(
+            for: gid, panes: paneRectsLocked(), groups: groups,
+            floating: floatingLocked(), gap: layoutGap)
+        for (pid, r) in moves {
+            guard let pane = panes[pid] else { continue }
+            pane.meta.rect = r
+            broadcastLocked(tag: .paneMeta, json: pane.meta)
+        }
         return g
     }
 
@@ -661,7 +670,7 @@ final class Server {
             moving: req.id, panes: rects, groups: metas,
             floating: floatingLocked())
         let target = Rect(x: b.x + req.dx, y: b.y + req.dy, w: b.w, h: b.h)
-        let clean = Overlap.resolve(target, obstacles: obstacles, gap: req.gap)
+        let clean = Overlap.resolve(target, obstacles: obstacles, gap: gapLocked(req.gap))
         let dx = clean.x - b.x, dy = clean.y - b.y
         var updated = [PaneMeta]()
         for id in members {
@@ -699,7 +708,7 @@ final class Server {
                 obstacles.append(b)
             }
             rect = obstacles.isEmpty ? req.rect
-                : Overlap.resolve(req.rect, obstacles: obstacles, gap: req.gap)
+                : Overlap.resolve(req.rect, obstacles: obstacles, gap: gapLocked(req.gap))
         } else {
             let obstacles = GroupLayout.creationObstacles(
                 paneRects: rects,
@@ -707,7 +716,7 @@ final class Server {
                 allowOverlap: req.allowOverlap,
                 floating: floating)
             rect = obstacles.isEmpty ? req.rect
-                : Overlap.resolve(req.rect, obstacles: obstacles, gap: req.gap)
+                : Overlap.resolve(req.rect, obstacles: obstacles, gap: gapLocked(req.gap))
         }
         lock.unlock()
         let cwd = req.cwd ?? NSHomeDirectory()
@@ -755,7 +764,7 @@ final class Server {
                         // the grown block is exclusive, allowOverlap
                         // must not exempt loose panes from the push.
                         allowOverlap: false,
-                        floating: floatingLocked(), gap: req.gap)
+                        floating: floatingLocked(), gap: gapLocked(req.gap))
                     let grouped = Set(groups.values.flatMap(\.members))
                     for (pid, r) in moves where !grouped.contains(pid) {
                         withNew[pid] = r
@@ -805,6 +814,11 @@ final class Server {
         case "below": return (.vertical, -1)
         default: return nil
         }
+    }
+
+    // Requested gap, floored by the canvas policy: CLI requests carry 0.
+    private func gapLocked(_ asked: Double) -> Double {
+        max(asked, layoutGap)
     }
 
     // Shared grown-bounds admission: grown must clear foreign group

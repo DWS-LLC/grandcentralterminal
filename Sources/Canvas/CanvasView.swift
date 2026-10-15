@@ -578,6 +578,9 @@ final class CanvasView: NSView {
         ghosttyApp?.reloadConfig()
         applyTheme()
         syncStatusBarToConfig()
+        for owner in hub.owners() {
+            hub.setLayoutPolicy(LayoutPolicy(gap: currentGap()), owner: owner)
+        }
         // Gap raised (or overlap flipped off): existing panes keep
         // their flush frames until something moves. Spread them to
         // the new padding once, same as the load-time untangle.

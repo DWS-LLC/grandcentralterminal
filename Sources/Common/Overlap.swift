@@ -435,6 +435,69 @@ public enum GroupLayout {
         return nil
     }
 
+    // Grouping never refuses for lack of space: push every loose pane and
+    // foreign group (rigid) out of `gid`'s border, each toward its nearest
+    // exit. One pass per direction, so a blocker left of the group never
+    // gets dragged across it by a rightward shove:
+    //
+    //   [A][B][C]   group A,B        [ A  B ]  [C]
+    //                         ->     (C shoved out of the padding)
+    //
+    // Returns new rects for the panes that moved (only those).
+    public static func makeRoom(for gid: GroupID,
+                                panes: [PaneID: Rect],
+                                groups: [GroupID: GroupMeta],
+                                floating: Set<PaneID> = [],
+                                gap: Double = 0) -> [PaneID: Rect] {
+        guard let grown = bounds(groups: groups, panes: panes)[gid],
+              let anchor = groups[gid]?.members.first else { return [:] }
+
+        let exits: [(Overlap.Axis, Int)] = [
+            (.horizontal, 1), (.horizontal, -1), (.vertical, 1), (.vertical, -1),
+        ]
+        var rects = panes
+        var out = [PaneID: Rect]()
+        for (i, (axis, sign)) in exits.enumerated() {
+            let units = shoveUnits(moving: anchor, memberOf: [gid], panes: rects,
+                                   groups: groups, floating: floating)
+
+            // Blockers exiting this way, plus everything already outside
+            // (cascade targets). Other blockers wait for their own pass.
+            let movers = units.filter {
+                Overlap.overlaps($0.rect, grown)
+                    && nearestExit($0.rect, from: grown) == i
+            }
+            guard !movers.isEmpty else { continue }
+
+            let pass = movers + units.filter { !Overlap.overlaps($0.rect, grown) }
+            let pushed = Overlap.pushForResize(grown, obstacles: pass.map(\.rect),
+                                               axis: axis, sign: sign, gap: gap)
+            for (unit, frame) in zip(pass, pushed) {
+                let dx = frame.x - unit.rect.x, dy = frame.y - unit.rect.y
+                guard dx != 0 || dy != 0 else { continue }
+                for pid in unit.panes {
+                    guard let r = rects[pid] else { continue }
+                    let moved = Rect(x: r.x + dx, y: r.y + dy, w: r.w, h: r.h)
+                    rects[pid] = moved
+                    out[pid] = moved
+                }
+            }
+        }
+        return out
+    }
+
+    // Index into makeRoom's exits (+x, -x, +y, -y) of the shortest shove
+    // that takes `r` clear of `b`. Ties keep the earlier exit.
+    private static func nearestExit(_ r: Rect, from b: Rect) -> Int {
+        let shoves = [
+            b.x + b.w - r.x,  // +x
+            r.x + r.w - b.x,  // -x
+            b.y + b.h - r.y,  // +y
+            r.y + r.h - b.y,  // -y
+        ]
+        return shoves.indices.min { shoves[$0] < shoves[$1] } ?? 0
+    }
+
     // Obstacles for moving/resizing `moving` (a member of `memberOf`).
     // Foreign groups appear ONCE, as their bounds (which already cover
     // their members' frames + padding). Listing member frames alongside

@@ -6,9 +6,11 @@
 
 import Foundation
 
-public let ProtoVersion: UInt16 = 2
+public let ProtoVersion: UInt16 = 3
 // First protocol revision whose daemon understands MsgTag.arrangePanes.
 public let ArrangeProtoVersion: UInt16 = 2
+// First protocol revision whose daemon understands MsgTag.layoutPolicy.
+public let LayoutProtoVersion: UInt16 = 3
 
 public enum MsgTag: UInt8 {
     // client -> daemon
@@ -33,6 +35,7 @@ public enum MsgTag: UInt8 {
     case focusPane   = 19 // JSON PaneRef (agent asks canvas to focus)
     case canvasCommand = 20 // JSON CanvasCommand (scripted camera/action)
     case arrangePanes = 21 // JSON ArrangePanes (exact batch placement)
+    case layoutPolicy = 22 // JSON LayoutPolicy (canvas config for headless clients)
 
     // daemon -> client
     case welcome     = 64 // JSON Welcome
@@ -464,4 +467,15 @@ public struct CanvasCommand: Codable, Sendable {
         self.verb = verb; self.pane = pane; self.action = action
         self.x = x; self.y = y; self.zoom = zoom; self.duration = duration
     }
+}
+
+// MARK: - Layout policy
+//
+// The canvas owns window-gap (config.toml); the CLI never reads it. The
+// canvas pushes it on connect and reload, and the daemon applies it as
+// the floor for every placement, so `gctd open` keeps the same air.
+
+public struct LayoutPolicy: Codable, Sendable {
+    public var gap: Double
+    public init(gap: Double) { self.gap = gap }
 }

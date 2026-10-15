@@ -138,6 +138,12 @@ final class CanvasConn: @unchecked Sendable {
         }
         conn.send(tag: .arrangePanes, json: req)
     }
+    // Old daemons drop the connection on an unknown tag; they just keep
+    // placing CLI panes flush.
+    func setLayoutPolicy(_ p: LayoutPolicy) {
+        guard peerVersion >= LayoutProtoVersion else { return }
+        conn.send(tag: .layoutPolicy, json: p)
+    }
     func paneCwd(_ req: PaneCwd) { conn.send(tag: .paneCwd, json: req) }
     func setFloating(_ req: SetFloating) { conn.send(tag: .setFloating, json: req) }
     func sendInput(_ id: PaneID, _ data: Data) {

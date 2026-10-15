@@ -199,6 +199,10 @@ final class HostHub {
         }
     }
 
+    func setLayoutPolicy(_ p: LayoutPolicy, owner: String) {
+        conns[owner]?.setLayoutPolicy(p)
+    }
+
     func paneCwd(_ req: PaneCwd) {
         guard let (c, remote) = remotePane(req.id) else { return }
         c.paneCwd(PaneCwd(id: remote, cwd: req.cwd))
