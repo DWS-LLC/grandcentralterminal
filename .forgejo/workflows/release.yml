@@ -9,7 +9,8 @@
 # Required repo secrets (/{owner}/{repo}/settings/actions/secrets):
 #   APPLE_CERT_P12_B64  base64 of the Developer ID Application .p12
 #   APPLE_CERT_PASSWORD password for the .p12 (empty string when none)
-#   RELEASE_TOKEN token with contents:write on the GitHub mirror
+#   RELEASE_TOKEN token with contents:write on the GitHub mirror and the
+#                 DWS-LLC/homebrew-tap repo
 #
 # Runner labels: `macos-arm64` (challenger-macos-arm64) and `linux`.
 # Rename to match your runner labels if they differ.
@@ -52,6 +53,14 @@ jobs:
         env:
           GITHUB_REPO: DWS-LLC/grandcentralterminal
           GITHUB_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+      - name: Bump Homebrew tap
+        run: |
+          TAG="${{ forgejo.ref_name }}"
+          VER="${TAG#v}"
+          ./scripts/bump-tap.sh "$TAG" \
+            "build/GrandCentralTerminal-${VER}-macos-arm64.zip"
+        env:
+          TAP_TOKEN: ${{ secrets.RELEASE_TOKEN }}
 
   linux:
     runs-on: linux

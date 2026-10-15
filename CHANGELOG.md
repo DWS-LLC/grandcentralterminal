@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+### Added
+- Auto-update from GitHub releases: checks daily and via "Check for Updates…", verifies the Developer ID signature, then replaces the app and restarts the daemon with it (running panes end).
+
 ## v0.4.0
 
 ### Added

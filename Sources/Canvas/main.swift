@@ -17,12 +17,16 @@ final class CanvasWindow: NSPanel {
 final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc func showAbout(_ sender: Any?) { GCTAbout.show() }
     @objc func installCLI(_ sender: Any?) { DaemonInstall.report(DaemonInstall.installCLI()) }
+    @objc func checkUpdates(_ sender: Any?) { GCTUpdater.check(.manual) }
 
     var window: NSWindow!
     var canvas: CanvasView!
     var doom: DoomController?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // Crash-loop guard first: a bad update rolls back before anything else runs.
+        GCTUpdater.guardLaunch()
+
         // Visible frame, not full frame: the borderless window sits below
         // the OS menubar (and above the Dock) instead of under them.
         // Tracks autohide automatically — when the menubar hides, the
@@ -66,6 +70,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         CanvasView.ensureDaemon()
         view.setup()
         DispatchQueue.main.async { DaemonInstall.offerOnce() }
+        GCTUpdater.checkOnLaunch()
 
         // Theme last: the "ghostty" canvas background needs ghostty's
         // resolved config. Applied before the window is shown.
@@ -172,6 +177,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // Cmd+Q quits the canvas UI normally; panes keep running in gctd
     // (relaunch reattaches). The Dock menu's Quit Daemon kills gctd.
+    func applicationWillTerminate(_ notification: Notification) {
+        GCTUpdater.installPendingOnQuit()
+    }
+
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         false  // closing the canvas detaches; panes keep running
     }
@@ -213,13 +222,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 // Ask gctd to shut down (kills every pane), then quit the canvas.
 // Best-effort socket write; the daemon reaps panes and exits itself.
 func killDaemonAndQuit() {
+    killDaemon()
+    NSApp.terminate(nil)
+}
+
+func killDaemon() {
     let fd = connectUnixSocket(CanvasPaths.sockPath)
     if fd >= 0 {
         let conn = Conn(fd: fd)
         _ = conn.send(tag: .killDaemon, json: Hello(version: ProtoVersion))
         conn.close()
     }
-    NSApp.terminate(nil)
 }
 
 // Minimal app menu: Cmd+Q only (terminal key handling is our own).
@@ -233,6 +246,10 @@ let appMenu = NSMenu()
 appMenu.addItem(NSMenuItem(
     title: "About Grand Central Terminal",
     action: #selector(AppDelegate.showAbout(_:)),
+    keyEquivalent: ""))
+appMenu.addItem(NSMenuItem(
+    title: "Check for Updates…",
+    action: #selector(AppDelegate.checkUpdates(_:)),
     keyEquivalent: ""))
 appMenu.addItem(NSMenuItem(
     title: "Install gctd Command…",
