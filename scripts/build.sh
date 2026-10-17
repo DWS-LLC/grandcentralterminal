@@ -8,7 +8,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-ZIG="${ZIG:-/tmp/zig0160/zig}"
+ZIG="${ZIG:-$HOME/bin/zig}"
 LIBGHOSTTY_A="vendor/ghostty/macos/build/ReleaseLocal/libghostty-internal.a"
 SUPPORT="$HOME/Library/Application Support/Grand Central Terminal"
 

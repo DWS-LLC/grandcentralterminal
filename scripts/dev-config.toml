@@ -1,0 +1,18 @@
+# Dev canvas config (scripts/dev.sh). Loud on purpose: never mistake the
+# working-tree build for the live install. Unset keys take defaults.
+
+[background]
+# Transparent red.
+dark = "#ff000040"
+light = "#ff000040"
+
+[titlebar]
+# Borders share the titlebar color: ugly blue.
+background = "#0000ff"
+text = "#ffffff"
+
+[doom]
+# The live canvas owns ctrl+space (a system-wide hotkey).
+toggle = "ctrl+alt+space"
+start-hidden = false
+launch-at-login = false
