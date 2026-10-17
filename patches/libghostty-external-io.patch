@@ -1,5 +1,5 @@
 diff --git a/include/ghostty.h b/include/ghostty.h
-index eec6550..02b0f4f 100644
+index eec6550..23aa8a4 100644
 --- a/include/ghostty.h
 +++ b/include/ghostty.h
 @@ -505,6 +505,18 @@ typedef enum {
@@ -31,7 +31,15 @@ index eec6550..02b0f4f 100644
  } ghostty_surface_config_s;
  
  typedef struct {
-@@ -1202,6 +1217,7 @@ GHOSTTY_API bool ghostty_surface_key_is_binding(ghostty_surface_t,
+@@ -1189,6 +1204,7 @@ GHOSTTY_API void ghostty_surface_draw(ghostty_surface_t);
+ GHOSTTY_API void ghostty_surface_set_content_scale(ghostty_surface_t, double, double);
+ GHOSTTY_API void ghostty_surface_set_focus(ghostty_surface_t, bool);
+ GHOSTTY_API void ghostty_surface_set_occlusion(ghostty_surface_t, bool);
++GHOSTTY_API void ghostty_surface_hold_resize(ghostty_surface_t, bool);
+ GHOSTTY_API void ghostty_surface_set_size(ghostty_surface_t, uint32_t, uint32_t);
+ GHOSTTY_API ghostty_surface_size_s ghostty_surface_size(ghostty_surface_t);
+ GHOSTTY_API uint64_t ghostty_surface_foreground_pid(ghostty_surface_t);
+@@ -1202,6 +1218,7 @@ GHOSTTY_API bool ghostty_surface_key_is_binding(ghostty_surface_t,
                                                     ghostty_input_key_s,
                                                     ghostty_binding_flags_e*);
  GHOSTTY_API void ghostty_surface_text(ghostty_surface_t, const char*, uintptr_t);
@@ -40,10 +48,20 @@ index eec6550..02b0f4f 100644
  GHOSTTY_API bool ghostty_surface_mouse_captured(ghostty_surface_t);
  GHOSTTY_API bool ghostty_surface_mouse_button(ghostty_surface_t,
 diff --git a/src/Surface.zig b/src/Surface.zig
-index 22e4ae4..d73544e 100644
+index 22e4ae4..0eb7c67 100644
 --- a/src/Surface.zig
 +++ b/src/Surface.zig
-@@ -644,37 +644,55 @@ pub fn init(
+@@ -141,6 +141,9 @@ inspector: ?*inspectorpkg.Inspector = null,
+ /// All our sizing information.
+ size: rendererpkg.Size,
+ 
++/// While true, size changes stay off the IO thread (see holdIoResize).
++io_resize_held: bool = false,
++
+ /// The configuration derived from the main config. We "derive" it so that
+ /// we don't have a shared pointer hanging around that we need to worry about
+ /// the lifetime of. This makes updating config at runtime easier.
+@@ -644,37 +647,55 @@ pub fn init(
      // This separate block ({}) is important because our errdefers must
      // be scoped here to be valid.
      {
@@ -127,7 +145,7 @@ index 22e4ae4..d73544e 100644
  
          // Initialize our IO mailbox
          var io_mailbox = try termio.Mailbox.initSPSC(alloc);
-@@ -684,7 +702,7 @@ pub fn init(
+@@ -684,7 +705,7 @@ pub fn init(
              .size = size,
              .full_config = config,
              .config = try termio.Termio.DerivedConfig.init(alloc, config),
@@ -136,7 +154,7 @@ index 22e4ae4..d73544e 100644
              .mailbox = io_mailbox,
              .renderer_state = &self.renderer_state,
              .renderer_wakeup = render_thread.wakeup,
-@@ -1353,6 +1371,7 @@ fn childExitedAbnormally(
+@@ -1353,6 +1374,7 @@ fn childExitedAbnormally(
      // Build up our command for the error message
      const command = try std.mem.join(alloc, " ", switch (self.io.backend) {
          .exec => |*exec| exec.subprocess.args,
@@ -144,8 +162,51 @@ index 22e4ae4..d73544e 100644
      });
      const runtime_str = try std.fmt.allocPrint(alloc, "{d} ms", .{info.runtime_ms});
  
+@@ -2474,7 +2496,7 @@ fn setCellSize(self: *Surface, size: rendererpkg.CellSize) !void {
+     self.balancePaddingIfNeeded();
+ 
+     // Notify the terminal
+-    self.queueIo(.{ .resize = self.size }, .unlocked);
++    self.queueIoResize();
+ 
+     // Update our terminal default size if necessary.
+     self.recomputeInitialSize() catch |err| {
+@@ -2596,7 +2618,7 @@ fn resize(self: *Surface, size: rendererpkg.ScreenSize) !void {
+     }
+ 
+     // Mail the IO thread
+-    self.queueIo(.{ .resize = self.size }, .unlocked);
++    self.queueIoResize();
+ 
+     // Mail the render thread so it updates its padding and screen size.
+     _ = self.renderer_thread.mailbox.push(
+@@ -2609,6 +2631,24 @@ fn resize(self: *Surface, size: rendererpkg.ScreenSize) !void {
+     };
+ }
+ 
++/// Send the current size to the IO thread unless held.
++fn queueIoResize(self: *Surface) void {
++    if (self.io_resize_held) return;
++    self.queueIo(.{ .resize = self.size }, .unlocked);
++}
++
++/// Batch size changes: while held, scale/size changes reach the renderer
++/// but not the terminal; release sends the final size once. Embedders
++/// probing scales (vector zoom) would otherwise reflow the terminal
++/// through every transient grid, since the IO thread's resize coalesce
++/// window (25ms) can close mid-probe. Reflow is lossy, so the screen
++/// drifts from what the program believes it drew.
++pub fn holdIoResize(self: *Surface, hold: bool) void {
++    if (self.io_resize_held == hold) return;
++    self.io_resize_held = hold;
++    if (!hold) self.queueIoResize();
++}
++
+ /// Recalculate the balanced padding if needed.
+ fn balancePaddingIfNeeded(self: *Surface) void {
+     if (self.config.window_padding_balance == .false) return;
 diff --git a/src/apprt/embedded.zig b/src/apprt/embedded.zig
-index b90366a..2d566de 100644
+index b90366a..0bc08f3 100644
 --- a/src/apprt/embedded.zig
 +++ b/src/apprt/embedded.zig
 @@ -16,6 +16,7 @@ const input = @import("../input.zig");
@@ -277,7 +338,20 @@ index b90366a..2d566de 100644
      pub fn updateContentScale(self: *Surface, x: f64, y: f64) void {
          // We are an embedded API so the caller can send us all sorts of
          // garbage. We want to make sure that the float values are valid
-@@ -2075,6 +2165,32 @@ pub const CAPI = struct {
+@@ -2008,6 +2098,12 @@ pub const CAPI = struct {
+         surface.occlusionCallback(visible);
+     }
+ 
++    /// Hold (true) or release (false) terminal resizes. See
++    /// Surface.holdIoResize.
++    export fn ghostty_surface_hold_resize(surface: *Surface, hold: bool) void {
++        surface.core_surface.holdIoResize(hold);
++    }
++
+     /// Filter the mods if necessary. This handles settings such as
+     /// `macos-option-as-alt`. The filtered mods should be used for
+     /// key translation but should NOT be sent back via the `_key`
+@@ -2075,6 +2171,32 @@ pub const CAPI = struct {
          surface.textCallback(ptr[0..len]);
      }
  

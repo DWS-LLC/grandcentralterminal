@@ -145,7 +145,15 @@ final class SurfaceHost: @unchecked Sendable {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         hostView?.layer?.contentsGravity = .resize
+
+        // Probes never reach the terminal: each apply() passes through
+        // transient grids (new scale at old pixels = cols / zoom), and a
+        // reflow there is lossy. The program never gets a SIGWINCH to
+        // repaint, so its cursor math drifts (doubled lines, cursor a row
+        // low). Release sends only the final size.
+        ghostty_surface_hold_resize(s, true)
         defer {
+            ghostty_surface_hold_resize(s, false)
             CATransaction.commit()
             ghostty_surface_set_occlusion(s, visible)
             restoreGravityLater()
