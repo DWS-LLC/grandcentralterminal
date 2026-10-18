@@ -76,7 +76,9 @@ final class ProgramStatusStore {
         var st = panes[pane] ?? PaneState()
         var buf = Data(data)  // zero-based: carry slices below index from 0
         if !st.carry.isEmpty {
-            buf = st.carry + data
+            // Rebase: carry is a slice of the last buffer and `+` keeps its
+            // startIndex, so a second carry slice below would trap.
+            buf = Data(st.carry + data)
             st.carry.removeAll(keepingCapacity: false)
         }
         let before = st.last
