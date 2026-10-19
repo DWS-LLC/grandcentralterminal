@@ -396,9 +396,10 @@ struct GCTConfig {
     var backgroundDark: String?
     var backgroundLight: String?
     // ShaderToy GLSL drawn as the canvas (absolute path, nil = plain color),
-    // and its frame rate cap.
+    // its frame rate cap, and render resolution as a fraction of native.
     var backgroundShader: String?
     var backgroundShaderFPS = 60
+    var backgroundShaderScale: CGFloat = 1
     var titlebarBackground: String?
     // Per-mode titlebar/border overrides; nil falls back to titlebarBackground.
     var titlebarBackgroundDark: String?
@@ -642,6 +643,9 @@ struct GCTConfig {
         if let v = bg["shader-fps"], let n = Int(v), (1...120).contains(n) {
             cfg.backgroundShaderFPS = n
         }
+        if let v = bg["shader-scale"], let n = Double(v), (0.1...1.0).contains(n) {
+            cfg.backgroundShaderScale = CGFloat(n)
+        }
 
         let tb = t["titlebar"] ?? [:]
         cfg.titlebarBackground = colorSpec(tb["background"])
@@ -877,6 +881,9 @@ struct GCTConfig {
     # reload-config recompiles an edited shader.
     # shader = "shaders/background.glsl"
     # shader-fps = 60  # 1-120
+    # Render resolution vs native (0.1-1). Raymarchers are GPU hogs:
+    # 0.5 costs a quarter and looks the same on soft shaders.
+    # shader-scale = 1
 
     [titlebar]
     # Pane titlebar colors. RGBA hex like "#2b2b2b" or "#2b2b2bcc", or

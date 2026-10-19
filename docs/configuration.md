@@ -103,12 +103,16 @@ light = "#ffffff"
 # config dir. The color's alpha scales the shader's.
 shader = "shaders/background.glsl"
 shader-fps = 60  # 1-120
+shader-scale = 1 # render resolution vs native, 0.1-1
 ```
 
 The shader is a ShaderToy `mainImage` with `iTime`, `iTimeDelta`,
-`iFrame`, `iFrameRate`, `iResolution`, `iMouse` (hover position, pixels),
-`iDate`, `iChannelTime`, `iChannelResolution`. `iChannel0..3` sample
-black. It's screen space: panes pan over it. Unlike ShaderToy, alpha is
+`iFrame`, `iFrameRate`, `iResolution`, `iMouse` (ShaderToy rules: tracks
+while the left button is down), `iDate`, `iChannelTime`, `iChannelResolution`. `iChannel0..3` are a
+256x256 RGBA noise texture laid out like ShaderToy's "RGBA Noise Medium"
+(R is G offset by (37, 239)), so noise shaders work as pasted. Raymarchers
+are expensive at Retina sizes: `shader-scale = 0.5` costs a quarter of the
+GPU, and `shader-fps = 30` halves that again. It's screen space: panes pan over it. Unlike ShaderToy, alpha is
 real, so write `1.0` unless you want the desktop through. `reload-config`
 recompiles an edited shader; a broken one logs to Console and the last good
 one keeps drawing.

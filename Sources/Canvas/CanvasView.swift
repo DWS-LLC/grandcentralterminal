@@ -233,6 +233,7 @@ final class CanvasView: NSView {
 
         view.opacity = Float(opacity)
         view.preferredFramesPerSecond = cfg.backgroundShaderFPS
+        view.renderScale = cfg.backgroundShaderScale
         return true
     }
 
