@@ -1,13 +1,22 @@
 # Changelog
 
-## Unreleased
+## v0.5.0
 
 ### Added
 - Auto-update from GitHub releases: checks daily and via "Check for Updates…", verifies the Developer ID signature, then replaces the app and restarts the daemon with it (running panes end).
+- `camera-fits-resize` (default true): the camera zooms to fit a pane after a mouse or keyboard resize.
+- `scripts/dev.sh`: run the working tree beside an installed GCT (own daemon, loud dev config).
 
 ### Fixed
+- Frontend crash when two output chunks in a row ended mid-escape sequence.
+- Doubled lines and a cursor one row low after zooming: vector-zoom re-renders no longer reflow the terminal.
+- Closing a pane now moves the camera to the newly focused one.
+- Pane and group titles stay sharp when zoomed in, and on mixed-DPI displays.
 - `gctd open`/`move` respect `window-gap` (the canvas pushes it to the daemon).
 - Grouping never refuses for lack of room: loose panes and foreign groups are shoved out of the new border.
+
+### Changed
+- Titlebar height scales with `font-size` under `[titlebar]`; group headers match.
 
 ## v0.4.0
 
