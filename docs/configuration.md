@@ -103,6 +103,10 @@ light = "#ffffff"
 # RGBA hex like "#2b2b2b" or "#2b2b2bcc", or "default" for the usual grey.
 # The left/right/bottom border uses the titlebar background.
 background = "default"
+background-dark = "default"   # per-mode overrides of `background`
+background-light = "default"
+# "ghostty": derive from your ghostty theme (window-titlebar-background,
+# else its background nudged toward the foreground). Text follows.
 text = "default"
 font = "default"        # family name, e.g. "SF Mono"
 font-size = 12

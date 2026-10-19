@@ -180,7 +180,7 @@ final class CanvasView: NSView {
         ghosttyApp?.setColorScheme(scheme)
         for pane in panes.values { pane.host?.setColorScheme(scheme) }
 
-        GCTTheme.refresh(ghosttyBackground: ghosttyApp?.background)
+        GCTTheme.refresh(ghostty: ghosttyApp?.colors ?? GhosttyColors())
         let bg = GCTTheme.current.canvasBackground
         window?.backgroundColor = bg
         // Alpha < 1 needs a non-opaque window or AppKit ignores it.
