@@ -26,13 +26,20 @@ enum ColorScheme {
     }
 }
 
+// Resolved colors from the finalized config (theme included), for the
+// canvas and titlebar "ghostty" passthroughs. Nil where unset.
+struct GhosttyColors {
+    var background: NSColor?
+    var foreground: NSColor?
+    var titlebarBackground: NSColor?
+    var titlebarForeground: NSColor?
+}
+
 final class GhosttyApp: @unchecked Sendable {
     private weak var delegate: (any GhosttyAppDelegate)?
     private(set) var app: UnsafeMutableRawPointer?
     private var config: UnsafeMutableRawPointer?
-    // Resolved `background` from the finalized config (theme included), for
-    // the canvas background's "ghostty" passthrough. Nil if unset.
-    private(set) var background: NSColor?
+    private(set) var colors = GhosttyColors()
 
     init(delegate: any GhosttyAppDelegate) {
         self.delegate = delegate
@@ -41,7 +48,7 @@ final class GhosttyApp: @unchecked Sendable {
 
         let cfg = GhosttyApp.loadConfig()
         config = UnsafeMutableRawPointer(cfg)
-        background = GhosttyApp.background(of: cfg)
+        colors = GhosttyApp.colors(of: cfg)
 
         var runtime = ghostty_runtime_config_s()
         runtime.userdata = Unmanaged.passUnretained(self).toOpaque()
@@ -107,10 +114,18 @@ final class GhosttyApp: @unchecked Sendable {
         }
     }
 
-    private static func background(of cfg: ghostty_config_t?) -> NSColor? {
+    private static func colors(of cfg: ghostty_config_t?) -> GhosttyColors {
+        GhosttyColors(
+            background: color("background", of: cfg),
+            foreground: color("foreground", of: cfg),
+            titlebarBackground: color("window-titlebar-background", of: cfg),
+            titlebarForeground: color("window-titlebar-foreground", of: cfg))
+    }
+
+    // False from ghostty_config_get = unset optional key.
+    private static func color(_ key: String, of cfg: ghostty_config_t?) -> NSColor? {
         var color = ghostty_config_color_s()
-        let bgKey = "background"
-        guard ghostty_config_get(cfg, &color, bgKey, UInt(bgKey.utf8.count)) else {
+        guard ghostty_config_get(cfg, &color, key, UInt(key.utf8.count)) else {
             return nil
         }
         return NSColor(red: CGFloat(color.r) / 255, green: CGFloat(color.g) / 255,
@@ -213,7 +228,7 @@ final class GhosttyApp: @unchecked Sendable {
 
     // Light/dark switch: ghostty asks for a soft reload (re-apply our
     // config under the new scheme), then the app reload reports the
-    // resolved config, whose background feeds the canvas passthrough.
+    // resolved config, whose colors feed the canvas/titlebar passthroughs.
     // Hard reloads (ghostty's own keybind) stay unhandled.
     private func handleConfig(_ target: ghostty_target_s, _ action: ghostty_action_s) -> Bool {
         switch action.tag {
@@ -223,7 +238,7 @@ final class GhosttyApp: @unchecked Sendable {
             return true
         case GHOSTTY_ACTION_CONFIG_CHANGE:
             guard target.tag == GHOSTTY_TARGET_APP else { return true }
-            background = GhosttyApp.background(of: action.action.config_change.config)
+            colors = GhosttyApp.colors(of: action.action.config_change.config)
             return true
         default:
             return false

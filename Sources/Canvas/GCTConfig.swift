@@ -400,6 +400,9 @@ struct GCTConfig {
     var backgroundShader: String?
     var backgroundShaderFPS = 60
     var titlebarBackground: String?
+    // Per-mode titlebar/border overrides; nil falls back to titlebarBackground.
+    var titlebarBackgroundDark: String?
+    var titlebarBackgroundLight: String?
     var titlebarText: String?
     var titlebarFont: String?
     var titlebarFontSize: CGFloat = 12
@@ -642,6 +645,8 @@ struct GCTConfig {
 
         let tb = t["titlebar"] ?? [:]
         cfg.titlebarBackground = colorSpec(tb["background"])
+        cfg.titlebarBackgroundDark = colorSpec(tb["background-dark"])
+        cfg.titlebarBackgroundLight = colorSpec(tb["background-light"])
         cfg.titlebarText = colorSpec(tb["text"])
         if let f = tb["font"], f.lowercased() != "default" {
             cfg.titlebarFont = f
@@ -878,6 +883,13 @@ struct GCTConfig {
     # "default" for the usual grey. The left/right/bottom border uses the
     # same color as the titlebar background.
     background = "default"
+    # Per-mode overrides of `background` (titlebar + border), e.g.
+    # background-dark = "#2b2b2b" / background-light = "#d8d8d8".
+    # "ghostty" (any of the three) derives it from your ghostty theme:
+    # window-titlebar-background if set, else the background nudged
+    # toward the foreground; text follows unless set here.
+    background-dark = "default"
+    background-light = "default"
     text = "default"
     # Title text font: family name (e.g. "SF Mono") and size in points.
     font = "default"
@@ -1078,25 +1090,33 @@ struct GCTTheme {
         }
     }
 
-    // Recompute from config + ghostty's resolved background into `current`.
-    static func refresh(ghosttyBackground: NSColor?) {
-        current = GCTTheme(dark: isDark(), ghosttyBackground: ghosttyBackground)
+    // Recompute from config + ghostty's resolved colors into `current`.
+    static func refresh(ghostty: GhosttyColors) {
+        current = GCTTheme(dark: isDark(), ghostty: ghostty)
     }
 
-    init(dark: Bool, ghosttyBackground: NSColor? = nil) {
+    init(dark: Bool, ghostty: GhosttyColors = GhosttyColors()) {
         let cfg = GCTConfig.current
 
         // Canvas background.
         let bgSpec = dark ? cfg.backgroundDark : cfg.backgroundLight
-        if let c = Self.color(bgSpec, ghostty: ghosttyBackground) {
+        if let c = Self.color(bgSpec, ghostty: ghostty.background) {
             canvasBackground = c
         } else {
             canvasBackground = dark ? .black : .white
         }
 
-        // Titlebar background: one explicit color for both states, or the
-        // usual greys (focused slightly more salient than unfocused).
-        if let c = Self.color(cfg.titlebarBackground, ghostty: nil) {
+        // Titlebar background: one explicit color for both states (this
+        // mode's override, else the shared one), or the usual greys
+        // (focused slightly more salient than unfocused).
+        let tbSpec = (dark ? cfg.titlebarBackgroundDark : cfg.titlebarBackgroundLight)
+            ?? cfg.titlebarBackground
+        let tbGhostty = tbSpec?.lowercased() == Self.ghosttySpec
+            ? Self.ghosttyTitlebar(ghostty) : nil
+        if let tbGhostty {
+            titlebarBackgroundFocused = tbGhostty.backgroundFocused
+            titlebarBackgroundUnfocused = tbGhostty.backgroundUnfocused
+        } else if let c = Self.color(tbSpec, ghostty: nil) {
             titlebarBackgroundFocused = c
             titlebarBackgroundUnfocused = c
         } else if dark {
@@ -1107,10 +1127,14 @@ struct GCTTheme {
             titlebarBackgroundUnfocused = NSColor(white: 0.86, alpha: 1)
         }
 
-        // Titlebar text: explicit color, else contrast with the background.
+        // Titlebar text: explicit color, else the theme's (with a "ghostty"
+        // titlebar), else contrast with the background.
         if let c = Self.color(cfg.titlebarText, ghostty: nil) {
             titlebarTextFocused = c
             titlebarTextUnfocused = c
+        } else if let tbGhostty {
+            titlebarTextFocused = tbGhostty.textFocused
+            titlebarTextUnfocused = tbGhostty.textUnfocused
         } else if titlebarBackgroundFocused.gctLuminance > 0.55 {
             titlebarTextFocused = NSColor(white: 0.12, alpha: 1)
             titlebarTextUnfocused = NSColor(white: 0.38, alpha: 1)
@@ -1159,7 +1183,44 @@ struct GCTTheme {
 
     private static func color(_ spec: String?, ghostty: NSColor?) -> NSColor? {
         guard let spec else { return nil }
-        if spec.lowercased() == "ghostty" { return ghostty }
+        if spec.lowercased() == ghosttySpec { return ghostty }
         return NSColor(gctHex: spec)
+    }
+
+    private static let ghosttySpec = "ghostty"
+    // "ghostty" titlebar mixes: background toward foreground (focused a
+    // touch more salient), unfocused text faded toward the titlebar.
+    private static let focusedMix: CGFloat = 0.12
+    private static let unfocusedMix: CGFloat = 0.07
+    private static let unfocusedTextFade: CGFloat = 0.35
+
+    private struct TitlebarColors {
+        let backgroundFocused: NSColor
+        let backgroundUnfocused: NSColor
+        let textFocused: NSColor
+        let textUnfocused: NSColor
+    }
+
+    // The theme's window-titlebar-* keys win; else its background blended
+    // toward its foreground: lighter on dark themes, darker on light ones,
+    // tint kept. e.g. #121212 bg + #dedede fg -> #2a2a2a. Nil without a
+    // ghostty background (greys then).
+    private static func ghosttyTitlebar(_ g: GhosttyColors) -> TitlebarColors? {
+        guard let bg = g.background else { return nil }
+        let fg = g.titlebarForeground ?? g.foreground ?? .white
+
+        let focused: NSColor
+        let unfocused: NSColor
+        if let tb = g.titlebarBackground {
+            focused = tb
+            unfocused = tb
+        } else {
+            focused = bg.blended(withFraction: focusedMix, of: fg) ?? bg
+            unfocused = bg.blended(withFraction: unfocusedMix, of: fg) ?? bg
+        }
+
+        let faded = fg.blended(withFraction: unfocusedTextFade, of: unfocused) ?? fg
+        return TitlebarColors(backgroundFocused: focused, backgroundUnfocused: unfocused,
+                              textFocused: fg, textUnfocused: faded)
     }
 }
