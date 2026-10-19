@@ -395,6 +395,10 @@ struct GCTConfig {
     // Color specs: nil = mode default, "ghostty" = ghostty's background, else hex.
     var backgroundDark: String?
     var backgroundLight: String?
+    // ShaderToy GLSL drawn as the canvas (absolute path, nil = plain color),
+    // and its frame rate cap.
+    var backgroundShader: String?
+    var backgroundShaderFPS = 60
     var titlebarBackground: String?
     var titlebarText: String?
     var titlebarFont: String?
@@ -631,6 +635,10 @@ struct GCTConfig {
         let bg = t["background"] ?? [:]
         cfg.backgroundDark = colorSpec(bg["dark"])
         cfg.backgroundLight = colorSpec(bg["light"])
+        cfg.backgroundShader = shaderPath(bg["shader"])
+        if let v = bg["shader-fps"], let n = Int(v), (1...120).contains(n) {
+            cfg.backgroundShaderFPS = n
+        }
 
         let tb = t["titlebar"] ?? [:]
         cfg.titlebarBackground = colorSpec(tb["background"])
@@ -721,6 +729,14 @@ struct GCTConfig {
     private static func colorSpec(_ raw: String?) -> String? {
         guard let raw, !raw.isEmpty, raw.lowercased() != "default" else { return nil }
         return raw
+    }
+
+    // "~/x.glsl" or a path relative to the config dir; "none"/empty = off.
+    private static func shaderPath(_ raw: String?) -> String? {
+        guard let raw, !raw.isEmpty, raw.lowercased() != "none" else { return nil }
+        let expanded = (raw as NSString).expandingTildeInPath
+        if expanded.hasPrefix("/") { return expanded }
+        return (dir as NSString).appendingPathComponent(expanded)
     }
 
     static var defaultKeybinds: [GCTAction: GCTKeybind] {
@@ -849,6 +865,13 @@ struct GCTConfig {
     # the background color from your ghostty config.
     dark = "#000000"
     light = "#ffffff"
+    # ShaderToy GLSL (a mainImage using iTime, iResolution, iMouse, ...)
+    # drawn as the canvas instead of the color. Path, ~ or relative to
+    # this dir. The color's alpha scales the shader's: "#00000080" = half
+    # see-through. Unlike shadertoy, the shader's alpha counts: write 1.0.
+    # reload-config recompiles an edited shader.
+    # shader = "shaders/background.glsl"
+    # shader-fps = 60  # 1-120
 
     [titlebar]
     # Pane titlebar colors. RGBA hex like "#2b2b2b" or "#2b2b2bcc", or

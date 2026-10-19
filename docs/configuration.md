@@ -86,7 +86,12 @@ zoom-min = 0.03   # 0.005-1
 zoom-max = 4      # 1-8
 # Camera glide in seconds (focus moves, fit-all, switcher), 0.05-10.
 camera-animation-duration = 0.28
+```
 
+## `[background]`
+
+```toml
+[background]
 # Canvas background per mode. Hex like "#1a1b26", or with alpha like
 # "#1a1b2680". Alpha < 1 makes the canvas transparent, showing the desktop.
 # Transparent canvas is look-but-don't-touch: empty space stops receiving
@@ -94,7 +99,19 @@ camera-animation-duration = 0.28
 # "ghostty" reuses the background from your ghostty config.
 dark = "#000000"
 light = "#ffffff"
+# ShaderToy GLSL drawn as the canvas instead. Path, ~ or relative to the
+# config dir. The color's alpha scales the shader's.
+shader = "shaders/background.glsl"
+shader-fps = 60  # 1-120
 ```
+
+The shader is a ShaderToy `mainImage` with `iTime`, `iTimeDelta`,
+`iFrame`, `iFrameRate`, `iResolution`, `iMouse` (hover position, pixels),
+`iDate`, `iChannelTime`, `iChannelResolution`. `iChannel0..3` sample
+black. It's screen space: panes pan over it. Unlike ShaderToy, alpha is
+real, so write `1.0` unless you want the desktop through. `reload-config`
+recompiles an edited shader; a broken one logs to Console and the last good
+one keeps drawing.
 
 ## `[titlebar]`
 

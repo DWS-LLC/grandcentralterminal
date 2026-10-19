@@ -114,6 +114,8 @@ final class CanvasView: NSView {
     var firstRunHandled = false
     // Screen-space overlay status bar (nil when disabled in config).
     var statusBar: StatusBarView?
+    // [background] shader: screen-space Metal view under the world view.
+    private var backgroundShader: BackgroundShaderView?
 
     // IME composition state (NSTextInputClient below). markedText mirrors
     // the input context's preedit; keyTextAccumulator collects text the IME
@@ -182,9 +184,11 @@ final class CanvasView: NSView {
 
         GCTTheme.refresh(ghosttyBackground: ghosttyApp?.background)
         let bg = GCTTheme.current.canvasBackground
-        window?.backgroundColor = bg
+        // A live shader replaces the color; its alpha stays in play.
+        let shaded = syncBackgroundShader(opacity: bg.alphaComponent)
+        window?.backgroundColor = shaded ? .clear : bg
         // Alpha < 1 needs a non-opaque window or AppKit ignores it.
-        window?.isOpaque = bg.alphaComponent >= 1
+        window?.isOpaque = !shaded && bg.alphaComponent >= 1
         // Border width is theme state: applyChrome relayouts before
         // repainting, then the surface follows the inset terminal frame.
         for pane in panes.values { pane.applyChrome(); pane.syncSurfaceSize() }
@@ -195,6 +199,41 @@ final class CanvasView: NSView {
 
         statusBar?.applyTheme()
         layoutStatusBar()
+    }
+
+    // Bring the background shader in line with config. Compiles only when
+    // the file changed, so reload-config picks up edits. A broken shader
+    // logs and keeps the last good one, else falls back to the color.
+    // True when a shader is drawing.
+    private func syncBackgroundShader(opacity: CGFloat) -> Bool {
+        let cfg = GCTConfig.current
+        guard let path = cfg.backgroundShader else {
+            backgroundShader?.removeFromSuperview()
+            backgroundShader = nil
+            return false
+        }
+
+        if backgroundShader == nil, let view = BackgroundShaderView(rect: bounds) {
+            view.autoresizingMask = [.width, .height]
+            addSubview(view, positioned: .below, relativeTo: worldView)
+            backgroundShader = view
+        }
+        guard let view = backgroundShader else { return false }
+
+        do {
+            try view.load(path: path)
+        } catch {
+            NSLog("[gct] background shader \(path): \(error)")
+        }
+        guard view.isReady else {
+            view.removeFromSuperview()
+            backgroundShader = nil
+            return false
+        }
+
+        view.opacity = Float(opacity)
+        view.preferredFramesPerSecond = cfg.backgroundShaderFPS
+        return true
     }
 
     // appearance = "system": light/dark follows macOS, so re-resolve on change.
@@ -797,6 +836,7 @@ final class CanvasView: NSView {
         // a window nobody can see.
         let windowVisible = (window?.isVisible ?? false) && !(window?.isMiniaturized ?? false)
         let viewBounds = bounds
+        backgroundShader?.isPaused = !windowVisible
         for pane in panes.values {
             guard let host = pane.host else { continue }
             // World frame -> screen: camera transform, then view bounds.

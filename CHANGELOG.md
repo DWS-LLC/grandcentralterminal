@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+### Added
+- `shader` under `[background]`: a ShaderToy GLSL shader as the canvas, transparency included.
+
 ## v0.5.0
 
 ### Added

@@ -20,6 +20,12 @@ let package = Package(
             path: "Sources/ProcInfo"
         ),
 
+        // GLSL -> MSL over the glslang/SPIRV-Cross symbols in libghostty.
+        .target(
+            name: "ShaderXlate",
+            path: "Sources/ShaderXlate"
+        ),
+
         // setsid + ctty + exec helper: the daemon spawns this instead of the
         // shell so panes get a real controlling terminal (SIGWINCH, ^C...).
         .executableTarget(
@@ -45,6 +51,7 @@ let package = Package(
             dependencies: [
                 "Common", "CGhostty",
                 .byName(name: "ProcInfo"),
+                .byName(name: "ShaderXlate"),
             ],
             path: "Sources/Canvas",
             linkerSettings: [
