@@ -175,6 +175,11 @@ final class CanvasView: NSView {
 
     // Recompute the theme from config + ghostty and apply it everywhere.
     func applyTheme() {
+        // Scheme first: it re-resolves ghostty's background read below.
+        let scheme: ColorScheme = GCTTheme.isDark() ? .dark : .light
+        ghosttyApp?.setColorScheme(scheme)
+        for pane in panes.values { pane.host?.setColorScheme(scheme) }
+
         GCTTheme.refresh(ghosttyBackground: ghosttyApp?.background)
         let bg = GCTTheme.current.canvasBackground
         window?.backgroundColor = bg

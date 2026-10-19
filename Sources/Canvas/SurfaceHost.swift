@@ -227,6 +227,13 @@ final class SurfaceHost: @unchecked Sendable {
     // Renderer pause: ghostty stops the surface's DisplayLink while
     // occluded (zero presents, VT keeps flowing). Drive from canvas
     // visibility: off-screen panes, miniaturized/hidden window.
+    // Per-surface light/dark: ghostty re-resolves a conditional theme.
+    func setColorScheme(_ scheme: ColorScheme) {
+        assert(Thread.isMainThread)
+        guard let s = surfaceIfOpen() else { return }
+        ghostty_surface_set_color_scheme(s, scheme.ghostty)
+    }
+
     func setOcclusion(_ visible: Bool) {
         assert(Thread.isMainThread)
         self.visible = visible

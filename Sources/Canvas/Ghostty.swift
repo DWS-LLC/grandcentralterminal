@@ -17,6 +17,15 @@ protocol GhosttyAppDelegate: AnyObject {
     func surfaceBell(_ host: SurfaceHost)
 }
 
+// Which half of `theme = light:x,dark:y` ghostty resolves to.
+enum ColorScheme {
+    case light, dark
+
+    var ghostty: ghostty_color_scheme_e {
+        self == .dark ? GHOSTTY_COLOR_SCHEME_DARK : GHOSTTY_COLOR_SCHEME_LIGHT
+    }
+}
+
 final class GhosttyApp: @unchecked Sendable {
     private weak var delegate: (any GhosttyAppDelegate)?
     private(set) var app: UnsafeMutableRawPointer?
@@ -41,8 +50,8 @@ final class GhosttyApp: @unchecked Sendable {
             let me = Unmanaged<GhosttyApp>.fromOpaque(ud!).takeUnretainedValue()
             DispatchQueue.main.async { me.pump() }
         }
-        runtime.action_cb = { _, target, action in
-            GhosttyApp.handleAction(target, action)
+        runtime.action_cb = { app, target, action in
+            GhosttyApp.handleAction(app, target, action)
         }
         runtime.read_clipboard_cb = { _, _, _, _, _, _ in
             // OSC 52 remote reads: unsupported.
@@ -116,7 +125,13 @@ final class GhosttyApp: @unchecked Sendable {
         ghostty_app_update_config(app, cfg)
         if let config { ghostty_config_free(config) }
         config = UnsafeMutableRawPointer(cfg)
-        background = GhosttyApp.background(of: cfg)
+    }
+
+    // App-level scheme; new surfaces inherit it, live ones need
+    // SurfaceHost.setColorScheme. ghostty answers via handleConfig.
+    func setColorScheme(_ scheme: ColorScheme) {
+        guard let app else { return }
+        ghostty_app_set_color_scheme(app, scheme.ghostty)
     }
 
     deinit {
@@ -130,13 +145,14 @@ final class GhosttyApp: @unchecked Sendable {
     }
 
     // Default config file: canvas look. Loaded before the user's config so
-    // ~/.config/ghostty/config still wins on every key.
+    // ~/.config/ghostty/config still wins on every key. Colors ship as a
+    // theme: ghostty replays explicit keys over themes, so a bare
+    // `background` here would beat the user's `theme`.
     private static func baseConfigPath() -> String {
         let path = NSTemporaryDirectory() + "gct-ghostty-config"
         let cfg = """
         # Grand Central Terminal defaults
-        background = #000000
-        foreground = #c8c8c8
+        theme = \(baseThemePath())
         font-size = 13
         window-padding-x = 8
         window-padding-y = 6
@@ -149,12 +165,29 @@ final class GhosttyApp: @unchecked Sendable {
         return path
     }
 
+    private static func baseThemePath() -> String {
+        let path = NSTemporaryDirectory() + "gct-ghostty-theme"
+        let theme = """
+        background = #000000
+        foreground = #c8c8c8
+        """
+        try? Data(theme.utf8).write(to: URL(fileURLWithPath: path))
+        return path
+    }
+
     // MARK: Actions from the core
 
     private static func handleAction(
+        _ app: ghostty_app_t?,
         _ target: ghostty_target_s,
         _ action: ghostty_action_s
     ) -> Bool {
+        if let ud = ghostty_app_userdata(app),
+           Unmanaged<GhosttyApp>.fromOpaque(ud).takeUnretainedValue()
+               .handleConfig(target, action) {
+            return true
+        }
+
         guard target.tag == GHOSTTY_TARGET_SURFACE,
               let surface = target.target.surface,
               let host = SurfaceHost.from(surface) else { return false }
@@ -176,6 +209,36 @@ final class GhosttyApp: @unchecked Sendable {
         default:
             return false
         }
+    }
+
+    // Light/dark switch: ghostty asks for a soft reload (re-apply our
+    // config under the new scheme), then the app reload reports the
+    // resolved config, whose background feeds the canvas passthrough.
+    // Hard reloads (ghostty's own keybind) stay unhandled.
+    private func handleConfig(_ target: ghostty_target_s, _ action: ghostty_action_s) -> Bool {
+        switch action.tag {
+        case GHOSTTY_ACTION_RELOAD_CONFIG:
+            guard action.action.reload_config.soft else { return false }
+            reapplyConfig(target)
+            return true
+        case GHOSTTY_ACTION_CONFIG_CHANGE:
+            guard target.tag == GHOSTTY_TARGET_APP else { return true }
+            background = GhosttyApp.background(of: action.action.config_change.config)
+            return true
+        default:
+            return false
+        }
+    }
+
+    private func reapplyConfig(_ target: ghostty_target_s) {
+        guard let config else { return }
+        if target.tag == GHOSTTY_TARGET_SURFACE {
+            ghostty_surface_update_config(target.target.surface, config)
+            return
+        }
+
+        guard let app else { return }
+        ghostty_app_update_config(app, config)
     }
 
     private static func writeClipboard(
