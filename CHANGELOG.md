@@ -1,9 +1,19 @@
 # Changelog
 
-## Unreleased
+## v0.6.0
 
 ### Added
-- `shader` under `[background]`: a ShaderToy GLSL shader as the canvas, transparency included.
+- `shader` under `[background]`: a ShaderToy GLSL shader as the canvas, transparency included. ShaderToy uniforms incl. `iMouse`, noise in `iChannel0..3` so pasted shaders work as-is; `shader-fps` and `shader-scale` to keep raymarchers off your GPU's throat. `reload-config` recompiles; a broken shader keeps the last good one.
+- Ghostty themes load, light/dark variants included, and follow the system appearance.
+- `background-dark`/`background-light` under `[titlebar]`. `"ghostty"` derives titlebar and text colors from the theme.
+
+### Fixed
+- A ghostty `theme` no longer gets stomped by GCT's base colors.
+- New panes render at the camera's zoom instead of backing scale.
+- Zooming a pane while the camera is zoomed no longer reflows at camera scale (half the columns at 2x).
+
+### Docs
+- `[background]` gets its own section; it was documented under `[canvas]`.
 
 ## v0.5.0
 
