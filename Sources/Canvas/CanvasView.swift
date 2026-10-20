@@ -2934,6 +2934,8 @@ final class CanvasView: NSView {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
             self?.panes[meta.id]?.syncSurfaceSize()
             self?.refreshOcclusion()
+            // Born at backing scale: match the current camera.
+            self?.scheduleRenderZoom()
         }
     }
 
@@ -3311,6 +3313,9 @@ final class CanvasView: NSView {
         let barH = statusBar?.superview != nil ? statusBar?.barHeight ?? 0 : 0
         let originY = GCTConfig.current.statusbarPosition == .bottom ? barH : 0
         let r = NSRect(origin: CGPoint(x: 0, y: originY), size: viewportSize)
+        // Drop any vector-zoom scale first (grid held): the reflow below
+        // would otherwise run at camera-zoom scale, e.g. cols / 2 at 2x.
+        pane.syncRenderZoom(camera: 1)
         pane.setZoomFrame(r)
         pane.isZoomed = true
         bringToFront(id)
