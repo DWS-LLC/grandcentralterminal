@@ -3,8 +3,8 @@
 
 [background]
 # Transparent red.
-dark = "#ff000040"
-light = "#ff000040"
+dark = "#ff0000"
+light = "#ff0000"
 
 [titlebar]
 # Borders share the titlebar color: ugly blue.
