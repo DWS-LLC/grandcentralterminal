@@ -66,8 +66,9 @@ It's a central terminal for your terminals, and it's grand. The daemon is
 Grab a build from the
 [releases page](https://github.com/DWS-LLC/grandcentralterminal/releases).
 
-macOS (arm64): unzip `GrandCentralTerminal-<ver>-macos-arm64.zip`, drag the
-app to `/Applications`, open it. It's signed and notarized. Then run
+macOS (arm64): `brew install --cask dws-llc/tap/gct`, or unzip
+`GrandCentralTerminal-<ver>-macos-arm64.zip` and drag the app to
+`/Applications`. Open it. It's signed and notarized. Then run
 "Install gctd Command…" from the app menu to put `gctd` on your `PATH` and
 tell your agents about it.
 
@@ -76,7 +77,7 @@ daemon, static, runs on any distro. Put its panes on your Mac's canvas with
 [remote daemons](docs/remote.md).
 
 ```sh
-tar -xzf gctd-<ver>-linux-<arch>.tar.gz -C ~/.local/bin
+V=$(curl -fsSLI -o /dev/null -w '%{url_effective}' https://github.com/DWS-LLC/grandcentralterminal/releases/latest | sed 's|.*/v||'); mkdir -p ~/.local/bin && curl -fsSL "https://github.com/DWS-LLC/grandcentralterminal/releases/download/v$V/gctd-$V-linux-$(uname -m).tar.gz" | tar -xz -C ~/.local/bin
 gctd --port=7420 --token=<token>
 ```
 
