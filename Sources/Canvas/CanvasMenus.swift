@@ -68,16 +68,10 @@ enum GCTMenus {
                                 keyEquivalent: ""))
 
         let color = NSMenuItem(title: "Group Color", action: nil, keyEquivalent: "")
-        color.submenu = submenu("Group Color", GroupStyle.palette.map { hex in
-            let item = NSMenuItem(title: hex,
-                                  action: #selector(CanvasView.recolorCurrentGroupMenu(_:)),
-                                  keyEquivalent: "")
-            item.representedObject = hex
-            item.attributedTitle = NSAttributedString(
-                string: "  \(hex)",
-                attributes: [.foregroundColor: NSColor(gctHex: hex) ?? .labelColor])
-            return item
-        })
+        color.submenu = GroupColor.menu(
+            title: "Group Color", target: nil,
+            pick: #selector(CanvasView.recolorCurrentGroupMenu(_:)),
+            custom: #selector(CanvasView.customCurrentGroupColorMenu(_:)), scope: nil)
         menu.addItem(color)
 
         menu.addItem(.separator())
@@ -154,11 +148,15 @@ extension CanvasView: NSMenuItemValidation {
         setSelected(Set(members))
     }
 
+    @objc func customCurrentGroupColorMenu(_ sender: NSMenuItem) {
+        guard let g = currentGroup() else { return }
+        pickCustomGroupColor(g)
+    }
+
     @objc func recolorCurrentGroupMenu(_ sender: NSMenuItem) {
         guard let g = currentGroup(),
-              let hex = (sender.representedObject as? String).flatMap(GroupStyle.sanitizedColor)
-        else { return }
-        recolorGroup(g, hex: hex)
+              let spec = sender.representedObject as? String else { return }
+        recolorGroup(g, spec: GroupStyle.sanitizedColor(spec))
     }
 
     // MARK: Validation

@@ -33,6 +33,8 @@ struct GhosttyColors {
     var foreground: NSColor?
     var titlebarBackground: NSColor?
     var titlebarForeground: NSColor?
+    // ANSI 0-15 of the resolved palette; empty when unavailable.
+    var palette = [NSColor]()
 }
 
 final class GhosttyApp: @unchecked Sendable {
@@ -119,7 +121,26 @@ final class GhosttyApp: @unchecked Sendable {
             background: color("background", of: cfg),
             foreground: color("foreground", of: cfg),
             titlebarBackground: color("window-titlebar-background", of: cfg),
-            titlebarForeground: color("window-titlebar-foreground", of: cfg))
+            titlebarForeground: color("window-titlebar-foreground", of: cfg),
+            palette: palette(of: cfg))
+    }
+
+    private static let ansiCount = 16
+
+    // The 16 ANSI colors of the finalized palette (theme included).
+    private static func palette(of cfg: ghostty_config_t?) -> [NSColor] {
+        var p = ghostty_config_palette_s()
+        let key = "palette"
+        guard ghostty_config_get(cfg, &p, key, UInt(key.utf8.count)) else { return [] }
+        return withUnsafePointer(to: &p.colors) {
+            $0.withMemoryRebound(to: ghostty_config_color_s.self, capacity: 256) { base in
+                (0..<ansiCount).map { i in
+                    let c = base[i]
+                    return NSColor(red: CGFloat(c.r) / 255, green: CGFloat(c.g) / 255,
+                                   blue: CGFloat(c.b) / 255, alpha: 1)
+                }
+            }
+        }
     }
 
     // False from ghostty_config_get = unset optional key.

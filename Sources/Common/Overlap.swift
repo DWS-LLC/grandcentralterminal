@@ -776,10 +776,19 @@ public enum GroupStyle {
         "#3b82f6", "#22c55e", "#a855f7", "#f59e0b",
         "#ec4899", "#14b8af",
     ]
-    // "#rgb"/"#rrggbb"/"#rgba"/"#rrggbbaa", "#" optional.
+    // ghostty ANSI color N (0-15), stored as "palette:N" so it follows the
+    // user's theme.
+    public static let palettePrefix = "palette:"
+    public static let ansiCount = 16
+    // "#rgb"/"#rrggbb"/"#rgba"/"#rrggbbaa" ("#" optional) or "palette:N".
     public static func sanitizedColor(_ raw: String?) -> String? {
         guard var s = raw?.trimmingCharacters(in: .whitespacesAndNewlines),
               !s.isEmpty else { return nil }
+        if s.lowercased().hasPrefix(palettePrefix) {
+            guard let n = Int(s.dropFirst(palettePrefix.count)),
+                  (0..<ansiCount).contains(n) else { return nil }
+            return palettePrefix + String(n)
+        }
         if s.hasPrefix("#") { s = String(s.dropFirst()) }
         if s.count == 3 || s.count == 4 { s = s.map { "\($0)\($0)" }.joined() }
         guard s.count == 6 || s.count == 8,

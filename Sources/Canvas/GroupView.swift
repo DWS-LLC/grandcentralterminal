@@ -52,10 +52,8 @@ final class GroupView: NSView {
     required init?(coder: NSCoder) { fatalError() }
 
     // Nil bounds = no visible members: hide.
-    func update(bounds: NSRect?, name: String?, colorHex: String?) {
-        if let hex = colorHex, let c = NSColor(gctHex: hex) {
-            baseColor = c
-        }
+    func update(bounds: NSRect?, name: String?, colorSpec: String?) {
+        baseColor = GroupColor.resolve(colorSpec, key: name ?? id.uuid.uuidString)
         groupName = name
         guard let bounds, bounds.width > 0, bounds.height > 0 else {
             isHidden = true
@@ -118,5 +116,152 @@ final class GroupView: NSView {
 
     func containsWorld(_ worldPoint: CGPoint) -> Bool {
         !isHidden && frame.contains(worldPoint)
+    }
+}
+
+// Group colors: a hex, "palette:N" (ghostty ANSI N, follows the theme),
+// or nil = auto: hash of the name onto the 16 ANSI colors.
+enum GroupColor {
+    static let autoSpec = "auto"
+    static func resolve(_ spec: String?, key: String) -> NSColor {
+        guard let spec else { return ansi(Int(key.gctHash) % GroupStyle.ansiCount) }
+        if spec.hasPrefix(GroupStyle.palettePrefix) {
+            let n = Int(spec.dropFirst(GroupStyle.palettePrefix.count)) ?? 0
+            return ansi(n)
+        }
+        return NSColor(gctHex: spec) ?? ansi(Int(key.gctHash) % GroupStyle.ansiCount)
+    }
+
+    // Theme's ANSI color; the old hex palette when ghostty gave none.
+    private static func ansi(_ n: Int) -> NSColor {
+        let theme = GCTTheme.current.ansi
+        if theme.indices.contains(n) { return theme[n] }
+        let hex = GroupStyle.palette[n % GroupStyle.palette.count]
+        return NSColor(gctHex: hex) ?? .systemBlue
+    }
+
+    // Picker: "Auto", a 2x8 swatch grid (normal | bright ANSI), "Custom…".
+    // Picks send `pick` with "<scope>|<spec>" (just "<spec>" without a
+    // scope): "auto" or "palette:N". `custom` gets the scope.
+    static func menu(title: String, target: AnyObject?, pick: Selector,
+                     custom: Selector, scope: String?) -> NSMenu {
+        let prefix = scope.map { $0 + "|" } ?? ""
+        let menu = NSMenu(title: title)
+
+        let auto = NSMenuItem(title: "Auto (from name)", action: pick, keyEquivalent: "")
+        auto.target = target
+        auto.representedObject = prefix + autoSpec
+        menu.addItem(auto)
+
+        let grid = GroupColorGrid(colors: (0..<GroupStyle.ansiCount).map(ansi)) { [weak target] n in
+            let item = NSMenuItem()
+            item.representedObject = prefix + GroupStyle.palettePrefix + String(n)
+            NSApp.sendAction(pick, to: target, from: item)
+        }
+        let gridItem = NSMenuItem()
+        gridItem.view = grid
+        menu.addItem(gridItem)
+
+        menu.addItem(.separator())
+        let other = NSMenuItem(title: "Custom…", action: custom, keyEquivalent: "")
+        other.target = target
+        other.representedObject = scope
+        menu.addItem(other)
+        return menu
+    }
+}
+
+// Swatch grid for a menu item: column = n / rows, so ANSI 0-7 run down the
+// left and the brights 8-15 down the right.
+//
+//   [0] [8]
+//   [1] [9]
+//   ...
+//   [7] [15]
+final class GroupColorGrid: NSView {
+    private static let columns = 2
+    private static let rows = 8
+    private static let cell: CGFloat = 18
+    private static let gap: CGFloat = 6
+    private static let inset: CGFloat = 8
+    private static let radius: CGFloat = 3
+
+    private let colors: [NSColor]
+    private let onPick: (Int) -> Void
+    private var hovered: Int?
+
+    init(colors: [NSColor], onPick: @escaping (Int) -> Void) {
+        self.colors = colors
+        self.onPick = onPick
+        let w = Self.gridWidth + 2 * Self.inset
+        let h = Self.gridHeight + 2 * Self.inset
+        super.init(frame: NSRect(x: 0, y: 0, width: w, height: h))
+        // The menu stretches the item to its width; the grid centers itself.
+        autoresizingMask = [.width]
+        addTrackingArea(NSTrackingArea(
+            rect: .zero, options: [.activeAlways, .mouseMoved, .mouseEnteredAndExited,
+                                   .inVisibleRect], owner: self))
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    override var isFlipped: Bool { true }
+
+    private static var gridWidth: CGFloat {
+        CGFloat(columns) * cell + CGFloat(columns - 1) * gap
+    }
+    private static var gridHeight: CGFloat {
+        CGFloat(rows) * cell + CGFloat(rows - 1) * gap
+    }
+
+    private func rect(_ n: Int) -> NSRect {
+        let col = n / Self.rows
+        let row = n % Self.rows
+        let x0 = (bounds.width - Self.gridWidth) / 2
+        return NSRect(x: x0 + CGFloat(col) * (Self.cell + Self.gap),
+                      y: Self.inset + CGFloat(row) * (Self.cell + Self.gap),
+                      width: Self.cell, height: Self.cell)
+    }
+
+    private func index(at p: NSPoint) -> Int? {
+        colors.indices.first { rect($0).contains(p) }
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        for (n, color) in colors.enumerated() {
+            let path = NSBezierPath(roundedRect: rect(n), xRadius: Self.radius,
+                                    yRadius: Self.radius)
+            color.setFill()
+            path.fill()
+            // Hairline keeps black/white swatches visible on any menu tint.
+            NSColor.separatorColor.setStroke()
+            path.lineWidth = 1
+            path.stroke()
+            guard n == hovered else { continue }
+            NSColor.labelColor.setStroke()
+            path.lineWidth = 2
+            path.stroke()
+        }
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        let n = index(at: convert(event.locationInWindow, from: nil))
+        guard n != hovered else { return }
+        hovered = n
+        needsDisplay = true
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        hovered = nil
+        needsDisplay = true
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        guard let n = index(at: convert(event.locationInWindow, from: nil)) else { return }
+        onPick(n)
+        // Close the whole menu tree, not just the submenu.
+        var root = enclosingMenuItem?.menu
+        while let up = root?.supermenu { root = up }
+        root?.cancelTracking()
     }
 }

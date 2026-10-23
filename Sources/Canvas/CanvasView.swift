@@ -17,6 +17,7 @@ final class CanvasView: NSView {
     private var zoomSavedFrame: NSRect?
     private var zoomSavedCam: Camera?
     var zoomSavedPane: PaneID?
+    private var colorPanelGroup: GroupID?
     // True while a pane zoom is live: fit math targets the viewport (not
     // the raw window) and empty-space pan/zoom gestures hold still.
     private var isPaneZoomed: Bool { zoomSavedPane != nil }
@@ -573,15 +574,13 @@ final class CanvasView: NSView {
 
     // Paint world-space guides, or clear when nothing aligned. Color
     // from snap-guide-color ("none"/show-snap-guides=false = no paint,
-    // only the snap still applies). "default" is translucent silver.
+    // only the snap still applies). "default" is the ghostty foreground,
+    // translucent.
     // Span covers every pane + the rect.
     private func showSnapGuides(x: [CGFloat], y: [CGFloat], near rect: NSRect) {
         guard !x.isEmpty || !y.isEmpty else { hideSnapGuides(); return }
         guard GCTConfig.current.showSnapGuides else { return }
-        let spec = GCTConfig.current.snapGuideColor ?? "default"
-        guard spec.lowercased() != "none" else { return }
-        let color = NSColor(gctHex: spec)
-            ?? NSColor(white: 0.75, alpha: 0.55)
+        guard let color = GCTTheme.current.snapGuide else { return }
         showSnapGuidesRaw(x: x, y: y, near: rect, color: color)
     }
 
@@ -1798,20 +1797,11 @@ final class CanvasView: NSView {
             menu.addItem(rename)
 
             let colors = NSMenuItem(title: "Group color", action: nil, keyEquivalent: "")
-            let palette = NSMenu(title: "Group color")
-            for hex in GroupStyle.palette {
-                let item = NSMenuItem(title: hex,
-                                      action: #selector(recolorGroupFromMenu(_:)),
-                                      keyEquivalent: "")
-                item.target = self
-                // "id|hex" — representedObject is Any?.
-                item.representedObject = id.uuid.uuidString + "|" + hex
-                item.attributedTitle = NSAttributedString(
-                    string: "  \(hex)",
-                    attributes: [.foregroundColor: NSColor(gctHex: hex) ?? .labelColor])
-                palette.addItem(item)
-            }
-            colors.submenu = palette
+            colors.submenu = GroupColor.menu(
+                title: "Group color", target: self,
+                pick: #selector(recolorGroupFromMenu(_:)),
+                custom: #selector(customGroupColorFromMenu(_:)),
+                scope: id.uuid.uuidString)
             menu.addItem(colors)
 
             let ungroup = NSMenuItem(title: "Ungroup",
@@ -1898,14 +1888,39 @@ final class CanvasView: NSView {
     @objc func recolorGroupFromMenu(_ sender: NSMenuItem) {
         guard let s = sender.representedObject as? String else { return }
         let parts = s.split(separator: "|").map(String.init)
-        guard parts.count == 2, let u = UUID(uuidString: parts[0]),
-              let hex = GroupStyle.sanitizedColor(parts[1]) else { return }
-        recolorGroup(GroupID(u), hex: hex)
+        guard parts.count == 2, let u = UUID(uuidString: parts[0]) else { return }
+        recolorGroup(GroupID(u), spec: GroupStyle.sanitizedColor(parts[1]))
     }
 
-    func recolorGroup(_ id: GroupID, hex: String) {
+    @objc func customGroupColorFromMenu(_ sender: NSMenuItem) {
+        guard let s = sender.representedObject as? String,
+              let u = UUID(uuidString: s) else { return }
+        pickCustomGroupColor(GroupID(u))
+    }
+
+    // System color panel for one group; the pick lands on mouse-up (not
+    // continuous) so a drag doesn't flood the daemon with updates.
+    func pickCustomGroupColor(_ id: GroupID) {
+        guard let g = groupMetas[id] else { return }
+        colorPanelGroup = id
+        let panel = NSColorPanel.shared
+        panel.showsAlpha = false
+        panel.isContinuous = false
+        panel.color = GroupColor.resolve(g.color, key: g.name ?? id.uuid.uuidString)
+        panel.setTarget(self)
+        panel.setAction(#selector(groupColorPanelPicked(_:)))
+        panel.orderFront(nil)
+    }
+
+    @objc private func groupColorPanelPicked(_ sender: NSColorPanel) {
+        guard let id = colorPanelGroup else { return }
+        recolorGroup(id, spec: GroupStyle.sanitizedColor(sender.color.gctHexString))
+    }
+
+    // nil spec = auto (hash of the name).
+    func recolorGroup(_ id: GroupID, spec: String?) {
         guard var g = groupMetas[id] else { return }
-        g.color = hex
+        g.color = spec
         groupMetas[id] = g
         refreshGroupViews()
         hub.updateGroup(UpdateGroup(id: id, name: g.name,
@@ -3228,7 +3243,7 @@ final class CanvasView: NSView {
     // zoom-pane the pane keeps its size and the camera moves.
     func cameraZoomFocused() {
         guard let id = focusedID else { return }
-        zoomToPane(id, margin: Self.cameraZoomMargin)
+        zoomToPane(id)
     }
 
     // Own create requests awaiting their paneCreated echo. The daemon
@@ -3236,7 +3251,7 @@ final class CanvasView: NSView {
     // agent's or another client's. Keyed by owner so an agent pane on
     // another host can't consume our ask. Stale asks (refused) expire.
     private static let ownPaneAskTTL: TimeInterval = 5
-    private static let cameraZoomMargin: CGFloat = 0.96
+    private static let fitMargin: CGFloat = 0.96
     private var ownPaneAsks = [(owner: String, at: Date)]()
 
     func askPane(_ req: CreatePane, owner: String) {
@@ -3268,7 +3283,7 @@ final class CanvasView: NSView {
             scale: camera.scale))
     }
 
-    func zoomToPane(_ id: PaneID, margin: CGFloat = 0.8) {
+    func zoomToPane(_ id: PaneID, margin: CGFloat = CanvasView.fitMargin) {
         guard let pane = panes[id] else { return }
         let screen = viewportSize
         let r = pane.frame

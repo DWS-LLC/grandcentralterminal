@@ -326,7 +326,7 @@ extension GroupID: Codable {
 public struct GroupMeta: Codable, Sendable {
     public var id: GroupID
     public var name: String?
-    public var color: String?      // hex like "#3b82f6"; nil = default grey
+    public var color: String?      // hex like "#3b82f6" or "palette:4"; nil = auto (hash of name)
     public var members: [PaneID]
     public init(id: GroupID, name: String? = nil, color: String? = nil,
                 members: [PaneID] = []) {

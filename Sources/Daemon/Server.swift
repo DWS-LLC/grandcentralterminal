@@ -397,7 +397,7 @@ final class Server {
             }
             g.members = admitted
             g.name = GroupStyle.sanitizedName(req.name)
-            g.color = GroupStyle.sanitizedColor(req.color) ?? g.color
+            g.color = GroupStyle.sanitizedColor(req.color)
             // Admitted members evicted from any other group (single
             // membership). Any group left empty — the target itself or
             // an evicted donor — is deleted, not kept as a husk.
@@ -612,8 +612,7 @@ final class Server {
         }
         let g = GroupMeta(id: gid,
                           name: GroupStyle.sanitizedName(name),
-                          color: GroupStyle.sanitizedColor(color)
-                            ?? GroupStyle.palette[groups.count % GroupStyle.palette.count],
+                          color: GroupStyle.sanitizedColor(color),
                           members: admitted)
         groups[g.id] = g
 

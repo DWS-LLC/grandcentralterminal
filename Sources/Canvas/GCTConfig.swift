@@ -135,12 +135,40 @@ extension NSColor {
         }
     }
 
+    // "#rrggbb" in sRGB (alpha dropped).
+    var gctHexString: String {
+        let c = usingColorSpace(.sRGB) ?? self
+        let channel = { (v: CGFloat) in Int((v * 255).rounded()) }
+        return String(format: "#%02x%02x%02x", channel(c.redComponent),
+                      channel(c.greenComponent), channel(c.blueComponent))
+    }
+
     // Rec. 601 luminance in 0...1, sRGB components.
     var gctLuminance: Double {
         let c = usingColorSpace(.sRGB) ?? self
         return 0.299 * Double(c.redComponent)
             + 0.587 * Double(c.greenComponent)
             + 0.114 * Double(c.blueComponent)
+    }
+}
+
+extension String {
+    // FNV-1a: String.hashValue is seeded per process, this isn't. Keeps
+    // hashed colors (hosts, groups) stable across launches and machines.
+    var gctHash: UInt32 {
+        utf8.reduce(2166136261) { ($0 ^ UInt32($1)) &* 16777619 }
+    }
+}
+
+// A color spec split per mode. Config keys: `key` (both modes),
+// `key-dark` / `key-light` (win over `key` in their mode).
+struct GCTModeColor: Equatable {
+    var shared: String?
+    var dark: String?
+    var light: String?
+
+    func spec(dark isDark: Bool) -> String? {
+        (isDark ? dark : light) ?? shared
     }
 }
 
@@ -400,11 +428,13 @@ struct GCTConfig {
     var backgroundShader: String?
     var backgroundShaderFPS = 60
     var backgroundShaderScale: CGFloat = 1
-    var titlebarBackground: String?
-    // Per-mode titlebar/border overrides; nil falls back to titlebarBackground.
-    var titlebarBackgroundDark: String?
-    var titlebarBackgroundLight: String?
-    var titlebarText: String?
+    var titlebarBackground = GCTModeColor()
+    var titlebarText = GCTModeColor()
+    // Border fill (default: the titlebar background), selection/zoom
+    // accent, and drop shadow color.
+    var titlebarBorder = GCTModeColor()
+    var accent = GCTModeColor()
+    var shadowColor = GCTModeColor()
     var titlebarFont: String?
     var titlebarFontSize: CGFloat = 12
     // Pane chrome: border on the left/right/bottom edges in points (the
@@ -439,10 +469,10 @@ struct GCTConfig {
     // Snap radius in screen points (constant feel at any zoom).
     var snapRadius: CGFloat = 16
     // Guide lines: show-snap-guides = false hides them; snap-guide-color
-    // tints them (hex like "#ff453a", "default" for translucent silver,
-    // "none" to hide).
+    // tints them (hex like "#ff453a", "default" for translucent ghostty
+    // foreground, "none" to hide).
     var showSnapGuides = true
-    var snapGuideColor: String?
+    var snapGuideColor = GCTModeColor()
     var newWindowDirection = GCTNewWindowDirection.right
     // Size of new panes: focused pane's size, or a fixed cols x rows grid
     // (80x24 when the canvas is empty).
@@ -487,8 +517,14 @@ struct GCTConfig {
     var statusbarComponents: [String] = ["clock", "gap"]
     var statusbarHeight: CGFloat = 26
     var statusbarSpacing: CGFloat = 8
-    var statusbarBackground: String?
-    var statusbarText: String?
+    var statusbarBackground = GCTModeColor()
+    var statusbarText = GCTModeColor()
+    // Pane switcher overlay (cmd+p style): panel, outline, row text, and
+    // the most-recent row's text.
+    var switcherBackground = GCTModeColor()
+    var switcherBorder = GCTModeColor()
+    var switcherText = GCTModeColor()
+    var switcherTextActive = GCTModeColor()
     var statusbarFont: String?
     var statusbarFontSize: CGFloat = 12
     var statusbarOpacity: CGFloat = 1
@@ -556,7 +592,7 @@ struct GCTConfig {
         if let v = root["show-snap-guides"] {
             cfg.showSnapGuides = flag(v, cfg.showSnapGuides)
         }
-        cfg.snapGuideColor = colorSpec(root["snap-guide-color"])
+        cfg.snapGuideColor = modeColor(root, "snap-guide-color")
         if let v = root["new-window-open-direction"],
            let d = GCTNewWindowDirection(rawValue: v.lowercased()) {
             cfg.newWindowDirection = d
@@ -627,14 +663,20 @@ struct GCTConfig {
         if let s = sb["opacity"], let n = Double(s), (0.0...1.0).contains(n) {
             cfg.statusbarOpacity = CGFloat(n)
         }
-        cfg.statusbarBackground = colorSpec(sb["background"])
-        cfg.statusbarText = colorSpec(sb["text"])
+        cfg.statusbarBackground = modeColor(sb, "background")
+        cfg.statusbarText = modeColor(sb, "text")
         if let f = sb["font"], f.lowercased() != "default" {
             cfg.statusbarFont = f
         }
         if let s = sb["font-size"], let n = Double(s), (6.0...48.0).contains(n) {
             cfg.statusbarFontSize = CGFloat(n)
         }
+
+        let sw = t["switcher"] ?? [:]
+        cfg.switcherBackground = modeColor(sw, "background")
+        cfg.switcherBorder = modeColor(sw, "border")
+        cfg.switcherText = modeColor(sw, "text")
+        cfg.switcherTextActive = modeColor(sw, "text-active")
 
         let bg = t["background"] ?? [:]
         cfg.backgroundDark = colorSpec(bg["dark"])
@@ -648,10 +690,11 @@ struct GCTConfig {
         }
 
         let tb = t["titlebar"] ?? [:]
-        cfg.titlebarBackground = colorSpec(tb["background"])
-        cfg.titlebarBackgroundDark = colorSpec(tb["background-dark"])
-        cfg.titlebarBackgroundLight = colorSpec(tb["background-light"])
-        cfg.titlebarText = colorSpec(tb["text"])
+        cfg.titlebarBackground = modeColor(tb, "background")
+        cfg.titlebarText = modeColor(tb, "text")
+        cfg.titlebarBorder = modeColor(tb, "border")
+        cfg.accent = modeColor(tb, "accent")
+        cfg.shadowColor = modeColor(tb, "shadow-color")
         if let f = tb["font"], f.lowercased() != "default" {
             cfg.titlebarFont = f
         }
@@ -718,7 +761,7 @@ struct GCTConfig {
             let proxy = vals["proxy"]?.trimmingCharacters(in: .whitespaces) ?? ""
             remotes.append(GCTRemoteHost(name: name, host: h, port: port,
                                          token: token, proxy: proxy,
-                                         color: colorSpec(vals["color"])))
+                                         color: modeColor(vals, "color")))
         }
         cfg.remotes = remotes.sorted { $0.name < $1.name }
         return cfg
@@ -732,6 +775,13 @@ struct GCTConfig {
         case "false", "no", "off", "0": return false
         default: return fallback
         }
+    }
+
+    // `key`, `key-dark`, `key-light` of one table as a GCTModeColor.
+    private static func modeColor(_ table: [String: String], _ key: String) -> GCTModeColor {
+        GCTModeColor(shared: colorSpec(table[key]),
+                     dark: colorSpec(table["\(key)-dark"]),
+                     light: colorSpec(table["\(key)-light"]))
     }
 
     // nil when unset or "default"; "ghostty" and hex pass through.
@@ -823,6 +873,8 @@ struct GCTConfig {
     # hide — the snap still applies).
     show-snap-guides = true
     snap-guide-color = "default"
+    # snap-guide-color-dark / snap-guide-color-light override per mode.
+    # "default" = your ghostty foreground, translucent.
     new-window-open-direction = "right"  # above | below | left | right
     # New pane size: "follows" copies the focused pane, or fix a terminal
     # grid as "cols,rows" (e.g. "80,30"). With no panes on the canvas, a
@@ -890,14 +942,25 @@ struct GCTConfig {
     # "default" for the usual grey. The left/right/bottom border uses the
     # same color as the titlebar background.
     background = "default"
-    # Per-mode overrides of `background` (titlebar + border), e.g.
-    # background-dark = "#2b2b2b" / background-light = "#d8d8d8".
-    # "ghostty" (any of the three) derives it from your ghostty theme:
-    # window-titlebar-background if set, else the background nudged
-    # toward the foreground; text follows unless set here.
+    # Any color in this file also takes "palette:N" (0-15) for your ghostty
+    # theme's ANSI color N, e.g. accent = "palette:5" (magenta).
+    # Every color below also takes -dark / -light variants that win over
+    # the plain key in their mode, e.g. background-dark = "#2b2b2b" /
+    # background-light = "#d8d8d8".
+    # "ghostty" (background, any variant) derives it from your ghostty
+    # theme: window-titlebar-background if set, else the background
+    # nudged toward the foreground; text follows unless set here.
     background-dark = "default"
     background-light = "default"
     text = "default"
+    text-dark = "default"
+    text-light = "default"
+    # Side/bottom border fill ("default" = the titlebar background).
+    border = "default"
+    # Selected / zoomed pane chrome ("default" = your ghostty theme's blue).
+    accent = "default"
+    # Drop shadow color ("default" = black).
+    shadow-color = "default"
     # Title text font: family name (e.g. "SF Mono") and size in points.
     font = "default"
     font-size = 12
@@ -928,11 +991,21 @@ struct GCTConfig {
     spacing = 8
     # Colors: RGBA hex like "#1a1b26" or "#1a1b2680", or "default" for
     # the usual greys.
+    # background-dark / -light and text-dark / -light override per mode.
     background = "default"
     text = "default"
     # Font: family name (e.g. "SF Mono") and size in points.
     font = "default"
     font-size = 12
+
+    [switcher]
+    # Pane switcher overlay colors, same hex / -dark / -light rules.
+    # "default" = the usual dark panel.
+    background = "default"
+    border = "default"
+    text = "default"
+    # Text of the most recently focused pane's row.
+    text-active = "default"
     # Overall opacity 0-1 (multiplies the background alpha).
     opacity = 1
 
@@ -1035,7 +1108,8 @@ struct GCTConfig {
     # name = canvas label + window color key; host = TCP address
     # (ssh-tunnel endpoint works); port defaults to 7420; token must
     # match the daemon's --token/GCT_TOKEN; color tints that host's
-    # windows (hex like "#f59e0b", "default" = auto from the palette).
+    # windows (hex like "#f59e0b", "default" = auto from the palette;
+    # color-dark / color-light override per mode).
     # Right-click empty canvas for "New remote pane" per host.
     # Reload-config reconnects when these change.
     # proxy = ssh jump host (user@bastion or an ~/.ssh/config alias); the
@@ -1056,7 +1130,7 @@ struct GCTRemoteHost: Equatable {
     var port: UInt16 = GCTDefaultPort
     var token: String = ""
     var proxy: String = "" // ssh jump host ("user@bastion" or ~/.ssh/config alias); "" = direct
-    var color: String?     // hex like "#f59e0b"; nil = auto from palette
+    var color = GCTModeColor() // hex like "#f59e0b"; unset = auto from palette
 }
  // MARK: - Appearance + resolved theme
 
@@ -1076,6 +1150,18 @@ struct GCTTheme {
     let titlebarTextUnfocused: NSColor
     let borderFocused: NSColor
     let borderUnfocused: NSColor
+    let accent: NSColor
+    // nil = guides off ("none").
+    let snapGuide: NSColor?
+    // ghostty's 16 ANSI colors (empty without ghostty), and the chromatic
+    // subset hosts hash onto.
+    let ansi: [NSColor]
+    let hostPalette: [NSColor]
+    let shadowColor: NSColor
+    let switcherBackground: NSColor
+    let switcherBorder: NSColor
+    let switcherText: NSColor
+    let switcherTextActive: NSColor
     // Left/right/bottom border width in points (top edge is the titlebar
     // itself). Drop shadow; opacity 0 turns it off.
     let borderWidth: CGFloat
@@ -1104,26 +1190,28 @@ struct GCTTheme {
 
     init(dark: Bool, ghostty: GhosttyColors = GhosttyColors()) {
         let cfg = GCTConfig.current
+        func pick(_ m: GCTModeColor) -> NSColor? {
+            Self.color(m.spec(dark: dark), ghostty: nil, palette: ghostty.palette)
+        }
 
         // Canvas background.
         let bgSpec = dark ? cfg.backgroundDark : cfg.backgroundLight
-        if let c = Self.color(bgSpec, ghostty: ghostty.background) {
+        if let c = Self.color(bgSpec, ghostty: ghostty.background, palette: ghostty.palette) {
             canvasBackground = c
         } else {
             canvasBackground = dark ? .black : .white
         }
 
         // Titlebar background: one explicit color for both states (this
-        // mode's override, else the shared one), or the usual greys
+        // mode's color), or the usual greys
         // (focused slightly more salient than unfocused).
-        let tbSpec = (dark ? cfg.titlebarBackgroundDark : cfg.titlebarBackgroundLight)
-            ?? cfg.titlebarBackground
+        let tbSpec = cfg.titlebarBackground.spec(dark: dark)
         let tbGhostty = tbSpec?.lowercased() == Self.ghosttySpec
             ? Self.ghosttyTitlebar(ghostty) : nil
         if let tbGhostty {
             titlebarBackgroundFocused = tbGhostty.backgroundFocused
             titlebarBackgroundUnfocused = tbGhostty.backgroundUnfocused
-        } else if let c = Self.color(tbSpec, ghostty: nil) {
+        } else if let c = Self.color(tbSpec, ghostty: nil, palette: ghostty.palette) {
             titlebarBackgroundFocused = c
             titlebarBackgroundUnfocused = c
         } else if dark {
@@ -1136,7 +1224,7 @@ struct GCTTheme {
 
         // Titlebar text: explicit color, else the theme's (with a "ghostty"
         // titlebar), else contrast with the background.
-        if let c = Self.color(cfg.titlebarText, ghostty: nil) {
+        if let c = pick(cfg.titlebarText) {
             titlebarTextFocused = c
             titlebarTextUnfocused = c
         } else if let tbGhostty {
@@ -1150,10 +1238,33 @@ struct GCTTheme {
             titlebarTextUnfocused = NSColor(white: 0.70, alpha: 1)
         }
 
-        // Side/bottom borders: same color as the titlebar background, so
-        // the chrome reads as one frame around the terminal.
-        borderFocused = titlebarBackgroundFocused
-        borderUnfocused = titlebarBackgroundUnfocused
+        // Side/bottom borders: same color as the titlebar background (unless
+        // set), so the chrome reads as one frame around the terminal.
+        if let c = pick(cfg.titlebarBorder) {
+            borderFocused = c
+            borderUnfocused = c
+        } else {
+            borderFocused = titlebarBackgroundFocused
+            borderUnfocused = titlebarBackgroundUnfocused
+        }
+        // Accent defaults to the ghostty theme's blue; guides to its
+        // foreground, translucent (silver when ghostty gave nothing).
+        let ansiBlue = ghostty.palette.indices.contains(Self.ansiBlue)
+            ? ghostty.palette[Self.ansiBlue] : nil
+        accent = pick(cfg.accent) ?? ansiBlue ?? .systemBlue
+        if cfg.snapGuideColor.spec(dark: dark)?.lowercased() == Self.noneSpec {
+            snapGuide = nil
+        } else if let c = pick(cfg.snapGuideColor) {
+            snapGuide = c
+        } else {
+            snapGuide = (ghostty.foreground ?? NSColor(white: 0.75, alpha: 1))
+                .withAlphaComponent(Self.guideAlpha)
+        }
+        ansi = ghostty.palette
+        hostPalette = Self.hostAnsi.compactMap {
+            ghostty.palette.indices.contains($0) ? ghostty.palette[$0] : nil
+        }
+        shadowColor = pick(cfg.shadowColor) ?? .black
         borderWidth = max(0, min(32, cfg.titlebarBorderWidth))
         shadowOpacity = max(0, min(1, cfg.shadowOpacity))
         shadowRadius = max(0, min(64, cfg.shadowRadius))
@@ -1166,20 +1277,32 @@ struct GCTTheme {
         }
         // Status bar: explicit colors or the usual dark/light greys.
         // Opacity stays in the view (it multiplies background alpha).
-        if let c = Self.color(cfg.statusbarBackground, ghostty: nil) {
+        if let c = pick(cfg.statusbarBackground) {
             statusbarBackground = c
         } else if dark {
             statusbarBackground = NSColor(white: 0.13, alpha: 1)
         } else {
             statusbarBackground = NSColor(white: 0.93, alpha: 1)
         }
-        if let c = Self.color(cfg.statusbarText, ghostty: nil) {
+        if let c = pick(cfg.statusbarText) {
             statusbarText = c
         } else if statusbarBackground.gctLuminance > 0.55 {
             statusbarText = NSColor(white: 0.12, alpha: 1)
         } else {
             statusbarText = NSColor(white: 0.92, alpha: 1)
         }
+
+        // Switcher: dark panel by default in both modes (it floats over
+        // the canvas like a HUD); override per mode to go light.
+        switcherBackground = pick(cfg.switcherBackground)
+            ?? NSColor(white: 0.07, alpha: 0.97)
+        switcherBorder = pick(cfg.switcherBorder)
+            ?? NSColor(white: 0.25, alpha: 1)
+        switcherText = pick(cfg.switcherText)
+            ?? NSColor(white: 0.75, alpha: 1)
+        switcherTextActive = pick(cfg.switcherTextActive)
+            ?? .white
+
         let sbSize = cfg.statusbarFontSize
         if let name = cfg.statusbarFont, let f = NSFont(name: name, size: sbSize) {
             statusbarFont = f
@@ -1188,13 +1311,28 @@ struct GCTTheme {
         }
     }
 
-    private static func color(_ spec: String?, ghostty: NSColor?) -> NSColor? {
+    // Hex, "ghostty" (the caller's ghostty color), or "palette:N" (ghostty
+    // ANSI N, 0-15, e.g. "palette:5" = magenta).
+    private static func color(_ spec: String?, ghostty: NSColor?,
+                              palette: [NSColor]) -> NSColor? {
         guard let spec else { return nil }
-        if spec.lowercased() == ghosttySpec { return ghostty }
+        let lower = spec.lowercased()
+        if lower == ghosttySpec { return ghostty }
+        if lower.hasPrefix(paletteSpec) {
+            guard let i = Int(lower.dropFirst(paletteSpec.count)),
+                  palette.indices.contains(i) else { return nil }
+            return palette[i]
+        }
         return NSColor(gctHex: spec)
     }
 
     private static let ghosttySpec = "ghostty"
+    private static let paletteSpec = "palette:"
+    private static let noneSpec = "none"
+    private static let ansiBlue = 4
+    private static let guideAlpha: CGFloat = 0.55
+    // ANSI red..cyan + bright red..cyan: skips black/white/greys.
+    private static let hostAnsi = Array(1...6) + Array(9...14)
     // "ghostty" titlebar mixes: background toward foreground (focused a
     // touch more salient), unfocused text faded toward the titlebar.
     private static let focusedMix: CGFloat = 0.12

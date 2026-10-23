@@ -17,10 +17,10 @@ final class SwitcherView: NSView, NSTextFieldDelegate, NSTableViewDataSource, NS
     override init(frame: NSRect) {
         super.init(frame: frame)
         wantsLayer = true
-        layer?.backgroundColor = NSColor(white: 0.07, alpha: 0.97).cgColor
+        layer?.backgroundColor = GCTTheme.current.switcherBackground.cgColor
         layer?.cornerRadius = 10
         layer?.borderWidth = 1
-        layer?.borderColor = NSColor(white: 0.25, alpha: 1).cgColor
+        layer?.borderColor = GCTTheme.current.switcherBorder.cgColor
         layer?.shadowOpacity = 0.6
         layer?.shadowRadius = 30
 
@@ -135,7 +135,8 @@ final class SwitcherView: NSView, NSTextFieldDelegate, NSTableViewDataSource, NS
         let text = NSTextField(labelWithString:
             "\(m.name ?? "Terminal")  ·  \(m.cwd)  ·  \(m.host)")
         text.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
-        text.textColor = (m.id == order.last) ? .white : NSColor(white: 0.75, alpha: 1)
+        let theme = GCTTheme.current
+        text.textColor = (m.id == order.last) ? theme.switcherTextActive : theme.switcherText
         return text
     }
 

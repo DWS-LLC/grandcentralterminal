@@ -49,10 +49,10 @@ extension CanvasView {
             guard let view = groupViews[id] else { continue }
             if let b = live[id] {
                 view.update(bounds: NSRectOverlap.to(b),
-                            name: meta.name, colorHex: meta.color)
+                            name: meta.name, colorSpec: meta.color)
             } else {
                 view.update(bounds: nil, name: meta.name,
-                            colorHex: meta.color)
+                            colorSpec: meta.color)
             }
         }
         // Panes always above group backgrounds; floating panes above
@@ -102,8 +102,7 @@ extension CanvasView {
         if owned.count < members.count {
             NSLog("[gct] group: mixed-host selection — grouping the \(owned.count) \(owner) panes")
         }
-        let color = GroupStyle.palette[groupMetas.count % GroupStyle.palette.count]
-        hub.createGroup(CreateGroup(name: name, color: color,
+        hub.createGroup(CreateGroup(name: name, color: nil,
                                     members: owned), owner: owner)
     }
 
@@ -137,8 +136,9 @@ extension CanvasView {
         if selectionView == nil {
             let v = NSView(frame: rect)
             v.wantsLayer = true
-            v.layer?.backgroundColor = NSColor.systemBlue.withAlphaComponent(0.12).cgColor
-            v.layer?.borderColor = NSColor.systemBlue.withAlphaComponent(0.8).cgColor
+            let accent = GCTTheme.current.accent
+            v.layer?.backgroundColor = accent.withAlphaComponent(0.12).cgColor
+            v.layer?.borderColor = accent.withAlphaComponent(0.8).cgColor
             v.layer?.borderWidth = 1
             selectionView = v
             worldView.addSubview(v)

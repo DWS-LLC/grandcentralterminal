@@ -250,7 +250,7 @@ final class PaneView: NSView {
         // panes tint the border fill with the host color so the whole
         // frame reads as foreign at any zoom.
         if accent {
-            layer?.backgroundColor = NSColor.systemBlue.cgColor
+            layer?.backgroundColor = t.accent.cgColor
         } else if let hc = hostColor {
             layer?.backgroundColor = hc.cgColor
         } else {
@@ -262,9 +262,9 @@ final class PaneView: NSView {
         layer?.shadowOpacity = lifted ? min(1, t.shadowOpacity + 0.25) : t.shadowOpacity
         layer?.shadowRadius = lifted ? t.shadowRadius + 6 : t.shadowRadius
         layer?.shadowOffset = CGSize(width: 0, height: -6)
-        layer?.shadowColor = NSColor.black.cgColor
+        layer?.shadowColor = t.shadowColor.cgColor
         titlebar.layer?.backgroundColor =
-            (accent ? NSColor.systemBlue : isFocused ? t.titlebarBackgroundFocused : t.titlebarBackgroundUnfocused).cgColor
+            (accent ? t.accent : isFocused ? t.titlebarBackgroundFocused : t.titlebarBackgroundUnfocused).cgColor
         titleLabel.string = titleText
         // Remote host tint on the title text (keeps titlebar grey, adds
         // the color where the eye lands). Local panes keep theme text.
@@ -314,23 +314,28 @@ final class PaneView: NSView {
     }
 }
 
-// Per-host window color: config [host.<name>] color wins, else the
-// group palette by host index (deterministic: sorted host names).
+// Per-host window color: config [host.<name>] color wins, else a
+// ghostty ANSI color picked by hashing the host name (stable across
+// launches and machines; group palette when ghostty gave none).
 // "local" returns nil (theme chrome, unchanged).
 enum HostStyle {
     static func color(for host: String) -> NSColor? {
         guard host != "local", !host.isEmpty else { return nil }
         if let h = GCTConfig.current.remotes.first(where: { $0.name == host }),
-           let c = h.color, let nc = NSColor(gctHex: c) {
+           let c = h.color.spec(dark: GCTTheme.isDark()), let nc = NSColor(gctHex: c) {
             return nc
         }
-        let names = GCTConfig.current.remotes.map(\.name).sorted()
-        guard let idx = names.firstIndex(of: host) else {
+        guard GCTConfig.current.remotes.contains(where: { $0.name == host }) else {
             // Unknown host (stale pane after config removal): grey it.
             return NSColor.systemGray
         }
-        return NSColor(gctHex: GroupStyle.palette[idx % GroupStyle.palette.count])
+        let ansi = GCTTheme.current.hostPalette
+        if !ansi.isEmpty {
+            return ansi[Int(host.gctHash % UInt32(ansi.count))]
+        }
+        return NSColor(gctHex: GroupStyle.palette[Int(host.gctHash) % GroupStyle.palette.count])
     }
+
 }
 
 extension PaneView {
