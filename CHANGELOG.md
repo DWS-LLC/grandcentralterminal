@@ -1,5 +1,18 @@
 # Changelog
 
+## v0.7.0
+
+### Added
+- Every color takes `-dark`/`-light` variants and `palette:N` (your ghostty theme's ANSI color N, so it follows the theme).
+- New color keys under `[titlebar]`: `border`, `accent`, `shadow-color`. New `[switcher]` section: `background`, `border`, `text`, `text-active`.
+- Group color picker: "Auto", a 2x8 swatch grid (normal | bright ANSI), or a custom color panel.
+- `gctd open size=w,h`: size a new pane for the job (world points) and keep the beside-the-caller spot.
+
+### Changed
+- Accent, snap guides, host and group colors default to your ghostty palette, hashed from the name so they stay put across launches and machines.
+- The agent skill and SessionStart hook now say it plainly: panes, not `run_in_background`; nearby, and sized for the job.
+- cmd+shift+z and cmd+hjkl share one fit margin.
+
 ## v0.6.0
 
 ### Added
