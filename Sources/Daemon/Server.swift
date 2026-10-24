@@ -704,22 +704,38 @@ final class Server {
         let metas = groupMetasLocked()
         let floating = floatingLocked()
         let rect: Rect
+        let gap = gapLocked(req.gap)
+        // Agent spawn: orbit the caller, away from everyone else.
+        // Nil when no caller or no free spot (callers fall back).
+        func orbited(_ obstacles: [Rect]) -> Rect? {
+            guard let main = req.orbitAround, let mainRect = rects[main] else {
+                return nil
+            }
+            return Orbit.place(size: req.rect, around: mainRect, obstacles: obstacles,
+                               others: rects.filter { $0.key != main }.map(\.value),
+                               gap: gap)
+        }
         if req.joinGroup != nil {
             var obstacles = [Rect]()
             for (gid, b) in GroupLayout.bounds(groups: metas, panes: rects)
                 where gid != req.joinGroup {
                 obstacles.append(b)
             }
-            rect = obstacles.isEmpty ? req.rect
-                : Overlap.resolve(req.rect, obstacles: obstacles, gap: gapLocked(req.gap))
+            // Orbit also dodges the group's own members (the flush
+            // rect lands on a sibling when the caller's right is taken).
+            let members = rects.filter { !floating.contains($0.key) }.map(\.value)
+            rect = orbited(obstacles + members)
+                ?? (obstacles.isEmpty ? req.rect
+                    : Overlap.resolve(req.rect, obstacles: obstacles, gap: gap))
         } else {
             let obstacles = GroupLayout.creationObstacles(
                 paneRects: rects,
                 groups: metas,
                 allowOverlap: req.allowOverlap,
                 floating: floating)
-            rect = obstacles.isEmpty ? req.rect
-                : Overlap.resolve(req.rect, obstacles: obstacles, gap: gapLocked(req.gap))
+            rect = orbited(obstacles)
+                ?? (obstacles.isEmpty ? req.rect
+                    : Overlap.resolve(req.rect, obstacles: obstacles, gap: gap))
         }
         lock.unlock()
         let cwd = req.cwd ?? NSHomeDirectory()

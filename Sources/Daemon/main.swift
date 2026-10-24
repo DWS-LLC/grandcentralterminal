@@ -405,14 +405,19 @@ case "open":
     let f = flags(rest)
     var anchor = Rect(x: 0, y: 0, w: 900, h: 560)
     var join: GroupID?
+    var orbit: PaneID?
     if let selfID = env["GCT_PANE_ID"],
        let me = w.panes.first(where: { $0.id.uuid.uuidString == selfID }) {
         anchor = Rect(x: me.rect.x + me.rect.w, y: me.rect.y,
                       w: me.rect.w, h: me.rect.h)
         join = w.groups.first(where: { $0.members.contains(me.id) })?.id
+        orbit = me.id
     }
     // Explicit group= name/id joins that group instead (daemon admits).
-    if let gq = f["group"], let g = resolveGroup(w, gq) { join = g.id }
+    if let gq = f["group"], let g = resolveGroup(w, gq) {
+        join = g.id
+        orbit = nil
+    }
     // size=w,h keeps the beside-caller spot, resized to fit the job.
     if let s = f["size"] {
         let n = s.split(separator: ",").compactMap { Double($0) }
@@ -427,7 +432,8 @@ case "open":
     let cwd = f["cwd"] ?? FileManager.default.currentDirectoryPath
     _ = c.conn.send(tag: .createPane, json: CreatePane(
         rect: anchor, cwd: cwd, name: f["name"], command: f["cmd"],
-        joinGroup: join, joinDirection: join == nil ? nil : "right"))
+        joinGroup: join, joinDirection: join == nil ? nil : "right",
+        orbitAround: f["rect"] == nil ? orbit : nil))
     // Answer is a paneCreated broadcast; errorReply on spawn failure.
     // Tag-check first: a stray broadcast decodes as nothing, not as the
     // wrong reply (all reply shapes are [$id] flat strings otherwise).
