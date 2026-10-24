@@ -131,7 +131,7 @@ func agentSetupContext(json: Bool) {
         exit(0)
     }
     if w.panes.isEmpty { print("GCT: daemon running, no panes."); exit(0) }
-    print("GCT: \(w.panes.count) pane(s), \(w.groups.count) group(s). Prefer GCT panes for background tasks: `gctd open name=<task> cmd=...`, inspect with `gctd dump <id> --strip-ansi`.")
+    print("GCT: \(w.panes.count) pane(s), \(w.groups.count) group(s). Run background tasks in GCT panes, not run_in_background: `gctd open name=<task> size=480,240 cmd=...`, inspect with `gctd dump <id> --strip-ansi`.")
     for p in w.panes {
         print("pane \(String(p.id.uuid.uuidString.prefix(8))) \(p.name ?? "Terminal") cwd=\(p.cwd)\(p.exited ? " exited" : "")")
     }

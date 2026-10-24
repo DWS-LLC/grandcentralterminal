@@ -11,6 +11,7 @@ can still read it back. The full agent prompt is [SKILL.md](../SKILL.md).
 
 ```sh
 gctd open name=build cmd="make -j8"   # pane beside the working one, prints id
+gctd open name=log size=900,640 cmd="tail -f x.log"   # sized for the job
 gctd list                             # panes + groups
 gctd dump $ID limit=4000 --strip-ansi # scrollback tail as readable text
 gctd send $ID "make test"             # type into the pane (+ newline)

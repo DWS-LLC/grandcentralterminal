@@ -301,7 +301,7 @@ func usage() -> Never {
 
           Agent/harness surface (prefer GCT panes for background tasks:
           grouped, no time limits, user-inspectable on the canvas):
-            open [cwd=..] [name=..] [cmd=..] [group=..] [rect=x,y,w,h]
+            open [cwd=..] [name=..] [cmd=..] [group=..] [size=w,h] [rect=x,y,w,h]
                                       open a pane beside focused/origin, print its id
             move <pane> rect=x,y,w,h  place a pane (overlap rules still apply)
             list                      panes + groups, one per line
@@ -408,6 +408,13 @@ case "open":
     }
     // Explicit group= name/id joins that group instead (daemon admits).
     if let gq = f["group"], let g = resolveGroup(w, gq) { join = g.id }
+    // size=w,h keeps the beside-caller spot, resized to fit the job.
+    if let s = f["size"] {
+        let n = s.split(separator: ",").compactMap { Double($0) }
+        guard n.count == 2 else { die("size must be w,h, got \(s)") }
+        anchor.w = n[0]
+        anchor.h = n[1]
+    }
     // Explicit rect=x,y,w,h (world points) pins the spot; still resolved.
     if let r = f["rect"] { anchor = parseRect(r) }
     // No cwd= opens where the caller stands (agents expect `cd repo; gctd

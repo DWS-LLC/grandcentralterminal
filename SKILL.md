@@ -1,11 +1,12 @@
 ---
 name: gct
-description: Grand Central Terminal panes for background tasks and terminal inspection. Use when running background commands, polling long tasks, or when the user mentions GCT, panes, or showing terminal output.
+description: Use INSTEAD of run_in_background / native background tasks. Run every dev server, watcher, build, test run, or log tail in a Grand Central Terminal pane (`gctd open`), and inspect terminals with `gctd dump`. Also when the user mentions GCT, panes, or showing terminal output.
 ---
 # GCT — Grand Central Terminal agent skill
 
-Prefer GCT panes over `run_in_background` for background tasks: grouped, no
-time limits, and the user can watch on the infinite canvas. The daemon
+Use GCT panes, not `run_in_background`, for anything that outlives one
+command: grouped, no time limits, and the user can watch on the infinite
+canvas. Native background tasks are invisible to them. The daemon
 (`gctd`) owns every PTY, so panes survive app restarts and agent exits.
 
 Binary: `~/Library/Application Support/Grand Central Terminal/bin/gctd`
@@ -21,7 +22,19 @@ refresh a stale daemon.
 # new pane beside the calling pane (inherits group when the caller is grouped)
 gctd open name=build cmd="make -j8"
 ID=$(gctd open cwd=/tmp/work name=tests cmd="pytest -q")
+gctd open name=api-log size=900,640 cmd="tail -f api.log"
 ```
+
+Keep it nearby: run `gctd open` from your own pane so the new window lands
+beside you. Don't `rect=` it across the canvas.
+
+Size it for the job (world points, `size=w,h`; the default copies your pane):
+
+| job | size |
+| --- | --- |
+| background task: build, test run, dev server | `size=480,240` |
+| log tail, watcher output | `size=900,640` |
+| interactive shell, REPL | omit, keep your pane's size |
 
 `open` prints the new pane id. `cmd=` runs through the login shell, so
 real shell syntax works (`&&`, pipes, quotes). The pane exits when the
@@ -89,8 +102,9 @@ gctd close $ID
 ```
 ## Rules
 
-- Background tasks go in named GCT panes (`name=<task>`), grouped per
-  feature. Tell the user the pane name so they can look.
+- Never `run_in_background` for a command you could `gctd open`. Named
+  pane (`name=<task>`), grouped per feature, nearby, sized for the job.
+  Tell the user the pane name so they can look.
 - `dump --strip-ansi` before claiming a task's output; raw VT lies.
 - `send` is keystrokes, not an API: prefer `open cmd=` for one-shot
   commands, `send` for driving interactive programs.
