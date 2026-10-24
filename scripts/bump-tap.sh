@@ -34,8 +34,7 @@ cask "gct" do
   desc "Infinite-canvas terminal with a persistent daemon"
   homepage "https://github.com/DWS-LLC/grandcentralterminal"
 
-  # The app updates itself from GitHub releases; keep brew out of its way.
-  auto_updates true
+  # Brew installs don't self-update; the app points users at brew upgrade.
   depends_on arch: :arm64
   depends_on macos: :sonoma
 

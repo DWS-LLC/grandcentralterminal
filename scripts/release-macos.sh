@@ -57,7 +57,10 @@ PLIST="Resources/Info.plist"
 cp "$PLIST" /tmp/Info.plist.bak
 /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" "$PLIST"
 /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $VERSION" "$PLIST"
-trap 'cp /tmp/Info.plist.bak Resources/Info.plist' EXIT
+GCTD_VERSION_SRC="Sources/Daemon/Version.swift"
+cp "$GCTD_VERSION_SRC" /tmp/Version.swift.bak
+sed -i '' "s/GCTVersion = \"dev\"/GCTVersion = \"$VERSION\"/" "$GCTD_VERSION_SRC"
+trap 'cp /tmp/Info.plist.bak Resources/Info.plist; cp /tmp/Version.swift.bak Sources/Daemon/Version.swift' EXIT
 make build ZIG="$(command -v zig)"
 
 # 4. Sign (hardened runtime, explicit inner-first order — no --deep).

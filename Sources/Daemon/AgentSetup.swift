@@ -33,10 +33,13 @@ enum AgentSkill {
     // Exposed for `print` so agents can read/copy it without installing.
     static func candidatePaths() -> [String] {
         var out = [String]()
-        var self0 = CommandLine.arguments.first ?? ""
+        // argv[0] is a bare "gctd" when launched via PATH, so ask the OS
+        // for the real binary and follow the /usr/local/bin symlink.
+        var self0 = Bundle.main.executablePath ?? CommandLine.arguments.first ?? ""
         if !self0.hasPrefix("/") {
             self0 = FileManager.default.currentDirectoryPath + "/" + self0
         }
+        self0 = URL(fileURLWithPath: self0).resolvingSymlinksInPath().path
         let dir = (self0 as NSString).deletingLastPathComponent
         out.append(dir + "/../skills/gct/SKILL.md")
         out.append(dir + "/skills/gct/SKILL.md")

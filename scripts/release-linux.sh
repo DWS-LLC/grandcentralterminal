@@ -17,6 +17,8 @@ STAGE=$(mktemp -d)
 trap 'rm -rf "$STAGE"' EXIT
 mkdir -p "$STAGE/Sources"
 cp -r Sources/Common Sources/Daemon Sources/ProcInfo Sources/PtyExec "$STAGE/Sources/"
+sed -i.bak "s/GCTVersion = \"dev\"/GCTVersion = \"$VERSION\"/" "$STAGE/Sources/Daemon/Version.swift"
+rm "$STAGE/Sources/Daemon/Version.swift.bak"
 cat > "$STAGE/Package.swift" <<'EOF'
 // swift-tools-version:5.10
 import PackageDescription

@@ -14,6 +14,9 @@
 // App and daemon ship in one bundle, so updating the bundle updates both.
 // The daemon restart ends running panes; the prompt says so.
 //
+// Homebrew installs (Caskroom/gct exists) don't self-update: brew owns the
+// bundle, so a swap would desync it. The prompt shows the brew command.
+//
 // Install on quit: same download + verify, but the swap waits for the
 // user's own quit (staged .app held in memory until then).
 //
@@ -59,6 +62,8 @@ enum GCTUpdater {
     private static let skippedKey = "gctUpdateSkipped"
     private static let healthyAfter: TimeInterval = 30
     private static let maxLaunchAttempts = 1
+    private static let brewUpgradeCmd = "brew upgrade --cask dws-llc/tap/gct"
+    private static let caskroomDirs = ["/opt/homebrew/Caskroom/gct", "/usr/local/Caskroom/gct"]
 
     private struct Release: Decodable {
         struct Asset: Decodable {
@@ -101,6 +106,10 @@ enum GCTUpdater {
         Bundle.main.bundleURL.pathExtension == "app"
     }
 
+    private static var isBrewInstall: Bool {
+        caskroomDirs.contains { FileManager.default.fileExists(atPath: $0) }
+    }
+
     // Launch hook: delayed so it never competes with startup, throttled to
     // once a day.
     static func checkOnLaunch() {
@@ -139,7 +148,29 @@ enum GCTUpdater {
 
     // MARK: - Flow
 
+    private static func offerBrew(_ release: Release) {
+        let alert = NSAlert()
+        alert.messageText = "GCT \(release.tag_name) is available"
+        alert.informativeText = "You have \(currentVersion), installed via Homebrew. Update with:\n\n"
+            + brewUpgradeCmd
+        alert.addButton(withTitle: "Copy Command")
+        alert.addButton(withTitle: "Skip This Version")
+        alert.addButton(withTitle: "Later")
+        NSApp.activate(ignoringOtherApps: true)
+
+        switch alert.runModal() {
+        case .alertFirstButtonReturn:
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(brewUpgradeCmd, forType: .string)
+        case .alertSecondButtonReturn:
+            skip(release.tag_name)
+        default:
+            break
+        }
+    }
+
     private static func offer(_ release: Release) {
+        guard !isBrewInstall else { return offerBrew(release) }
         guard let asset = release.assets.first(where: { $0.name.hasSuffix(assetSuffix) }),
               let url = URL(string: asset.browser_download_url)
         else { return }

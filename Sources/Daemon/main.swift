@@ -298,6 +298,7 @@ func usage() -> Never {
           Daemon control (no command runs the daemon itself):
             status                    list panes (alias: list)
             stop                      kill daemon + panes
+            version                   print the gctd version (--version)
 
           Agent/harness surface (prefer GCT panes for background tasks:
           grouped, no time limits, user-inspectable on the canvas):
@@ -373,6 +374,10 @@ func needClient() -> GCTClient {
 }
 
 switch verb {
+case "version", "--version":
+    print("gctd \(GCTVersion) (proto \(ProtoVersion))")
+    exit(0)
+
 case "status", "list":
     let c = needClient()
     guard let w = c.welcome() else { die("no reply from daemon") }
