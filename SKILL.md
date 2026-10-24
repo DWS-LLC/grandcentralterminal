@@ -19,14 +19,14 @@ refresh a stale daemon.
 ## Open a terminal next to the working one
 
 ```sh
-# new pane beside the calling pane (inherits group when the caller is grouped)
+# new pane in the free air around the calling pane (inherits group when the caller is grouped)
 gctd open name=build cmd="make -j8"
 ID=$(gctd open cwd=/tmp/work name=tests cmd="pytest -q")
 gctd open name=api-log size=900,640 cmd="tail -f api.log"
 ```
 
-Keep it nearby: run `gctd open` from your own pane so the new window lands
-beside you. Don't `rect=` it across the canvas.
+Keep it nearby: run `gctd open` from your own pane so the new window orbits
+you, clear of other panes. Don't `rect=` it across the canvas.
 
 Size it for the job (world points, `size=w,h`; the default copies your pane):
 

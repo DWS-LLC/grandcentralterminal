@@ -10,7 +10,7 @@ can still read it back. The full agent prompt is [SKILL.md](../SKILL.md).
 ## CLI
 
 ```sh
-gctd open name=build cmd="make -j8"   # pane beside the working one, prints id
+gctd open name=build cmd="make -j8"   # pane around the working one, prints id
 gctd open name=log size=900,640 cmd="tail -f x.log"   # sized for the job
 gctd list                             # panes + groups
 gctd dump $ID limit=4000 --strip-ansi # scrollback tail as readable text
@@ -28,7 +28,7 @@ Panes are addressed by uuid prefix, exact name, or `self` (the calling pane's
 to follow a task; `--strip-ansi` scrubs escapes. `cmd=` runs through the login
 shell (real syntax: `&&`, pipes, quotes) and the pane exits when the command
 does (`; exec zsh` keeps it open). `size=w,h` (world points) resizes the new
-pane but keeps it beside the caller: `480,240` for builds and servers,
+pane but keeps it around the caller: `480,240` for builds and servers,
 `900,640` for log tails.
 
 Group correlated windows, tail subagents in small grouped panes, close task

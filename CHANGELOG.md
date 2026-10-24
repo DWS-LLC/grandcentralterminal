@@ -1,5 +1,18 @@
 # Changelog
 
+## v0.8.0
+
+### Added
+- `gctd open` orbits the calling pane: spawns land in the free air around it, pulled toward the caller and pushed away from every other pane, instead of wedged against a neighbor.
+- `gctd version` (`--version`).
+
+### Changed
+- Homebrew installs no longer self-update; the app shows the `brew upgrade` command instead.
+
+### Fixed
+- `gctd open` from a grouped pane landed on a sibling when the pane to its right was taken.
+- `gctd agent-setup` found no skill when `gctd` ran through the `/usr/local/bin` symlink.
+
 ## v0.7.0
 
 ### Added
