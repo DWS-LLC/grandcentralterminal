@@ -49,7 +49,8 @@ Multi-select first: right-drag empty space to stage a selection, `⇧`-click a
 titlebar to toggle one pane, `⌘D` toggles the focused pane, `⌘⇧D` clears.
 Drag a selected titlebar to move the block rigidly. `⌘W` closes every selected
 pane. `⌘G` groups the selection into a colored box you can drag, rename, and
-recolor from its right-click menu. A directional split from a grouped pane
+recolor from its right-click menu: Auto (hashed from the name onto your
+ghostty palette), a 2x8 swatch grid of its ANSI colors, or a custom color. A directional split from a grouped pane
 joins that group; loose panes in the way are shoved aside along the split axis
 and foreign groups refuse the join. A group with no members left is deleted.
 

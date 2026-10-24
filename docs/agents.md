@@ -16,7 +16,7 @@ gctd list                             # panes + groups
 gctd dump $ID limit=4000 --strip-ansi # scrollback tail as readable text
 gctd send $ID "make test"             # type into the pane (+ newline)
 gctd rename $ID name=server
-gctd group $A $B name=feat color=#3b82f6
+gctd group $A $B name=feat color=#3b82f6   # or palette:N; omit for auto
 gctd focus $ID                        # focus + center on the canvas
 gctd camera $ID zoom=0.4 dur=3        # glide to a pane (or x= y=) at a zoom
 gctd do fit-all [$ID] [dur=4]         # run any keybind action, focusing $ID first
@@ -27,7 +27,9 @@ Panes are addressed by uuid prefix, exact name, or `self` (the calling pane's
 `$GCT_PANE_ID`). `dump` reads the daemon's 8 MiB VT ring read-only, so poll it
 to follow a task; `--strip-ansi` scrubs escapes. `cmd=` runs through the login
 shell (real syntax: `&&`, pipes, quotes) and the pane exits when the command
-does (`; exec zsh` keeps it open).
+does (`; exec zsh` keeps it open). `size=w,h` (world points) resizes the new
+pane but keeps it beside the caller: `480,240` for builds and servers,
+`900,640` for log tails.
 
 Group correlated windows, tail subagents in small grouped panes, close task
 panes when the work lands.

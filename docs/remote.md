@@ -30,7 +30,8 @@ gctd --port=7420 --token=<token>
 host = "192.168.1.38"
 port = 7420
 token = "<token>"
-color = "#f59e0b"   # optional; default = auto from the palette
+color = "#f59e0b"   # optional; default = hashed onto your ghostty palette
+# color-dark / color-light override per mode; "palette:N" works too
 ```
 
 `⌘⇧R` reloads config; the canvas connects and the host's panes join.

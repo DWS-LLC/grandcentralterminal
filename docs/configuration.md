@@ -44,8 +44,8 @@ snapping = true
 snapping-type = "edges"  # edges | center | all
 snap-radius = 16         # screen points, constant feel at any zoom
 show-snap-guides = true
-# hex like "#ff453a", "default" for translucent silver, "none" to hide
-# (the snap still applies).
+# hex like "#ff453a", "default" for your translucent ghostty foreground,
+# "none" to hide (the snap still applies). Takes -dark / -light variants.
 snap-guide-color = "default"
 
 # Mouse drags slide along collisions or hold when wedged; keyboard grow
@@ -117,18 +117,33 @@ real, so write `1.0` unless you want the desktop through. `reload-config`
 recompiles an edited shader; a broken one logs to Console and the last good
 one keeps drawing.
 
+## Colors
+
+Every color key in this file takes three forms:
+
+- RGBA hex, `"#2b2b2b"` or `"#2b2b2bcc"`, or `"default"` for the built-in.
+- `"palette:N"` (0-15): your ghostty theme's ANSI color N, so it follows the
+  theme. `accent = "palette:5"` is magenta in whatever theme you run.
+- `-dark` / `-light` variants of the key (`text-dark`, `border-light`) that
+  win over the plain key in their mode.
+
 ## `[titlebar]`
 
 ```toml
 [titlebar]
-# RGBA hex like "#2b2b2b" or "#2b2b2bcc", or "default" for the usual grey.
-# The left/right/bottom border uses the titlebar background.
+# The left/right/bottom border uses the titlebar background unless `border`
+# is set.
 background = "default"
-background-dark = "default"   # per-mode overrides of `background`
+background-dark = "default"
 background-light = "default"
 # "ghostty": derive from your ghostty theme (window-titlebar-background,
 # else its background nudged toward the foreground). Text follows.
 text = "default"
+text-dark = "default"
+text-light = "default"
+border = "default"        # side/bottom border fill
+accent = "default"        # selected / zoomed pane chrome (default: ghostty blue)
+shadow-color = "default"  # default: black
 font = "default"        # family name, e.g. "SF Mono"
 font-size = 12
 # Border on the left/right/bottom edges in points. Wider is easier to grab
@@ -158,7 +173,7 @@ position = "bottom"          # top | bottom
 components = "clock, gap"
 height = 26
 spacing = 8
-background = "default"
+background = "default"       # background-dark / -light, text-dark / -light too
 text = "default"
 font = "default"
 font-size = 12
@@ -170,6 +185,19 @@ Click a component for its dropdown (`---` section, `--` submenus). Rows with
 pane, `refresh=true` re-runs the plugin. Headers before the first `---`
 cycle in the bar. `image=` / `templateImage=` take base64 icons. The bar sits
 on its own layer above panes, outside the camera transform.
+
+## `[switcher]`
+
+The `⌘P` overlay. A dark panel in both modes, since it floats over the
+canvas like a HUD; override per mode to go light.
+
+```toml
+[switcher]
+background = "default"
+border = "default"
+text = "default"
+text-active = "default"  # the most recently focused pane's row
+```
 
 ## `[doom]`
 
