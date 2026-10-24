@@ -29,10 +29,22 @@ final class CanvasView: NSView {
         return saved
     }
     // Camera-fit viewport: the window minus the status bar strip (when the
-    // bar is up the pane must not slide under it). Screen points.
+    // bar is up the pane must not slide under it) and minus the top fade,
+    // so a fit never lands content in the faded band. A top bar covers
+    // the fade, so those two share the strip. Screen points.
     private var viewportSize: CGSize {
         var size = window?.frame.size ?? bounds.size
-        if statusBar?.superview != nil { size.height -= statusBar?.barHeight ?? 0 }
+        let fade = topFadeHeight
+        guard statusBar?.superview != nil else {
+            size.height -= fade
+            return size
+        }
+
+        let bar = statusBar?.barHeight ?? 0
+        switch GCTConfig.current.statusbarPosition {
+        case .top: size.height -= max(bar, fade)
+        case .bottom: size.height -= bar + fade
+        }
         return size
     }
     var panes = [PaneID: PaneView]()
@@ -117,6 +129,7 @@ final class CanvasView: NSView {
     var statusBar: StatusBarView?
     // [background] shader: screen-space Metal view under the world view.
     private var backgroundShader: BackgroundShaderView?
+    private let fill = FadedFillView()
 
     // IME composition state (NSTextInputClient below). markedText mirrors
     // the input context's preedit; keyTextAccumulator collects text the IME
@@ -154,6 +167,8 @@ final class CanvasView: NSView {
         addSubview(worldView)
         worldView.frame = bounds
         worldView.autoresizingMask = [.width, .height]
+        fill.frame = bounds
+        addSubview(fill, positioned: .below, relativeTo: worldView)
         window?.acceptsMouseMovedEvents = true
         setupStatusBar()
 
@@ -186,10 +201,8 @@ final class CanvasView: NSView {
         GCTTheme.refresh(ghostty: ghosttyApp?.colors ?? GhosttyColors())
         let bg = GCTTheme.current.canvasBackground
         // A live shader replaces the color; its alpha stays in play.
-        let shaded = syncBackgroundShader(opacity: bg.alphaComponent)
-        window?.backgroundColor = shaded ? .clear : bg
-        // Alpha < 1 needs a non-opaque window or AppKit ignores it.
-        window?.isOpaque = !shaded && bg.alphaComponent >= 1
+        _ = syncBackgroundShader(opacity: bg.alphaComponent)
+        syncFill()
         // Border width is theme state: applyChrome relayouts before
         // repainting, then the surface follows the inset terminal frame.
         for pane in panes.values { pane.applyChrome(); pane.syncSurfaceSize() }
@@ -216,7 +229,7 @@ final class CanvasView: NSView {
 
         if backgroundShader == nil, let view = BackgroundShaderView(rect: bounds) {
             view.autoresizingMask = [.width, .height]
-            addSubview(view, positioned: .below, relativeTo: worldView)
+            fill.addSubview(view)
             backgroundShader = view
         }
         guard let view = backgroundShader else { return false }
@@ -313,8 +326,38 @@ final class CanvasView: NSView {
         bar.refresh()
     }
 
+    // Configured fade, but only while a menubar sits above the window:
+    // autohidden, the visible frame reaches the screen top and there is
+    // nothing to blend into.
+    private var topFadeHeight: CGFloat {
+        guard let screen = window?.screen ?? NSScreen.main else { return 0 }
+        guard screen.frame.maxY > screen.visibleFrame.maxY else { return 0 }
+        return GCTConfig.current.topFade
+    }
+
+    // Who paints the canvas color: the window when the edge is hard, the
+    // fill view when it fades (the window background can't be masked, so
+    // it goes clear). A shader paints itself inside the fill either way.
+    private func syncFill() {
+        let bg = GCTTheme.current.canvasBackground
+        let shaded = backgroundShader != nil
+        let fade = topFadeHeight
+        let fading = fade > 0
+
+        fill.fadeHeight = fade
+        fill.exponential = GCTConfig.current.topFadeExp
+        fill.setColor(fading && !shaded ? bg : nil)
+        // No window shadow: on a non-opaque window it traces the canvas
+        // edge as a dark hairline under the menubar.
+        window?.hasShadow = false
+        window?.backgroundColor = shaded || fading ? .clear : bg
+        // Alpha < 1 needs a non-opaque window or AppKit ignores it.
+        window?.isOpaque = !shaded && !fading && bg.alphaComponent >= 1
+    }
+
     override func layout() {
         super.layout()
+        syncFill()
         layoutStatusBar()
     }
 
@@ -3279,7 +3322,7 @@ final class CanvasView: NSView {
             && statusBar?.superview != nil ? statusBar?.barHeight ?? 0 : 0
         animateCamera(to: Camera(
             offset: CGPoint(x: screen.width / 2 - r.midX * camera.scale,
-                            y: screen.height / 2 + yOff / 2 - r.midY * camera.scale),
+                            y: screen.height / 2 + yOff - r.midY * camera.scale),
             scale: camera.scale))
     }
 
@@ -3296,7 +3339,7 @@ final class CanvasView: NSView {
             && statusBar?.superview != nil ? statusBar?.barHeight ?? 0 : 0
         animateCamera(to: Camera(
             offset: CGPoint(x: screen.width / 2 - r.midX * fit,
-                            y: screen.height / 2 + yOff / 2 - r.midY * fit),
+                            y: screen.height / 2 + yOff - r.midY * fit),
             scale: fit))
     }
 
@@ -3376,7 +3419,7 @@ final class CanvasView: NSView {
             && statusBar?.superview != nil ? statusBar?.barHeight ?? 0 : 0
         animateCamera(to: Camera(
             offset: CGPoint(x: screen.width / 2 - bbox.midX * fit,
-                            y: screen.height / 2 + yOff / 2 - bbox.midY * fit),
+                            y: screen.height / 2 + yOff - bbox.midY * fit),
             scale: fit))
     }
 
@@ -3427,7 +3470,11 @@ final class CanvasView: NSView {
         _ = exitZoomRestore()
 
         let screen = viewportSize
-        let mid = CGPoint(x: screen.width / 2, y: screen.height / 2)
+        // Viewport center sits above a bottom bar (y-up: its strip is the
+        // bottom `barH` points).
+        let barH = statusBar?.superview != nil
+            && GCTConfig.current.statusbarPosition == .bottom ? statusBar?.barHeight ?? 0 : 0
+        let mid = CGPoint(x: screen.width / 2, y: screen.height / 2 + barH)
         var center = camera.screenToWorld(mid)
         if let id = cmd.pane, let pane = panes[id] {
             center = CGPoint(x: pane.frame.midX, y: pane.frame.midY)

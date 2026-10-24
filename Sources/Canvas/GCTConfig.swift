@@ -428,6 +428,10 @@ struct GCTConfig {
     var backgroundShader: String?
     var backgroundShaderFPS = 60
     var backgroundShaderScale: CGFloat = 1
+    // Height in points of the fade from the canvas into the menubar.
+    var topFade: CGFloat = 32
+    // Fade hugs the menubar (exponential) instead of a smoothstep ramp.
+    var topFadeExp = true
     var titlebarBackground = GCTModeColor()
     var titlebarText = GCTModeColor()
     // Border fill (default: the titlebar background), selection/zoom
@@ -688,6 +692,12 @@ struct GCTConfig {
         if let v = bg["shader-scale"], let n = Double(v), (0.1...1.0).contains(n) {
             cfg.backgroundShaderScale = CGFloat(n)
         }
+        if let v = bg["top-fade"], let n = Double(v), (0.0...256.0).contains(n) {
+            cfg.topFade = CGFloat(n)
+        }
+        if let v = bg["top-fade-exponential"] {
+            cfg.topFadeExp = flag(v, cfg.topFadeExp)
+        }
 
         let tb = t["titlebar"] ?? [:]
         cfg.titlebarBackground = modeColor(tb, "background")
@@ -936,6 +946,13 @@ struct GCTConfig {
     # Render resolution vs native (0.1-1). Raymarchers are GPU hogs:
     # 0.5 costs a quarter and looks the same on soft shaders.
     # shader-scale = 1
+    # The canvas fades out over this many points at its top edge, so it
+    # blends into the menubar instead of ending in a hard line. 0 = off.
+    top-fade = 32
+    # Exponential falloff: the canvas stays solid until close to the
+    # menubar, then decays fast right at its edge. false = even
+    # smoothstep ramp.
+    top-fade-exponential = true
 
     [titlebar]
     # Pane titlebar colors. RGBA hex like "#2b2b2b" or "#2b2b2bcc", or
