@@ -505,6 +505,8 @@ struct GCTConfig {
     // Camera fits and centering dodge the system picture-in-picture
     // window: panes land in the free strip beside it, not under it.
     var pipAware = true
+    // cmd+z fullscreen follows the same rule (needs pip-aware too).
+    var pipAwareZoom = true
     // Hover behavior: focus-follows-mouse focuses the pane under the
     // cursor on motion (same name as ghostty); scroll-on-terminal-hover
     // routes wheel/trackpad scroll to the hovered terminal, else pan
@@ -634,6 +636,9 @@ struct GCTConfig {
         }
         if let v = root["pip-aware"] {
             cfg.pipAware = flag(v, cfg.pipAware)
+        }
+        if let v = root["pip-aware-zoom"] {
+            cfg.pipAwareZoom = flag(v, cfg.pipAwareZoom)
         }
         if let v = root["camera-on-focus-click"],
            let c = GCTClickCamera(rawValue: v.lowercased()) {
@@ -929,6 +934,9 @@ struct GCTConfig {
     # resize, click) lands panes in the free strip beside the PiP window
     # instead of under it. Checked at fit time; the PiP isn't tracked.
     pip-aware = true
+    # cmd+z fullscreen fills the free strip beside the PiP instead of the
+    # whole viewport. Needs pip-aware = true.
+    pip-aware-zoom = true
     # Clicking another pane to focus it: "none", "center" (keep zoom) or
     # "fit" (zoom to fit). Runs on release, only for a click, never a drag.
     camera-on-focus-click = "center"

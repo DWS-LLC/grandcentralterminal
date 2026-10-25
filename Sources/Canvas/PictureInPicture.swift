@@ -30,6 +30,13 @@ enum PictureInPicture {
         return free
     }
 
+    // The PiP window in view coords (y-up); nil without one or when
+    // `pip-aware` is off.
+    static func rect(in view: NSView) -> CGRect? {
+        guard GCTConfig.current.pipAware else { return nil }
+        return windowRect(in: view)
+    }
+
     // Best strip of `viewport` clear of `pip`; nil when the PiP doesn't
     // touch it or covers all of it.
     private static func dodge(_ pip: CGRect, in viewport: CGRect, for content: CGSize) -> CGRect? {

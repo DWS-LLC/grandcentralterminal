@@ -78,6 +78,9 @@ camera-fits-resize = true
 # Picture-in-picture: every camera fit/center lands panes in the free strip
 # beside the PiP window instead of under it. Checked at fit time.
 pip-aware = true
+# cmd+z fullscreen fills the free strip beside the PiP, not the whole
+# viewport. Needs pip-aware = true.
+pip-aware-zoom = true
 
 # Focus the pane under the cursor on mouse motion (ghostty's name for it).
 focus-follows-mouse = false

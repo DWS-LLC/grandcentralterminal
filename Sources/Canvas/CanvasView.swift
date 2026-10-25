@@ -51,11 +51,15 @@ final class CanvasView: NSView {
     // Where a camera fit lands `content` (screen points): the viewport
     // above a bottom bar, minus the strip a PiP window covers.
     private func fitRect(for content: CGSize) -> CGRect {
+        PictureInPicture.freeRect(in: fitViewport, for: content, view: self)
+    }
+
+    // The viewport above a bottom bar, before any PiP is dodged.
+    private var fitViewport: CGRect {
         let barH = GCTConfig.current.statusbarEnabled
             && GCTConfig.current.statusbarPosition == .bottom
             && statusBar?.superview != nil ? statusBar?.barHeight ?? 0 : 0
-        let viewport = CGRect(origin: CGPoint(x: 0, y: barH), size: viewportSize)
-        return PictureInPicture.freeRect(in: viewport, for: content, view: self)
+        return CGRect(origin: CGPoint(x: 0, y: barH), size: viewportSize)
     }
     var panes = [PaneID: PaneView]()
     var zOrder = [PaneID]()
@@ -3279,6 +3283,7 @@ final class CanvasView: NSView {
     // another host can't consume our ask. Stale asks (refused) expire.
     private static let ownPaneAskTTL: TimeInterval = 5
     private static let fitMargin: CGFloat = 0.96
+    private static let fitAllMargin: CGFloat = 0.92
     private var ownPaneAsks = [(owner: String, at: Date)]()
 
     func askPane(_ req: CreatePane, owner: String) {
@@ -3350,7 +3355,10 @@ final class CanvasView: NSView {
         // is already excluded by viewportSize at origin 0.
         let barH = statusBar?.superview != nil ? statusBar?.barHeight ?? 0 : 0
         let originY = GCTConfig.current.statusbarPosition == .bottom ? barH : 0
-        let r = NSRect(origin: CGPoint(x: 0, y: originY), size: viewportSize)
+        var r = NSRect(origin: CGPoint(x: 0, y: originY), size: viewportSize)
+        if GCTConfig.current.pipAwareZoom {
+            r = PictureInPicture.freeRect(in: r, for: r.size, view: self)
+        }
         // Drop any vector-zoom scale first (grid held): the reflow below
         // would otherwise run at camera-zoom scale, e.g. cols / 2 at 2x.
         pane.syncRenderZoom(camera: 1)
@@ -3393,12 +3401,34 @@ final class CanvasView: NSView {
                                          height: bbox.height * camera.scale))
         let fit = max(min(target.width / bbox.width,
                       target.height / bbox.height,
-                      Camera.maxScale) * 0.92,
+                      Camera.maxScale) * Self.fitAllMargin,
                       Camera.minScale)
-        animateCamera(to: Camera(
+        var cam = Camera(
             offset: CGPoint(x: target.midX - bbox.midX * fit,
                             y: target.midY - bbox.midY * fit),
-            scale: fit))
+            scale: fit)
+
+        if let packed = packedFit(), packed.scale > cam.scale {
+            cam = packed
+        }
+        animateCamera(to: cam)
+    }
+
+    // Fit-all that lets panes use the bbox's empty corners next to a PiP
+    // window, not just the strip beside it. Nil without a PiP.
+    private func packedFit() -> Camera? {
+        guard let pip = PictureInPicture.rect(in: self) else { return nil }
+
+        let view = fitViewport
+        let slack = (1 - Self.fitAllMargin) / 2
+        let padX = view.width * slack
+        let padY = view.height * slack
+        let gap = min(padX, padY)
+
+        return FitSolver.fit(panes.values.map { $0.frame },
+                             in: view.insetBy(dx: padX, dy: padY),
+                             keepOut: pip.insetBy(dx: -gap, dy: -gap),
+                             scales: Camera.minScale...Camera.maxScale)
     }
 
     // (timer, from, to, start time, duration seconds)
