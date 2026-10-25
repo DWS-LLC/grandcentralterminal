@@ -70,8 +70,14 @@ move-focus-on-new-window = true
 # fit it. Independent; both true just zooms to fit.
 camera-follows-focus-move = true
 camera-fits-focus-move = true
+# cmd+h/j/k/l remember where you came from: the opposite key goes back to
+# that pane, even when staggered panes make another one nearer.
+focus-move-memory = true
 # Zoom to fit a pane after resizing it (mouse or keyboard).
 camera-fits-resize = true
+# Picture-in-picture: every camera fit/center lands panes in the free strip
+# beside the PiP window instead of under it. Checked at fit time.
+pip-aware = true
 
 # Focus the pane under the cursor on mouse motion (ghostty's name for it).
 focus-follows-mouse = false
@@ -92,6 +98,11 @@ camera-animation-duration = 0.28
 
 ```toml
 [background]
+# The canvas fades out over this many points at its top edge, so it blends
+# into the menubar. 0 = off. Exponential keeps it solid until close to the
+# menubar; false = even smoothstep ramp.
+top-fade = 32
+top-fade-exponential = true
 # Canvas background per mode. Hex like "#1a1b26", or with alpha like
 # "#1a1b2680". Alpha < 1 makes the canvas transparent, showing the desktop.
 # Transparent canvas is look-but-don't-touch: empty space stops receiving

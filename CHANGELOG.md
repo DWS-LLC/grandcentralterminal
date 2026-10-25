@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.9.0
+
+### Added
+- `pip-aware` (default true): camera fits and centering land panes in the free strip beside the picture-in-picture window, not under it.
+- `focus-move-memory` (default true): cmd+h/j/k/l remember where you came from, so the opposite key goes back, staggered layouts included.
+- `[background]` `top-fade` / `top-fade-exponential`: the canvas fades into the menubar.
+
+### Fixed
+- Camera fits clear the top fade strip; bottom-bar centering was off.
+
 ## v0.8.0
 
 ### Added

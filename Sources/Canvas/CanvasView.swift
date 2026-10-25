@@ -47,6 +47,16 @@ final class CanvasView: NSView {
         }
         return size
     }
+
+    // Where a camera fit lands `content` (screen points): the viewport
+    // above a bottom bar, minus the strip a PiP window covers.
+    private func fitRect(for content: CGSize) -> CGRect {
+        let barH = GCTConfig.current.statusbarEnabled
+            && GCTConfig.current.statusbarPosition == .bottom
+            && statusBar?.superview != nil ? statusBar?.barHeight ?? 0 : 0
+        let viewport = CGRect(origin: CGPoint(x: 0, y: barH), size: viewportSize)
+        return PictureInPicture.freeRect(in: viewport, for: content, view: self)
+    }
     var panes = [PaneID: PaneView]()
     var zOrder = [PaneID]()
     private(set) var focusedID: PaneID?
@@ -3289,31 +3299,27 @@ final class CanvasView: NSView {
     // center up so the pane never hides under it.
     func centerOnPane(_ id: PaneID) {
         guard let pane = panes[id] else { return }
-        let screen = viewportSize
         let r = pane.frame
-        let yOff = GCTConfig.current.statusbarEnabled
-            && GCTConfig.current.statusbarPosition == .bottom
-            && statusBar?.superview != nil ? statusBar?.barHeight ?? 0 : 0
+        let target = fitRect(for: CGSize(width: r.width * camera.scale,
+                                         height: r.height * camera.scale))
         animateCamera(to: Camera(
-            offset: CGPoint(x: screen.width / 2 - r.midX * camera.scale,
-                            y: screen.height / 2 + yOff - r.midY * camera.scale),
+            offset: CGPoint(x: target.midX - r.midX * camera.scale,
+                            y: target.midY - r.midY * camera.scale),
             scale: camera.scale))
     }
 
     func zoomToPane(_ id: PaneID, margin: CGFloat = CanvasView.fitMargin) {
         guard let pane = panes[id] else { return }
-        let screen = viewportSize
         let r = pane.frame
-        let fit = max(min(margin * screen.width / r.width,
-                      margin * screen.height / r.height,
+        let target = fitRect(for: CGSize(width: r.width * camera.scale,
+                                         height: r.height * camera.scale))
+        let fit = max(min(margin * target.width / r.width,
+                      margin * target.height / r.height,
                       Camera.maxScale),
                       Camera.minScale)
-        let yOff = GCTConfig.current.statusbarEnabled
-            && GCTConfig.current.statusbarPosition == .bottom
-            && statusBar?.superview != nil ? statusBar?.barHeight ?? 0 : 0
         animateCamera(to: Camera(
-            offset: CGPoint(x: screen.width / 2 - r.midX * fit,
-                            y: screen.height / 2 + yOff - r.midY * fit),
+            offset: CGPoint(x: target.midX - r.midX * fit,
+                            y: target.midY - r.midY * fit),
             scale: fit))
     }
 
@@ -3383,17 +3389,15 @@ final class CanvasView: NSView {
         guard !zOrder.isEmpty else { return }
         var bbox = CGRect.null
         for pane in panes.values { bbox = bbox.union(pane.frame) }
-        let screen = viewportSize
-        let fit = max(min(screen.width / bbox.width,
-                      screen.height / bbox.height,
+        let target = fitRect(for: CGSize(width: bbox.width * camera.scale,
+                                         height: bbox.height * camera.scale))
+        let fit = max(min(target.width / bbox.width,
+                      target.height / bbox.height,
                       Camera.maxScale) * 0.92,
                       Camera.minScale)
-        let yOff = GCTConfig.current.statusbarEnabled
-            && GCTConfig.current.statusbarPosition == .bottom
-            && statusBar?.superview != nil ? statusBar?.barHeight ?? 0 : 0
         animateCamera(to: Camera(
-            offset: CGPoint(x: screen.width / 2 - bbox.midX * fit,
-                            y: screen.height / 2 + yOff - bbox.midY * fit),
+            offset: CGPoint(x: target.midX - bbox.midX * fit,
+                            y: target.midY - bbox.midY * fit),
             scale: fit))
     }
 
