@@ -50,6 +50,7 @@ final class CanvasView: NSView {
     var panes = [PaneID: PaneView]()
     var zOrder = [PaneID]()
     private(set) var focusedID: PaneID?
+    private var focusTrail = FocusTrail()
     // Multi-select: staged pane ids (right-drag, shift+click, cmd+d)
     // that act as a unit for move/close/group WITHOUT being a daemon
     // group. Cleared on empty clicks, close, and explicit clear.
@@ -3211,43 +3212,16 @@ final class CanvasView: NSView {
     // MARK: Camera actions
 
     // Directional focus move (cmd+h/j/k/l): focus the nearest pane in
-    // the given direction from the focused pane. Candidates must overlap
-    // the focused pane on the perpendicular axis (like a tiling WM: only
-    // panes actually in that direction count); the nearest wins by gap
-    // between facing edges, ties broken by less perpendicular drift.
+    // the given direction from the focused pane (see FocusTrail: only
+    // panes overlapping on the perpendicular axis count, nearest gap
+    // wins, and the opposite key returns where you came from).
     // Camera: zoom-to-fit when camera-fits-focus-move, else recenter at
     // the current scale when camera-follows-focus-move.
     func moveFocus(_ dir: GCTNewWindowDirection) {
         guard let focused = focusedID.flatMap({ panes[$0] }) else { return }
-        let f = focused.frame
-        let fcx = f.midX, fcy = f.midY
-        var best: (id: PaneID, gap: CGFloat, drift: CGFloat)?
-        for (id, pane) in panes where id != focused.id {
-            let r = pane.frame
-            let gap: CGFloat
-            let drift: CGFloat
-            switch dir {
-            case .left:
-                guard r.maxX <= f.minX + 0.5, r.maxY > f.minY, r.minY < f.maxY else { continue }
-                gap = f.minX - r.maxX
-                drift = abs(r.midY - fcy)
-            case .right:
-                guard r.minX >= f.maxX - 0.5, r.maxY > f.minY, r.minY < f.maxY else { continue }
-                gap = r.minX - f.maxX
-                drift = abs(r.midY - fcy)
-            case .above:
-                guard r.minY >= f.maxY - 0.5, r.maxX > f.minX, r.minX < f.maxX else { continue }
-                gap = r.minY - f.maxY
-                drift = abs(r.midX - fcx)
-            case .below:
-                guard r.maxY <= f.minY + 0.5, r.maxX > f.minX, r.minX < f.maxX else { continue }
-                gap = f.minY - r.maxY
-                drift = abs(r.midX - fcx)
-            }
-            if let b = best, (gap, drift) >= (b.gap, b.drift) { continue }
-            best = (id, gap, drift)
-        }
-        guard let target = best?.id else { return }
+        let mode: FocusTrail.Mode = GCTConfig.current.focusMoveMemory ? .remembered : .geometric
+        let rects = panes.mapValues { $0.frame }
+        guard let target = focusTrail.next(dir, from: focused.id, rects: rects, mode: mode) else { return }
         focusPane(target)
         followFocus(target)
     }

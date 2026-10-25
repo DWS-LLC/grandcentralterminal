@@ -497,6 +497,9 @@ struct GCTConfig {
     // pane, and/or zoom to fit it. Independent; both default true (fit
     var cameraFollowsFocusMove = true
     var cameraFitsFocusMove = true
+    // cmd+h/j/k/l remember where you came from: the opposite key goes
+    // back, staggered layouts included.
+    var focusMoveMemory = true
     // Zoom to fit a pane after resizing it (mouse or keyboard).
     var cameraFitsResize = true
     // Hover behavior: focus-follows-mouse focuses the pane under the
@@ -619,6 +622,9 @@ struct GCTConfig {
         }
         if let v = root["camera-fits-focus-move"] {
             cfg.cameraFitsFocusMove = flag(v, cfg.cameraFitsFocusMove)
+        }
+        if let v = root["focus-move-memory"] {
+            cfg.focusMoveMemory = flag(v, cfg.focusMoveMemory)
         }
         if let v = root["camera-fits-resize"] {
             cfg.cameraFitsResize = flag(v, cfg.cameraFitsResize)
@@ -907,6 +913,10 @@ struct GCTConfig {
     # the camera still.
     camera-follows-focus-move = true
     camera-fits-focus-move = true
+    # cmd+h/j/k/l remember where you came from: the opposite key goes
+    # back to that pane, even when staggered panes make another one
+    # nearer. Set false for pure nearest-edge geometry.
+    focus-move-memory = true
     # Zoom to fit a pane after you resize it (mouse or keyboard).
     camera-fits-resize = true
     # Clicking another pane to focus it: "none", "center" (keep zoom) or
