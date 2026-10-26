@@ -131,18 +131,21 @@ public struct CreatePane: Codable, Sendable {
     // pushed away from the rest. rect only supplies the size. Ignored
     // with joinGroup. Decodes missing (old clients) as nil.
     public var orbitAround: PaneID?
+    // The pane this one was spawned from (cables, spring links); a spawn
+    // that orbits a caller has that caller as parent. Decodes missing as nil.
+    public var parent: PaneID?
     public init(rect: Rect, cwd: String? = nil, name: String? = nil,
                 command: String? = nil, allowOverlap: Bool = false, gap: Double = 0,
                 joinGroup: GroupID? = nil, joinDirection: String? = nil,
-                orbitAround: PaneID? = nil) {
+                orbitAround: PaneID? = nil, parent: PaneID? = nil) {
         self.rect = rect; self.cwd = cwd; self.name = name
         self.command = command; self.allowOverlap = allowOverlap; self.gap = gap
         self.joinGroup = joinGroup; self.joinDirection = joinDirection
-        self.orbitAround = orbitAround
+        self.orbitAround = orbitAround; self.parent = parent
     }
     enum CodingKeys: String, CodingKey {
         case rect, cwd, name, command, allowOverlap, gap, joinGroup, joinDirection
-        case orbitAround
+        case orbitAround, parent
     }
     public init(from decoder: any Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -155,6 +158,7 @@ public struct CreatePane: Codable, Sendable {
         joinGroup = try c.decodeIfPresent(GroupID.self, forKey: .joinGroup)
         joinDirection = try c.decodeIfPresent(String.self, forKey: .joinDirection)
         orbitAround = try c.decodeIfPresent(PaneID.self, forKey: .orbitAround)
+        parent = try c.decodeIfPresent(PaneID.self, forKey: .parent)
     }
 }
 

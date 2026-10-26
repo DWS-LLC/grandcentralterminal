@@ -54,6 +54,21 @@ glance:
 foreground command only counts once it holds for about a second, so an `ls`
 doesn't flicker the title. Remote panes are named per host.
 
+## Cables
+
+A pane that spawned another (`gctd open` from it, `⌘T` and `⌘⇧H/J/K/L` from the
+focused pane) is wired to it with a cable, colored by the parent's group (else
+its repo). Cables are ropes: they sag, swing when you drag a pane, and settle,
+leaving each pane edge square. A pane side with several cables spreads them
+along the edge in the order that keeps them from crossing, and cables touching
+the focused pane sit forward.
+
+Strands leaving one pane side get a **tie** that gathers them into a bundle.
+Double-click any cable to add a tie around the strands passing there, drag a
+tie to slide it along the cable, double-click a tie to remove it. Ties on a
+shared cable never pass or overlap each other. Ties last for the session.
+`cables = false` turns all of it off.
+
 ## Dim and notices
 
 Unfocused panes that have gone quiet fade (`dim-inactive`, `dim-delay`);

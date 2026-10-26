@@ -755,7 +755,7 @@ final class Server {
         let cwd = req.cwd ?? NSHomeDirectory()
         var meta = PaneMeta(id: PaneID(), rect: rect, name: req.name,
                             cwd: cwd, host: "local", title: nil, exited: false)
-        meta.parent = req.orbitAround
+        meta.parent = req.parent ?? req.orbitAround
         let pane = Pane(meta: meta, command: req.command)
         do {
             try pane.spawn(cols: 80, rows: 24)

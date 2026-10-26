@@ -515,6 +515,8 @@ struct GCTConfig {
     // Desktop notifications: OSC 9/777, bell, OSC 7501 blocked/done/error,
     // and `gctd notify`, from panes you are not looking at.
     var notifications = true
+    // Cables between a pane and the panes it spawned, with slidable ties.
+    var cables = true
     // Hover behavior: focus-follows-mouse focuses the pane under the
     // cursor on motion (same name as ghostty); scroll-on-terminal-hover
     // routes wheel/trackpad scroll to the hovered terminal, else pan
@@ -656,6 +658,9 @@ struct GCTConfig {
         }
         if let v = root["notifications"] {
             cfg.notifications = flag(v, cfg.notifications)
+        }
+        if let v = root["cables"] {
+            cfg.cables = flag(v, cfg.cables)
         }
         if let v = root["camera-on-focus-click"],
            let c = GCTClickCamera(rawValue: v.lowercased()) {
@@ -964,6 +969,10 @@ struct GCTConfig {
     # the bell, OSC 7501 blocked/done/error, and `gctd notify`. Clicking
     # one focuses the pane.
     notifications = true
+    # Cables from a pane to the panes it spawned (gctd open, cmd+t from it).
+    # Double-click a cable to tie strands together; drag a tie to slide it,
+    # double-click it to remove.
+    cables = true
     # Clicking another pane to focus it: "none", "center" (keep zoom) or
     # "fit" (zoom to fit). Runs on release, only for a click, never a drag.
     camera-on-focus-click = "center"

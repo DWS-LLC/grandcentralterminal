@@ -72,6 +72,7 @@ final class HostHub {
     func inboundPane(_ meta: PaneMeta, owner: String) -> PaneMeta {
         var m = meta
         m.id = localPane(remote: meta.id, owner: owner)
+        m.parent = meta.parent.map { localPane(remote: $0, owner: owner) }
         // Tag the host so chrome/switcher read the owner, not "local".
         m.host = owner
         return m
@@ -159,7 +160,10 @@ final class HostHub {
     // Unknown ids (stale views mid-reconnect) are dropped silently.
 
     func createPane(_ req: CreatePane, owner: String) {
-        conns[owner]?.createPane(req)
+        // A parent only means something on the daemon that owns it.
+        var out = req
+        out.parent = req.parent.flatMap { paneOwner[$0] == owner ? paneRemote[$0] : nil }
+        conns[owner]?.createPane(out)
     }
 
     func attachPane(_ req: AttachPane) {

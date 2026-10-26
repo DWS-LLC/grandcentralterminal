@@ -88,6 +88,9 @@ dim-delay = 4
 # Desktop notifications from panes you are not looking at: OSC 9/777, the
 # bell, OSC 7501 blocked/done/error, and `gctd notify`. Click focuses the pane.
 notifications = true
+# Cables from a pane to the panes it spawned, with slidable ties
+# (double-click a cable to add one, a tie to remove it).
+cables = true
 
 # Focus the pane under the cursor on mouse motion (ghostty's name for it).
 focus-follows-mouse = false

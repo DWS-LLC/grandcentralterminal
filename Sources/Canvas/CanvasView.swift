@@ -103,6 +103,8 @@ final class CanvasView: NSView {
     let notifier = Notifier()
     let notices = NoticeState()
     let dimTicker = DimTicker()
+    let cableView = CableView()
+    let cableMemo = CableMemo()
     lazy var autoNameRefresh = Coalescer { [weak self] in self?.refreshAutoNames() }
 
     // Drag state machine.
@@ -192,6 +194,7 @@ final class CanvasView: NSView {
         setupStatusBar()
         setupNotices()
         setupDim()
+        setupCables()
 
         _ = hub.connectLocal(sockPath: CanvasPaths.sockPath, delegate: self)
         syncRemotes()
@@ -330,7 +333,8 @@ final class CanvasView: NSView {
             cwd: cwd,
             name: exe.split(separator: "/").last.map(String.init),
             command: cmd,
-            allowOverlap: GCTConfig.current.allowWindowOverlap, gap: currentGap()), owner: "local")
+            allowOverlap: GCTConfig.current.allowWindowOverlap, gap: currentGap(),
+            parent: focusedID), owner: "local")
     }
 
     private func layoutStatusBar() {
@@ -1023,6 +1027,12 @@ final class CanvasView: NSView {
         window?.makeFirstResponder(self)
         pendingClickFocus = nil
         let world = worldPoint(event)
+        // Cables sit under the panes: a pane hit wins, then ties and cables.
+        if topPane(at: world, grab: camera.screenToWorldDistance(5)) == nil,
+           cableMouseDown(world, clicks: event.clickCount) {
+            drag = .none
+            return
+        }
         if let pane = topPane(at: world, grab: camera.screenToWorldDistance(5)) {
             // Shift+click on chrome (titlebar/border, NOT the terminal
             // surface) toggles multi-select; terminal-area shift+click
@@ -1125,6 +1135,7 @@ final class CanvasView: NSView {
     }
 
     override func mouseDragged(with event: NSEvent) {
+        if cableMouseDragged(worldPoint(event)) { return }
         // Opt-drag armed on empty space: past the click threshold it
         // becomes a drag-to-create (world-space rect + size pill).
         if let anchor = pendingCreate, isIdleDrag {
@@ -1556,6 +1567,7 @@ final class CanvasView: NSView {
     }
 
     override func mouseUp(with event: NSEvent) {
+        if cableMouseUp() { return }
         defer { pendingClickFocus = nil }
         // Opt-click (armed, never dragged): clear the arm, no pane.
         if pendingCreate != nil, isIdleDrag {
@@ -2817,7 +2829,8 @@ final class CanvasView: NSView {
             rect: Rect(x: r.minX, y: r.minY, w: r.width, h: r.height),
             cwd: cwd,
             allowOverlap: GCTConfig.current.allowWindowOverlap, gap: currentGap(),
-            joinGroup: remoteJoin, joinDirection: direction.rawValue), owner: owner)
+            joinGroup: remoteJoin, joinDirection: direction.rawValue,
+            parent: focusedID), owner: owner)
     }
 
     // Drag-to-create: open a pane at the drawn rect (already snapped).
