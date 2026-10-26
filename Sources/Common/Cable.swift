@@ -108,8 +108,8 @@ public final class CableSim {
     private static let fanOutS = [0.35, 0.28]
     private static let fanOutSpread = 48.0
     private static let portSpacing = 10.0
-    // Ports stay this far from a pane's corners.
-    private static let portInset = 14.0
+    // Ports stay this share of a side's length away from each corner.
+    private static let portInsetShare = 0.15
     // Handle springs, per second: stiffness and damping (about 0.2 of
     // critical: a few bouncy swings, then still).
     private static let stiffness = 220.0
@@ -259,7 +259,7 @@ public final class CableSim {
         let vertical = first.side == .left || first.side == .right
         let r = first.rect
         let (from, to) = vertical ? (r.y, r.y + r.h) : (r.x, r.x + r.w)
-        let inset = min(portInset, (to - from) / 2)
+        let inset = (to - from) * portInsetShare
         let (lo, hi) = (from + inset, to - inset)
 
         let wanted = group.map { (ref: $0, at: ideal($0, vertical: vertical, lo: lo, hi: hi)) }
