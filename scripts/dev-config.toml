@@ -1,10 +1,15 @@
 # Dev canvas config (scripts/dev.sh). Loud on purpose: never mistake the
 # working-tree build for the live install. Unset keys take defaults.
 
+# Roomy gaps and a camera that recenters on focus moves without re-zooming
+# (easier to eyeball cables and layouts). Root keys come before any table.
+window-gap = 64
+camera-fits-focus-move = false
+
 [background]
 # Transparent red.
-dark = "#ff0000"
-light = "#ff0000"
+dark = "#770000"
+light = "#770000"
 
 [titlebar]
 # Borders share the titlebar color: ugly blue.
