@@ -91,6 +91,8 @@ public final class CableSim {
     // tie only goes where its strands are still travelling together.
     private static let fanOutS = [0.3, 0.2]
     private static let fanOutSpread = 48.0
+    // A slid tie holds strands no wider apart than this.
+    private static let holdSpread = 64.0
     private static let portSpacing = 8.0
     private static let slack = 1.04
     private static let gravity = 520.0
@@ -568,9 +570,30 @@ public final class CableSim {
 
         let f = Self.along(c.pts, p)
         let s = (f - Double(lead.delta)) / Double(Self.points - 1)
-        ties[i].s = clear(ties[i], at: s)
+        let next = clear(ties[i], at: s)
+
+        // Strands that part ways would knot at the tie: it stops where they
+        // do, but may always slide back toward where they run together.
+        let now = grip(ties[i], at: ties[i].s)
+        if grip(ties[i], at: next) > Self.holdSpread, grip(ties[i], at: next) > now { return }
+
+        ties[i].s = next
         wake()
         refreshTies()
+    }
+
+    // Widest gap between the tie's strands (their fair curves) at `s`.
+    private func grip(_ t: CableTie, at s: Double) -> Double {
+        let at = t.members.compactMap { m -> Vec? in
+            guard let c = cables[m.key] else { return nil }
+            let k = Int((s * Double(Self.points - 1)).rounded()) + m.delta
+            return c.shape[min(max(k, 0), Self.points - 1)]
+        }
+        var widest = 0.0
+        for (i, p) in at.enumerated() {
+            for q in at[(i + 1)...] { widest = max(widest, (p - q).length) }
+        }
+        return widest
     }
 
     // `s` held off the cable ends and the closest ties either side.
