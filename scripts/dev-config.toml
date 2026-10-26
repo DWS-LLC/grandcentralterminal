@@ -1,20 +1,23 @@
-# Dev canvas config (scripts/dev.sh). Loud on purpose: never mistake the
-# working-tree build for the live install. Unset keys take defaults.
+# Dev canvas config (scripts/dev.sh): Gruvbox Dark chrome, roomy gaps.
+# Unset keys take defaults.
 
 # Roomy gaps and a camera that recenters on focus moves without re-zooming
 # (easier to eyeball cables and layouts). Root keys come before any table.
 window-gap = 64
 camera-fits-focus-move = false
+snap-guide-color = "#fe8019"
 
 [background]
-# Transparent red.
-dark = "#770000"
-light = "#770000"
+# Gruvbox bg0_hard, so the bg0 panes stand out.
+dark = "#1d2021"
+light = "#1d2021"
 
 [titlebar]
-# Borders share the titlebar color: ugly blue.
-background = "#0000ff"
-text = "#ffffff"
+# Borders share the titlebar color. bg2, with fg text and a yellow accent
+# on the selected pane.
+background = "#504945"
+text = "#ebdbb2"
+accent = "#d79921"
 
 [doom]
 # The live canvas owns ctrl+space (a system-wide hotkey).

@@ -9,9 +9,8 @@
 #
 # Bare binaries, never an .app: a bundled build stages its gctd over the
 # live Application Support copy and arms the auto-updater. Config comes
-# from scripts/dev-config.toml (red canvas, blue borders, ctrl+alt+space,
-# 64pt gaps) and pane colors from scripts/dev-ghostty.conf (Gruvbox Dark);
-# export GCT_CONFIG_DIR to use another.
+# from scripts/dev-config.toml (Gruvbox Dark chrome, ctrl+alt+space, 64pt
+# gaps); export GCT_CONFIG_DIR to use another.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -65,16 +64,5 @@ if [ ! -S "$GCT_SOCK" ]; then
   echo "dev gctd never bound $GCT_SOCK:"; cat "$D/gctd.log"; exit 1
 fi
 
-# Gruvbox Dark in the panes (scripts/dev-ghostty.conf), on top of your own
-# ghostty config so fonts still apply. XDG_CONFIG_HOME is set for the canvas
-# alone: the daemon's shells keep your real one.
-XDG="$D/xdg"
-mkdir -p "$XDG/ghostty"
-{
-  echo "config-file = ?$HOME/.config/ghostty/config"
-  echo "config-file = ?$HOME/.config/ghostty/config.ghostty"
-  cat scripts/dev-ghostty.conf
-} > "$XDG/ghostty/config"
-
 echo "== dev canvas on $GCT_SOCK =="
-XDG_CONFIG_HOME="$XDG" "$REL/GrandCentralTerminal"
+"$REL/GrandCentralTerminal"
