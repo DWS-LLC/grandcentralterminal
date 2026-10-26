@@ -131,7 +131,7 @@ public final class CableSim {
     // A strand must reach a tie within this angle of the bundle's flow
     // (as a cosine): sideways or behind, it would loop back on itself. The
     // handles of a bend that sharp are shortened to this share, at least.
-    private static let minTurn = 0.2
+    private static let minTurn = 0.12
     private static let minHandle = 0.35
     private static let sampleEvery = 10.0
     private static let minSamples = 4
@@ -491,6 +491,20 @@ public final class CableSim {
         return sum * (1 / Double(max(v.count, 1)))
     }
 
+    // The way a cable travels, a -> b, by how it leaves and enters its panes.
+    // Ports on the same side of a pane share it however far the other ends
+    // are spread, so a hub's five children do not read as five directions.
+    private static func travel(_ c: Cable) -> Vec {
+        let out = unit(c.a.normal - c.b.normal)
+        return out.length > 0 ? out : unit(c.b.point - c.a.point)
+    }
+
+    // `v` scaled to length 1. The bundle's flow adds these up, so one strand
+    // that runs far (a steep climb) does not tilt it away from the rest.
+    private static func unit(_ v: Vec) -> Vec {
+        v.length > 1e-6 ? v * (1 / v.length) : Vec(0, 0)
+    }
+
     // The strands the tie can hold at `s`: those that pass it heading the
     // way the bundle flows. One that would have to double back through the
     // tie (a loop) is not held. The bundle's direction is the one the most
@@ -500,16 +514,15 @@ public final class CableSim {
         guard live.count >= 2 else { return live }
 
         let ends = live.map { (a: cables[$0.key]!.a.point, b: cables[$0.key]!.b.point) }
+        let runs = live.map { Self.travel(cables[$0.key]!) }
         let mid = live.map { Self.at(cables[$0.key]!.free, place(t, $0, at: s)) }
         var best = [Int]()
 
         for lead in live.indices {
-            let ref = ends[lead].b - ends[lead].a
             var flow = Vec(0, 0)
             var way = [Double]()
-            for e in ends {
-                let run = e.b - e.a
-                way.append(run.dot(ref) < 0 ? -1 : 1)
+            for run in runs {
+                way.append(run.dot(runs[lead]) < 0 ? -1 : 1)
                 flow = flow + run * way.last!
             }
             guard flow.length > 1e-6 else { continue }
@@ -625,18 +638,20 @@ public final class CableSim {
             let c = cables[key]!
             let before = k > 0 ? out.spots[chain[k - 1]]!.center : c.a.point
             let after = k + 1 < chain.count ? out.spots[chain[k + 1]]!.center : c.b.point
-            runs[key] = after - before
+            // Alone on its cable the tie sees the ports' own heading; spread
+            // ends would tilt the flow toward the steepest strand.
+            runs[key] = chain.count == 1 ? Self.travel(c) : after - before
             spot.before[key] = before
             spot.after[key] = after
         }
 
         // Strands running the opposite way are flipped so they don't cancel.
-        let lead = runs[spot.keys[0]]!
+        let lead = Self.travel(cables[spot.keys[0]]!)
         var sum = Vec(0, 0)
         for key in spot.keys {
-            let way = runs[key]!.dot(lead) < 0 ? -1.0 : 1.0
+            let way = Self.travel(cables[key]!).dot(lead) < 0 ? -1.0 : 1.0
             spot.way[key] = way
-            sum = sum + runs[key]! * way
+            sum = sum + Self.unit(runs[key]!) * way
         }
         if sum.length > 1e-6 { spot.flow = sum * (1 / sum.length) }
 
