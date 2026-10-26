@@ -3,7 +3,7 @@
 ## Unreleased
 
 ### Added
-- Cables: a pane is wired to the panes it spawned (`gctd open`, `⌘T`, `⌘⇧H/J/K/L`). Verlet ropes that sag and swing, leave each edge square, and spread along a pane side so strands don't cross. Each cable gets one palette color hashed from its start -> end window names when it first appears; `cable-color` takes a hex or `palette:N` for all. `cables = false` turns them off.
+- Cables: a pane is wired to the panes it spawned (`gctd open`, `⌘T`, `⌘⇧H/J/K/L`). Bézier cables whose handles hang on springs (they lag, overshoot, and settle when you move a pane), leave each edge square, and spread along a pane side so strands don't cross. Each cable gets one palette color hashed from its start -> end window names when it first appears; `cable-color` takes a hex or `palette:N` for all. `cables = false` turns them off.
 - Cable ties (grabbing a cable is forgiving: 14px reach, measured along the rope, not just its points): strands leaving a pane side are tied into a bundle. Press on a cable and drag across strands to tie them together; drag a tie to slide it along the cable (ties collide and keep their order, and stop where their strands part ways), double-click it to remove.
 
 ### Fixed

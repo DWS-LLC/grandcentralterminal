@@ -60,7 +60,7 @@ A pane that spawned another (`gctd open` from it, `⌘T` and `⌘⇧H/J/K/L` fro
 focused pane) is wired to it with a cable. Each cable gets one color from your
 ghostty palette, hashed from its "start -> end" window names when the cable
 first appears; it keeps that color if the windows are renamed later.
-`cable-color` paints every cable one hex or `palette:N` instead. Cables are ropes: they sag, swing when you drag a pane, and settle,
+`cable-color` paints every cable one hex or `palette:N` instead. Cables hang on springs: drag a pane and the ends follow while the curve lags, swings, and settles,
 leaving each pane edge square. A pane side with several cables spreads them
 along the edge in the order that keeps them from crossing, and cables touching
 the focused pane sit forward.

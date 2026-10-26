@@ -29,6 +29,8 @@ extension CanvasView {
     // Pixels around a cable or tie that still count as touching it.
     private static let grabReach: CGFloat = 14
     private static let cableLift: CGFloat = 0.3
+    // ANSI slots with a hue (not the blacks and whites), normal then bright.
+    private static let cablePalette = [1, 2, 3, 4, 5, 6, 9, 10, 11, 12, 13, 14]
     // A tie stroke shorter than this on screen is a click, not a stroke.
     private static let minStroke: CGFloat = 10
 
@@ -59,7 +61,8 @@ extension CanvasView {
 
         guard let from = panes[key.parent].flatMap({ $0.meta.name ?? $0.autoName }),
               let to = panes[key.child].flatMap({ $0.meta.name ?? $0.autoName }) else { return nil }
-        return lifted(GroupColor.resolve(nil, key: "\(from) -> \(to)"))
+        let slot = Self.cablePalette[Int(("\(from) -> \(to)").gctHash) % Self.cablePalette.count]
+        return lifted(GroupColor.resolve("\(GroupStyle.palettePrefix)\(slot)", key: ""))
     }
 
     private func cableColors(_ keys: Set<CableKey>) -> [CableKey: NSColor] {
