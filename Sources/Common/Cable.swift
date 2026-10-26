@@ -12,9 +12,11 @@
 //           follow at once while the handles lag, overshoot, and settle.
 //   ports   each pane side spreads its cables along the edge, ordered by
 //           where the other end sits, so strands leave uncrossed.
-//   tie     gathers the strands passing through one spot into a parallel
-//           bundle, blending back to the free curve over a few points on
-//           either side. Ties on a shared cable keep their order and a gap.
+//   tie     a waypoint every strand passes through, side by side, running
+//           parallel for a short stretch. Each strand is re-drawn as smooth
+//           curves port -> tie -> port, so strands stretch to the tie from
+//           anywhere (no length is conserved, no humps). Ties on a shared
+//           cable keep their order and a gap.
 //
 // The sim sleeps once everything is still; moving a port, a tie, or a pane
 // wakes it. Pure math, same as Spring: no AppKit, runs in the CLI.
@@ -49,7 +51,7 @@ public struct CableEnd: Sendable, Equatable {
 public struct Cable: Sendable {
     public var a: CableEnd    // parent port
     public var b: CableEnd    // child port
-    // What you see: the sprung curve sampled in points, ties applied.
+    // What you see: the sprung curve, re-drawn through its ties.
     public fileprivate(set) var pts: [Vec]
     // The two handles and their velocities; `r1`/`r2` are where they rest.
     fileprivate var h1: Vec
@@ -60,8 +62,8 @@ public struct Cable: Sendable {
     fileprivate var r2: Vec
     // The curve at rest: what ties and spread checks measure against.
     fileprivate var shape: [Vec]
-    // `pts` before ties bent it: what a sliding tie follows, so the strand
-    // it rides is not the one it is reshaping.
+    // The sprung curve in `points` samples, ties ignored: where ties sit
+    // (their `s` indexes it) and what a sliding tie follows.
     fileprivate var free: [Vec]
 }
 
@@ -92,7 +94,7 @@ public final class CableSim {
 
     public struct Hit: Sendable {
         public var key: CableKey
-        public var at: Double    // fractional point index along the cable
+        public var point: Vec    // nearest spot on the drawn cable
         public var distance: Double
     }
 
@@ -114,16 +116,18 @@ public final class CableSim {
     private static let maxSag = 36.0
     private static let strandGap = 3.2
     private static let tieThickness = 7.0
-    // Points either side of a tie that blend from the bundle back to the
-    // free curve: at least `tieReach`, more when the strands start far
-    // apart (so the funnel never gets steeper than ~45 degrees), at most
-    // the whole cable: a tie stretches strands from anywhere. And the
-    // margin a tie keeps from the cable ends.
-    private static let tieReach = 6.0
-    private static let maxReach = Double(points - 1)
+    // Half the stretch a bundle runs parallel through its tie, the share
+    // of a segment's length its handles reach, and how often a drawn
+    // segment is sampled.
+    private static let runHalf = 14.0
+    private static let handleShare = 0.4
+    private static let sampleEvery = 10.0
+    private static let minSamples = 4
+    // The margin a tie keeps from the cable ends.
     private static let tieEnds = 7
     private static let edgeMargin = 2.0
-    private static let tieGap = 12.0
+    private static let scanStep = 0.1
+    private static let tieGap = 40.0
     private static let bundleRadius = 12.0
     // Asleep after this many still frames; "still" is handle speed (and
     // displacement x calmGain) under calmMove.
@@ -318,8 +322,8 @@ public final class CableSim {
 
         for key in cables.keys {
             guard var c = cables[key] else { continue }
-            c.pts = Self.sample(c.a, c.b, c.h1, c.h2)
-            c.free = c.pts
+            c.free = Self.sample(c.a, c.b, c.h1, c.h2)
+            c.pts = c.free
             cables[key] = c
         }
         bundleTies()
@@ -353,9 +357,9 @@ public final class CableSim {
 
     // MARK: Ties
 
-    // Fractional point index where the tie grips member `m`.
-    private func place(_ t: CableTie, _ m: CableTie.Member) -> Double {
-        let f = t.s * Double(Self.points - 1) + m.delta
+    // Fractional point index where the tie at `s` grips member `m`.
+    private func place(_ t: CableTie, _ m: CableTie.Member, at s: Double? = nil) -> Double {
+        let f = (s ?? t.s) * Double(Self.points - 1) + m.delta
         return min(max(f, Self.edgeMargin), Double(Self.points - 1) - Self.edgeMargin)
     }
 
@@ -366,88 +370,141 @@ public final class CableSim {
         return pts[i] + (pts[i + 1] - pts[i]) * (g - Double(i))
     }
 
-    // Pull the strands through each tie into parallel slots across the
-    // bundle. The pull is full at the tie and eases to nothing over `reach`
-    // points either side, so cables fan out smoothly. The tie sits at a
-    // fractional point, so sliding it is continuous, not point to point.
-    private func bundleTies() {
-        for t in ties {
-            let live = t.members.filter { cables[$0.key] != nil }
-            guard !live.isEmpty else { continue }
-
-            let snap = live.map { cables[$0.key]!.pts }
-            let f = live.map { place(t, $0) }
-            let mid = live.indices.map { Self.at(snap[$0], f[$0]) }
-            let c = Self.mean(mid)
-            let cross = Self.cross(snap, f)
-            let reach = Self.reach(mid, around: c, seg: Self.length(snap[0]) / Double(Self.points - 1))
-
-            // Slots follow the strands' order across the bundle.
-            let order = live.indices.sorted {
-                let (p, q) = ((mid[$0] - c).dot(cross), (mid[$1] - c).dot(cross))
-                return p != q ? p < q : live[$0].key.order < live[$1].key.order
-            }
-
-            for (rank, i) in order.enumerated() {
-                let slot = (Double(rank) - Double(live.count - 1) / 2) * Self.strandGap
-                guard var cable = cables[live[i].key] else { continue }
-
-                let first = max(Int((f[i] - reach).rounded(.up)), 1)
-                let last = min(Int((f[i] + reach).rounded(.down)), Self.points - 2)
-                guard first <= last else { continue }
-
-                for j in first...last {
-                    let off = Double(j) - f[i]
-                    let fade = cos(Double.pi / 2 * abs(off) / (reach + 1))
-                    let cr = Self.mean(live.indices.map { Self.at(snap[$0], f[$0] + off) })
-                    let want = cr + cross * slot
-                    cable.pts[j] = cable.pts[j] + (want - cable.pts[j]) * (fade * fade)
-                }
-                cables[live[i].key] = cable
-            }
-        }
-    }
-
-    // Points a funnel needs: far-apart strands take a longer, gentler one.
-    private static func reach(_ mid: [Vec], around c: Vec, seg: Double) -> Double {
-        let pull = mid.map { ($0 - c).length }.max() ?? 0
-        return min(max(pull / max(seg, 1), tieReach), maxReach)
-    }
-
-    // Unit vector across the bundle (perpendicular to the strands' flow).
-    // Strands running the opposite way are flipped so they don't cancel.
-    private static func cross(_ snap: [[Vec]], _ f: [Double]) -> Vec {
-        var flow = Vec(0, 0)
-        var lead: Vec?
-
-        for (pts, k) in zip(snap, f) {
-            var d = at(pts, k + 1) - at(pts, k - 1)
-            if let lead, d.dot(lead) < 0 { d = d * -1 }
-            lead = lead ?? d
-            flow = flow + d
-        }
-        let len = max(flow.length, 1e-9)
-        return Vec(-flow.y / len, flow.x / len)
-    }
-
     private static func mean(_ v: [Vec]) -> Vec {
         let sum = v.reduce(Vec(0, 0), +)
         return sum * (1 / Double(max(v.count, 1)))
     }
 
-    private func refreshTies() {
-        for i in ties.indices {
-            let t = ties[i]
+    // Where one tie sits and how its strands pass it.
+    private struct Spot {
+        var keys: [CableKey]
+        var f: [CableKey: Double] = [:]       // point index on each free curve
+        var center = Vec(0, 0)
+        var flow = Vec(1, 0)                  // unit, port a -> port b
+        var way: [CableKey: Double] = [:]     // +1, or -1 for a strand running b -> a
+        var slot: [CableKey: Double] = [:]    // offset across the bundle
+        var cross: Vec { Vec(-flow.y, flow.x) }
+    }
+
+    private struct Layout {
+        var spots: [Int: Spot] = [:]
+        var chains: [CableKey: [Int]] = [:]   // tie ids along each cable, a -> b
+    }
+
+    // Work out every tie: its center (the mean of where its strands would
+    // run), the direction the bundle flows (from the spots just before the
+    // strands to just after: the neighboring tie, or the port), and each
+    // strand's slot across it. Also keeps the pills' own numbers current.
+    private func layout() -> Layout {
+        var out = Layout()
+
+        for t in ties {
             let live = t.members.filter { cables[$0.key] != nil }
             guard !live.isEmpty else { continue }
 
-            let snap = live.map { cables[$0.key]!.pts }
-            let f = live.map { place(t, $0) }
-            let cross = Self.cross(snap, f)
-            ties[i].center = Self.mean(live.indices.map { Self.at(snap[$0], f[$0]) })
-            ties[i].angle = atan2(cross.y, cross.x)
-            ties[i].width = Double(live.count - 1) * Self.strandGap + Self.tieThickness
+            var spot = Spot(keys: live.map(\.key))
+            for m in live { spot.f[m.key] = place(t, m) }
+            spot.center = Self.mean(live.map { Self.at(cables[$0.key]!.free, spot.f[$0.key]!) })
+            out.spots[t.id] = spot
+            for m in live { out.chains[m.key, default: []].append(t.id) }
         }
+
+        for key in out.chains.keys {
+            out.chains[key]!.sort { out.spots[$0]!.f[key]! < out.spots[$1]!.f[key]! }
+        }
+
+        for (id, var spot) in out.spots {
+            flow(&spot, id, out)
+            out.spots[id] = spot
+        }
+
+        for i in ties.indices {
+            guard let spot = out.spots[ties[i].id] else { continue }
+            ties[i].center = spot.center
+            ties[i].angle = atan2(spot.cross.y, spot.cross.x)
+            ties[i].width = Double(spot.keys.count - 1) * Self.strandGap + Self.tieThickness
+        }
+        return out
+    }
+
+    private func flow(_ spot: inout Spot, _ id: Int, _ out: Layout) {
+        var runs = [CableKey: Vec]()
+        for key in spot.keys {
+            let chain = out.chains[key]!
+            let k = chain.firstIndex(of: id)!
+            let c = cables[key]!
+            let before = k > 0 ? out.spots[chain[k - 1]]!.center : c.a.point
+            let after = k + 1 < chain.count ? out.spots[chain[k + 1]]!.center : c.b.point
+            runs[key] = after - before
+        }
+
+        // Strands running the opposite way are flipped so they don't cancel.
+        let lead = runs[spot.keys[0]]!
+        var sum = Vec(0, 0)
+        for key in spot.keys {
+            let way = runs[key]!.dot(lead) < 0 ? -1.0 : 1.0
+            spot.way[key] = way
+            sum = sum + runs[key]! * way
+        }
+        if sum.length > 1e-6 { spot.flow = sum * (1 / sum.length) }
+
+        // Slots follow the strands' order across the bundle.
+        let cross = spot.cross
+        let across = spot.keys.map { ($0, (Self.at(cables[$0]!.free, spot.f[$0]!) - spot.center).dot(cross)) }
+        let order = across.sorted { $0.1 != $1.1 ? $0.1 < $1.1 : $0.0.order < $1.0.order }
+        for (rank, item) in order.enumerated() {
+            spot.slot[item.0] = (Double(rank) - Double(order.count - 1) / 2) * Self.strandGap
+        }
+    }
+
+    // Re-draw every tied cable as smooth curves through its ties: the port,
+    // then for each tie a short parallel run, then the other port. Handles
+    // at a tie point along the bundle; at a port they are the sprung
+    // handle (scaled to the stretch), so the swing still shows.
+    private func bundleTies() {
+        let lay = layout()
+
+        for (key, chain) in lay.chains {
+            guard var c = cables[key] else { continue }
+
+            var knots = [(p: Vec, dir: Vec?)]()
+            knots.append((c.a.point, nil))
+            for id in chain {
+                let spot = lay.spots[id]!
+                let dir = spot.flow * spot.way[key]!
+                let at = spot.center + spot.cross * spot.slot[key]!
+                knots.append((at - dir * Self.runHalf, dir))
+                knots.append((at + dir * Self.runHalf, dir))
+            }
+            knots.append((c.b.point, nil))
+
+            c.pts = Self.draw(knots, c)
+            cables[key] = c
+        }
+    }
+
+    private static func draw(_ knots: [(p: Vec, dir: Vec?)], _ c: Cable) -> [Vec] {
+        let span = max((c.b.point - c.a.point).length, 1)
+        var out = [Vec]()
+
+        for j in 0..<(knots.count - 1) {
+            let (p, q) = (knots[j], knots[j + 1])
+            let chord = (q.p - p.p).length
+            let share = min(max(chord / span, 0.25), 1)
+
+            let c1 = p.dir.map { p.p + $0 * (chord * handleShare) } ?? p.p + (c.h1 - c.a.point) * share
+            let c2 = q.dir.map { q.p - $0 * (chord * handleShare) } ?? q.p + (c.h2 - c.b.point) * share
+
+            let n = max(minSamples, Int(chord / sampleEvery))
+            for i in (j == 0 ? 0 : 1)...n {
+                out.append(bezier(p.p, c1, c2, q.p, Double(i) / Double(n)))
+            }
+        }
+        return out
+    }
+
+    private func refreshTies() {
+        _ = layout()
     }
 
     // Fan-outs: two or more cables leaving one pane side get a tie of
@@ -512,7 +569,7 @@ public final class CableSim {
             for i in 0..<(c.pts.count - 1) {
                 let h = Self.touch(a, b, c.pts[i], c.pts[i + 1])
                 guard h.gap <= radius, h.gap < (best?.distance ?? .infinity) else { continue }
-                best = Hit(key: key, at: Double(i) + h.t, distance: h.gap)
+                best = Hit(key: key, point: c.pts[i] + (c.pts[i + 1] - c.pts[i]) * h.t, distance: h.gap)
             }
             if let best { out.append(best) }
         }
@@ -585,8 +642,12 @@ public final class CableSim {
         let found = hits(along: a, to: b, radius: radius ?? Self.bundleRadius)
         guard found.count >= 2, let lead = found.min(by: { $0.distance < $1.distance }) else { return nil }
 
-        let members = found.map { CableTie.Member(key: $0.key, delta: $0.at - lead.at) }
-        var tie = CableTie(id: nextTie, members: members, s: lead.at / Double(Self.points - 1))
+        // Each strand is gripped where the stroke met it, on its free curve.
+        func index(_ h: Hit) -> Double { Self.along(cables[h.key]!.free, h.point) }
+        let f0 = index(lead)
+
+        let members = found.map { CableTie.Member(key: $0.key, delta: index($0) - f0) }
+        var tie = CableTie(id: nextTie, members: members, s: f0 / Double(Self.points - 1))
         guard let s = clear(tie, at: tie.s) else { return nil }
 
         tie.s = s
@@ -607,17 +668,33 @@ public final class CableSim {
     // Slide a tie toward `p`, along its cable. It stops at the ends and at
     // its neighbors on any shared cable: ties never pass or overlap.
     public func moveTie(_ id: Int, to p: Vec) {
-        guard let i = ties.firstIndex(where: { $0.id == id }),
-              let lead = ties[i].members.first(where: { cables[$0.key] != nil }),
-              let c = cables[lead.key] else { return }
+        guard let i = ties.firstIndex(where: { $0.id == id }) else { return }
 
-        let f = Self.along(c.free, p)
-        let s = (f - lead.delta) / Double(Self.points - 1)
-        guard let next = clear(ties[i], at: s) else { return }
+        // The spot whose bundle center is nearest the pointer: the tie
+        // follows the mouse, however far apart its strands are.
+        var best: (s: Double, d: Double)?
+        let length = Double(Self.points - 1)
 
-        ties[i].s = next
+        for f in stride(from: 0.0, through: length, by: Self.scanStep) {
+            guard let s = clear(ties[i], at: f / length),
+                  let c = center(ties[i], at: s) else { continue }
+
+            let d = (c - p).length
+            if d < (best?.d ?? .infinity) { best = (s, d) }
+        }
+        guard let best else { return }
+
+        ties[i].s = best.s
         wake()
         refreshTies()
+    }
+
+    // Where the tie's strands run at `s`, on average.
+    private func center(_ t: CableTie, at s: Double) -> Vec? {
+        let at = t.members.compactMap { m in
+            cables[m.key].map { Self.at($0.free, place(t, m, at: s)) }
+        }
+        return at.isEmpty ? nil : Self.mean(at)
     }
 
     // `s` held off the cable ends and the closest ties either side.
