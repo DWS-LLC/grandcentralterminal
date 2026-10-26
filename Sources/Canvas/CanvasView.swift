@@ -100,6 +100,10 @@ final class CanvasView: NSView {
     // host (canvas-local; the daemon never sees these bytes).
     let programStatus = ProgramStatusStore()
     let arrange = ArrangeState()
+    let notifier = Notifier()
+    let notices = NoticeState()
+    let dimTicker = DimTicker()
+    lazy var autoNameRefresh = Coalescer { [weak self] in self?.refreshAutoNames() }
 
     // Drag state machine.
     private enum Drag {
@@ -186,6 +190,8 @@ final class CanvasView: NSView {
         addSubview(fill, positioned: .below, relativeTo: worldView)
         window?.acceptsMouseMovedEvents = true
         setupStatusBar()
+        setupNotices()
+        setupDim()
 
         _ = hub.connectLocal(sockPath: CanvasPaths.sockPath, delegate: self)
         syncRemotes()
@@ -989,6 +995,7 @@ final class CanvasView: NSView {
         }
         focusedID = id
         arrange.noteFocus(id)
+        clearNotice(id)
         // An explicit focus move exits a pane zoom: restore the zoomed
         // pane's frame + camera before going somewhere new.
         if zoomSavedPane != nil, zoomSavedPane != id {
@@ -1000,6 +1007,7 @@ final class CanvasView: NSView {
             window?.makeFirstResponder(self)
         }
         if raise { bringToFront(id) }
+        refreshDim()
     }
 
     // MARK: Mouse
@@ -2402,6 +2410,7 @@ final class CanvasView: NSView {
         case .toggleSnapping: toggleSnapping()
         case .moveWindowToSnap: snapFocusedToNearest()
         case .reloadConfig: reloadConfig()
+        case .relaxLayout: relaxCanvas(scope: .auto)
         }
     }
 
@@ -2946,6 +2955,8 @@ final class CanvasView: NSView {
     func removePane(_ id: PaneID) {
         programStatus.remove(id)
         arrange.forget(id)
+        notices.forget(id)
+        autoNameRefresh.schedule()
         guard let pane = panes[id] else { return }
         if markedHost === pane.host { dropComposition() }
         pane.host?.close()
@@ -2985,6 +2996,7 @@ final class CanvasView: NSView {
         // connSend and must not clear it.
         host.userInput = { [weak self] id in
             self?.arrange.noteInput(id)
+            self?.clearNotice(id)
             guard let self, self.programStatus.noteInput(id) else { return }
             self.panes[id]?.programStatus = self.programStatus.summary(for: id)
         }
@@ -2997,6 +3009,7 @@ final class CanvasView: NSView {
         zOrder.append(meta.id)
         worldView.addSubview(pane)
         refreshGroupViews()
+        autoNameRefresh.schedule()
 
         // Attach after the surface exists; the daemon answers with the
         // scrollback ring, then live output.
@@ -3529,7 +3542,12 @@ final class CanvasView: NSView {
         }
         addSubview(s)
         switcher = s
-        s.present(panes.values.map(\.meta), order: zOrder)
+        // Auto names stand in for missing custom names (also what you filter on).
+        s.present(panes.values.map { pane in
+            var m = pane.meta
+            m.name = pane.displayName
+            return m
+        }, order: zOrder)
         // Keep the bar on its own topmost layer, above the switcher.
         if let bar = statusBar, bar.superview != nil { addSubview(bar) }
     }

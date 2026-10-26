@@ -81,6 +81,13 @@ pip-aware = true
 # cmd+z fullscreen fills the free strip beside the PiP, not the whole
 # viewport. Needs pip-aware = true.
 pip-aware-zoom = true
+# Unfocused panes fade after dim-delay seconds without output; output wakes
+# them, and panes that are blocked or have a notice never dim. 0 = off (max 0.9).
+dim-inactive = 0.35
+dim-delay = 4
+# Desktop notifications from panes you are not looking at: OSC 9/777, the
+# bell, OSC 7501 blocked/done/error, and `gctd notify`. Click focuses the pane.
+notifications = true
 
 # Focus the pane under the cursor on mouse motion (ghostty's name for it).
 focus-follows-mouse = false

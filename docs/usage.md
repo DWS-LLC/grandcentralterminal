@@ -37,6 +37,35 @@ Mouse drags never shove anything aside: they slide along collisions and hold
 when wedged. Only keyboard grow shoves (`allow-mouse-drag-to-push = true` opts
 mouse drags in).
 
+## Names
+
+A pane you haven't named wears an auto name, so a canvas of shells reads at a
+glance:
+
+| running | name |
+| --- | --- |
+| idle shell | `gct`, or `gct/Canvas` (repo, else the shortest dir that tells it from the others: `a/api`, `b/api`) |
+| editor, pager, git UI | `nvim · gct` |
+| anything else | `make -j8 · gct` |
+| coding agent | `claude · gct · pip fit` (the task is the program's own title) |
+| linked git worktree | `gct@feat-x` |
+
+`⌘R` sets a custom name; renaming to nothing hands it back to auto. A
+foreground command only counts once it holds for about a second, so an `ls`
+doesn't flicker the title. Remote panes are named per host.
+
+## Dim and notices
+
+Unfocused panes that have gone quiet fade (`dim-inactive`, `dim-delay`);
+output wakes them. Panes that are blocked (OSC 7501) or have a notice never
+dim.
+
+A pane that wants you gets a desktop notification and a `●` in its titlebar
+until you focus it or type: OSC 9 / OSC 777, the bell, an OSC 7501
+`blocked`/`done`/`error`, or `gctd notify`. Clicking the notification focuses
+the pane. Nothing fires for the pane you're looking at. `notifications =
+false` turns it off.
+
 Dead keys, accents, and IME composition work: keys route through the text
 input system, preedit renders inline at the cursor.
 
@@ -56,6 +85,20 @@ and foreign groups refuse the join. A group with no members left is deleted.
 
 Right-click anywhere off-pane pops one menu: selection actions when live,
 group actions on a group background, plus "New pane here".
+
+## Relax
+
+Arrange > Relax by Relation (`⌘⇧A`, `relax-layout`) runs a spring pass over
+the selection, else the focused group, else everything. Panes pull toward the
+ones they belong with, strangers push apart, and groups move as blocks:
+
+- spawned by another pane (`gctd open` from it), strongest
+- same git repo
+- same directory, or one inside the other
+- same remote host
+
+It starts from where panes are and is deterministic: the same canvas relaxes
+the same way every time. Nothing is live, and Undo Arrange reverts it.
 
 ## Floating
 

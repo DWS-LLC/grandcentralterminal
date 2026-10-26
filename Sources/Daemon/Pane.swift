@@ -27,6 +27,12 @@ final class Pane {
     // args used to spawn (for respawn-on-daemon-restart)
     let spawnCommand: String?
 
+    // A foreground command is reported once two polls in a row agree: a
+    // one-second `ls` must not rename the pane.
+    private struct ProcSample { var line: String? }
+    private var pendingProc: ProcSample?
+    private var probedCwd: String?
+
     var exited: Bool {
         lock.lock(); defer { lock.unlock() }
         return exitedFlag
@@ -257,6 +263,52 @@ final class Pane {
         guard proc_cwd(pid, &buf, 4096) > 0 else { return nil }
         let cwd = String(cString: buf)
         return cwd != meta.cwd ? cwd : nil
+    }
+
+    // Refresh the context auto names and the spring layout feed on:
+    // foreground command and git work tree. True when meta changed.
+    func pollContext() -> Bool {
+        guard pid > 0, !exited else { return false }
+        let procChanged = pollProc()
+        let repoChanged = pollRepo()
+        return procChanged || repoChanged
+    }
+
+    // The terminal's foreground process group leads with its own pid. An
+    // idle shell reports itself ("-zsh"); AutoName treats shells as idle.
+    private func pollProc() -> Bool {
+        let fg = tcgetpgrp(masterFD)
+        guard fg > 0 else { return false }
+
+        var buf = [CChar](repeating: 0, count: 1024)
+        guard proc_cmdline(fg, &buf, 1024) > 0 else { return false }
+        let sample = ProcSample(line: String(cString: buf))
+
+        if sample.line == meta.proc {
+            pendingProc = nil
+            return false
+        }
+
+        guard pendingProc.map({ $0.line == sample.line }) == true else {
+            pendingProc = sample
+            return false
+        }
+
+        pendingProc = nil
+        meta.proc = sample.line
+        return true
+    }
+
+    private func pollRepo() -> Bool {
+        guard meta.cwd != probedCwd else { return false }
+        probedCwd = meta.cwd
+
+        let info = RepoProbe.probe(cwd: meta.cwd)
+        guard info?.root != meta.repoRoot || info?.worktree != meta.worktree else { return false }
+
+        meta.repoRoot = info?.root
+        meta.worktree = info?.worktree
+        return true
     }
 }
 

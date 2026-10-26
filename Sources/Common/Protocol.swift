@@ -36,6 +36,7 @@ public enum MsgTag: UInt8 {
     case canvasCommand = 20 // JSON CanvasCommand (scripted camera/action)
     case arrangePanes = 21 // JSON ArrangePanes (exact batch placement)
     case layoutPolicy = 22 // JSON LayoutPolicy (canvas config for headless clients)
+    case notifyPane  = 23 // JSON PaneNotify (agent asks canvas to notify)
 
     // daemon -> client
     case welcome     = 64 // JSON Welcome
@@ -52,6 +53,7 @@ public enum MsgTag: UInt8 {
     case paneFocus     = 75 // JSON PaneRef (daemon -> canvas: focus this)
     case canvasRelay   = 76 // JSON CanvasCommand (daemon -> canvas: run this)
     case replayPane    = 77 // data: uuid + ring snapshot (history, not live)
+    case paneNotice    = 78 // JSON PaneNotify (daemon -> canvas: post this)
 }
 
 public struct PaneID: Hashable, Sendable, CustomStringConvertible {
@@ -185,6 +187,17 @@ public struct RenamePane: Codable, Sendable {
     public init(id: PaneID, name: String?) { self.id = id; self.name = name }
 }
 
+// A harness's "look at this pane" ping: the canvas posts it as a desktop
+// notification that focuses the pane on click.
+public struct PaneNotify: Codable, Sendable {
+    public var id: PaneID
+    public var title: String?
+    public var body: String
+    public init(id: PaneID, title: String? = nil, body: String) {
+        self.id = id; self.title = title; self.body = body
+    }
+}
+
 public struct MovePane: Codable, Sendable {
     public var id: PaneID
     public var rect: Rect
@@ -231,7 +244,7 @@ public struct PaneCwd: Codable, Sendable {
 public struct PaneMeta: Codable, Sendable {
     public var id: PaneID
     public var rect: Rect
-    public var name: String?      // user-set name; nil -> "Terminal"
+    public var name: String?      // user-set name; nil -> auto name (AutoName)
     public var cwd: String
     public var host: String       // "local" or hostname
     public var title: String?     // program-set title (OSC)
@@ -239,6 +252,12 @@ public struct PaneMeta: Codable, Sendable {
     // Floating: ignores same-group/ungrouped overlap (still hard-blocked
     // by foreign group bounds). Decodes missing (old daemons) as false.
     public var floating: Bool
+    // Daemon-observed context that feeds auto names and the spring layout.
+    // All decode missing (old daemons) as nil.
+    public var proc: String?      // foreground command line ("nvim a.swift"); nil = idle shell
+    public var repoRoot: String?  // git work tree containing cwd
+    public var worktree: String?  // branch, only for a linked worktree
+    public var parent: PaneID?    // pane that spawned this one (gctd open)
     public init(id: PaneID, rect: Rect, name: String?, cwd: String, host: String,
                 title: String?, exited: Bool, floating: Bool = false) {
         self.id = id; self.rect = rect; self.name = name; self.cwd = cwd
@@ -247,6 +266,7 @@ public struct PaneMeta: Codable, Sendable {
     }
     enum CodingKeys: String, CodingKey {
         case id, rect, name, cwd, host, title, exited, floating
+        case proc, repoRoot, worktree, parent
     }
     public init(from decoder: any Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -258,6 +278,10 @@ public struct PaneMeta: Codable, Sendable {
         title = try c.decodeIfPresent(String.self, forKey: .title)
         exited = try c.decodeIfPresent(Bool.self, forKey: .exited) ?? false
         floating = try c.decodeIfPresent(Bool.self, forKey: .floating) ?? false
+        proc = try c.decodeIfPresent(String.self, forKey: .proc)
+        repoRoot = try c.decodeIfPresent(String.self, forKey: .repoRoot)
+        worktree = try c.decodeIfPresent(String.self, forKey: .worktree)
+        parent = try c.decodeIfPresent(PaneID.self, forKey: .parent)
     }
 }
 

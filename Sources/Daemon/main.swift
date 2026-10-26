@@ -175,6 +175,57 @@ func parseTCP(_ s: String) -> (String, UInt16)? {
     return (host, port)
 }
 
+let sendUsage = "send <pane> [text]... [--no-newline] [--paste]  (no text: read stdin)"
+let notifyUsage = "notify <pane> [title=..] <text>...  |  notify <pane> --hook"
+let bracketedPasteStart = "\u{1B}[200~"
+let bracketedPasteEnd = "\u{1B}[201~"
+
+// \xHH (any byte: \x03 is ^C), \e, \n, \t, \r, \\ -> the bytes they
+// name. Anything else keeps its backslash.
+func unescapeKeys(_ s: String) -> String {
+    let chars = Array(s.unicodeScalars)
+    var out = String.UnicodeScalarView()
+    var i = 0
+
+    while i < chars.count {
+        let c = chars[i]
+        guard c == "\\", i + 1 < chars.count else { out.append(c); i += 1; continue }
+
+        let e = chars[i + 1]
+        if e == "x", i + 3 < chars.count, let byte = hexByte(chars[i + 2], chars[i + 3]) {
+            out.append(Unicode.Scalar(byte))
+            i += 4
+            continue
+        }
+
+        switch e {
+        case "n": out.append("\n")
+        case "t": out.append("\t")
+        case "r": out.append("\r")
+        case "e": out.append("\u{1B}")
+        case "\\": out.append("\\")
+        default: out.append(c); out.append(e)
+        }
+        i += 2
+    }
+    return String(out)
+}
+
+func hexByte(_ hi: Unicode.Scalar, _ lo: Unicode.Scalar) -> UInt8? {
+    UInt8(String(hi) + String(lo), radix: 16)
+}
+
+// Claude Code hook payload -> notification text. Notification hooks carry
+// the message; Stop means the turn finished. Nil = nothing to say.
+func hookNotice(_ raw: Data) -> (title: String, body: String)? {
+    let title = "Claude Code"
+    guard let obj = try? JSONSerialization.jsonObject(with: raw) as? [String: Any] else { return nil }
+
+    if let message = obj["message"] as? String, !message.isEmpty { return (title, message) }
+    if obj["hook_event_name"] as? String == "Stop" { return (title, "Finished, waiting for you") }
+    return nil
+}
+
 // Resolve a pane by uuid prefix, exact name, or $GCT_PANE_ID shorthand.
 // "self" = this pane (requires GCT_PANE_ID in env, i.e. called from a pane).
 func resolvePane(_ w: Welcome, _ raw: String) -> PaneMeta? {
@@ -308,8 +359,12 @@ func usage() -> Never {
             list                      panes + groups, one per line
             dump <pane> [limit=N] [--strip-ansi]
                                       scrollback snapshot (id prefix, name, or self)
-            send <pane> <text>...     type text into a pane (appends newline;
-                                      --no-newline to skip; \\x1b/\\n/\\t escapes)
+            send <pane> [text]...     type text into a pane (appends newline;
+                                      --no-newline to skip; --paste brackets it;
+                                      \\xHH/\\e/\\n/\\t escapes; no text reads stdin)
+            notify <pane> [title=..] <text>...
+                                      desktop notification, click focuses the pane
+                                      (--hook: Claude Code hook payload on stdin)
             close <pane>              terminate a pane
             rename <pane> name=..     name a pane
             group <pane>... name=.. [color=#..]
@@ -382,8 +437,12 @@ case "status", "list":
     let c = needClient()
     guard let w = c.welcome() else { die("no reply from daemon") }
     if w.panes.isEmpty { print("no panes") }
+    let auto = AutoName.names(w.panes.map {
+        AutoName.Pane(id: $0.id, cwd: $0.cwd, proc: $0.proc, title: $0.title,
+                      repoRoot: $0.repoRoot, worktree: $0.worktree)
+    }, home: daemonHome())
     for p in w.panes {
-        let name = p.name ?? "Terminal"
+        let name = p.name ?? auto[p.id] ?? "Terminal"
         print("\(p.id)  \(name)  \(p.cwd)  exited=\(p.exited)")
     }
     for g in w.groups {
@@ -480,28 +539,67 @@ case "dump":
     die("no reply from daemon")
 
 case "send":
-    // send <pane> <text>... — keys, not a shell command: the bytes land
+    // send <pane> [text]... — keys, not a shell command: the bytes land
     // in the pane's stdin exactly as typed (+ trailing newline default).
-    guard rest.count >= 2 else { die("send <pane> <text>... [--no-newline]") }
+    // No text args reads stdin, so output pipes between panes:
+    //   gctd dump build --strip-ansi | gctd send agent --paste
+    guard rest.count >= 1 else { die(sendUsage) }
     let c = needClient()
     guard let w = c.welcome() else { die("no reply from daemon") }
     guard let pane = resolvePane(w, rest[0]) else { die("no such pane \(rest[0])") }
     var parts = Array(rest.dropFirst())
     var newline = true
+    var paste = false
     parts.removeAll {
         if $0 == "--no-newline" { newline = false; return true }
+        if $0 == "--paste" { paste = true; return true }
         return false
     }
-    var text = parts.joined(separator: " ")
-    // \x1b \n \t \r \\ escapes so agents can send ^C-free control keys
-    // (use \n for Enter, \u{1b} sequences for arrows).
-    text = text.replacingOccurrences(of: "\\x1b", with: "\u{1B}")
-        .replacingOccurrences(of: "\\n", with: "\n")
-        .replacingOccurrences(of: "\\t", with: "\t")
-        .replacingOccurrences(of: "\\r", with: "\r")
-        .replacingOccurrences(of: "\\\\", with: "\\")
+
+    var text: String
+    if parts.isEmpty {
+        guard isatty(STDIN_FILENO) == 0 else { die(sendUsage) }
+        text = String(decoding: FileHandle.standardInput.readDataToEndOfFile(), as: UTF8.self)
+        // The piped payload is literal; its last newline is just EOF.
+        if text.hasSuffix("\n") { text.removeLast() }
+    } else {
+        text = unescapeKeys(parts.joined(separator: " "))
+    }
+    guard !text.isEmpty else { die(sendUsage) }
+
+    // Bracketed paste: a multi-line payload lands as one paste instead of
+    // running line by line. The app must have asked for it (DECSET 2004).
+    if paste { text = bracketedPasteStart + text + bracketedPasteEnd }
     if newline { text += "\n" }
     _ = c.conn.sendData(tag: .inputPane, paneID: pane.id, data: Data(text.utf8))
+    exit(0)
+
+case "notify":
+    // notify <pane> [title=..] <text>... | --hook
+    // Desktop notification that focuses the pane when clicked. --hook
+    // reads a Claude Code hook payload on stdin and never fails: a hook
+    // must not block the agent.
+    let isHook = rest.contains("--hook")
+    let words = rest.filter { $0 != "--hook" }
+    guard let target = words.first else { die(notifyUsage) }
+
+    var title: String?
+    var body = words.dropFirst().filter { !$0.hasPrefix("title=") }.joined(separator: " ")
+    if let t = words.first(where: { $0.hasPrefix("title=") }) { title = String(t.dropFirst("title=".count)) }
+
+    if isHook {
+        if target == "self", env["GCT_PANE_ID"] == nil { exit(0) }
+        let hook = hookNotice(FileHandle.standardInput.readDataToEndOfFile())
+        guard let hook else { exit(0) }
+        title = title ?? hook.title
+        body = hook.body
+    }
+    guard !body.isEmpty else { die(notifyUsage) }
+
+    let c = needClient()
+    guard let w = c.welcome() else { die("no reply from daemon") }
+    guard let pane = resolvePane(w, target) else { die("no such pane \(target)") }
+    _ = c.conn.send(tag: .notifyPane, json: PaneNotify(id: pane.id, title: title, body: body))
     exit(0)
 
 case "close":

@@ -7,6 +7,9 @@
 //   pack    ArrangeEngine (Common): rows / columns / grid
 //   place   local frames now + one atomic arrangePanes per daemon
 //
+// Relax is the same pipeline with springs for the pack step: related
+// units pull together, strangers push apart (Common/Spring).
+//
 // Nothing here is live: the layout is solved once and panes stay free
 // afterwards. Every run is undoable (ArrangeState.undo).
 
@@ -271,7 +274,7 @@ extension CanvasView {
     }
 
     private func arrangeLabel(_ pane: PaneView) -> String {
-        pane.meta.name ?? pane.meta.title ?? "Terminal"
+        pane.displayName
     }
 
     // Needs-attention first; panes that report nothing last.
@@ -305,6 +308,13 @@ extension CanvasView {
         let placed = clearance(of: frames, scope: scope, moving: Set(units.flatMap(\.panes)),
                                rects: rects, gap: gap)
 
+        return fanOut(units, placed, rects: rects)
+    }
+
+    // Unit frames back to per-pane rects; a group block shifts its members
+    // rigidly. Only panes whose rect changed come back.
+    private func fanOut(_ units: [ArrangeUnit], _ placed: [Rect],
+                        rects: [PaneID: Rect]) -> [PaneRect] {
         var out = [PaneRect]()
         for (u, f) in zip(units, placed) {
             let dx = f.x - u.frame.x
@@ -351,13 +361,7 @@ extension CanvasView {
     //                 the middle doesn't shove the whole arrangement
     private func clearance(of frames: [Rect], scope: ArrangeScope, moving: Set<PaneID>,
                            rects: [PaneID: Rect], gap: Double) -> [Rect] {
-        let floating = floatingPanes()
-        var obstacles = rects.filter { !moving.contains($0.key) && !floating.contains($0.key) }
-            .map(\.value)
-        for (gid, b) in GroupLayout.bounds(groups: groupMetas, panes: rects) {
-            let members = groupMetas[gid]?.members ?? []
-            if members.contains(where: { !moving.contains($0) }) { obstacles.append(b) }
-        }
+        var obstacles = staying(moving: moving, rects: rects)
 
         if case .group = scope {
             guard let grown = GroupGeometry.bounds(frames: frames) else { return frames }
@@ -373,6 +377,67 @@ extension CanvasView {
             obstacles.append(clean)
         }
         return out
+    }
+
+    // Panes and group bounds that stay put while `moving` is rearranged.
+    private func staying(moving: Set<PaneID>, rects: [PaneID: Rect]) -> [Rect] {
+        let floating = floatingPanes()
+        var out = rects.filter { !moving.contains($0.key) && !floating.contains($0.key) }
+            .map(\.value)
+        for (gid, b) in GroupLayout.bounds(groups: groupMetas, panes: rects) {
+            let members = groupMetas[gid]?.members ?? []
+            if members.contains(where: { !moving.contains($0) }) { out.append(b) }
+        }
+        return out
+    }
+
+    // MARK: Relax
+
+    // Springs instead of a pack: units keep their order of birth (top to
+    // bottom, left to right, id as the last word), so the same canvas
+    // always relaxes the same way. False when refused (beeps).
+    @discardableResult
+    func relaxCanvas(scope: ArrangeScope) -> Bool {
+        guard zoomSavedPane == nil else { NSSound.beep(); return false }
+
+        let rects = paneRects()
+        let resolved = resolveArrangeScope(scope)
+        let units = arrangeUnits(resolved, rects: rects).sorted(by: Self.stableOrder)
+        guard units.count >= 2 else { NSSound.beep(); return false }
+
+        let moves = solveRelax(units, scope: resolved, rects: rects)
+        guard !moves.isEmpty else { return true }
+
+        let before = moves.compactMap { m in rects[m.id].map { PaneRect(id: m.id, rect: $0) } }
+        arrange.pushUndo(ArrangeUndo(before: before, after: moves))
+        placePanes(moves)
+        return true
+    }
+
+    private static func stableOrder(_ a: ArrangeUnit, _ b: ArrangeUnit) -> Bool {
+        let (ta, tb) = (a.frame.y + a.frame.h, b.frame.y + b.frame.h)
+        if ta != tb { return ta > tb }
+        if a.frame.x != b.frame.x { return a.frame.x < b.frame.x }
+        return (a.panes.first?.description ?? "") < (b.panes.first?.description ?? "")
+    }
+
+    private func solveRelax(_ units: [ArrangeUnit], scope: ArrangeScope,
+                            rects: [PaneID: Rect]) -> [PaneRect] {
+        let blocks = units.map { $0.panes.compactMap { panes[$0]?.meta } }
+        var links = [Spring.Link]()
+        for i in units.indices {
+            for j in units.indices where j > i {
+                let w = SpringRelation.weight(blocks[i], blocks[j])
+                if w > 0 { links.append(Spring.Link(a: i, b: j, weight: w)) }
+            }
+        }
+
+        let moving = Set(units.flatMap(\.panes))
+        let gap = Double(GCTConfig.current.windowGap)
+        let solved = Spring.relax(units.map(\.frame), links: links,
+                                  fixed: staying(moving: moving, rects: rects), gap: gap)
+        let placed = clearance(of: solved, scope: scope, moving: moving, rects: rects, gap: gap)
+        return fanOut(units, placed, rects: rects)
     }
 
     // MARK: Place

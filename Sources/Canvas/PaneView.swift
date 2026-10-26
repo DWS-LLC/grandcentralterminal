@@ -23,8 +23,20 @@ final class PaneView: NSView {
     private let titlebar = NSView(frame: .zero)
     private let titleLabel = CATextLayer()
     private let statusLabel = CATextLayer()
+    // Veil over the whole pane: dims quiet unfocused panes (see CanvasDim).
+    private let dimLayer = CALayer()
     // OSC 7501 program status, right-aligned in the titlebar (nil = none).
     var programStatus: ProgramStatusStore.Summary? { didSet { applyChrome() } }
+
+    // Program title (OSC 0/2). Canvas-side only: daemon metas never carry
+    // it, so it lives here instead of in `meta`. Feeds auto names.
+    var reportedTitle: String?
+    // Name for a pane with no custom name (AutoName), set by the canvas.
+    var autoName: String? { didSet { if autoName != oldValue { applyChrome() } } }
+    // Something happened here while you were elsewhere (notification, bell);
+    // cleared once you look or type. Marks the title and keeps it undimmed.
+    var hasNotice = false { didSet { if hasNotice != oldValue { applyChrome() } } }
+    var displayName: String { meta.name ?? autoName ?? "Terminal" }
 
     var isFocused = false { didSet { applyChrome() } }
     // Multi-select: staged by right-drag/shift+click, acts as a unit for
@@ -65,6 +77,11 @@ final class PaneView: NSView {
         surfaceHostView.wantsLayer = true
         surfaceHostView.autoresizingMask = []
         addSubview(surfaceHostView)
+
+        dimLayer.cornerRadius = 6
+        dimLayer.opacity = 0
+        dimLayer.zPosition = 1
+        layer?.addSublayer(dimLayer)
 
         applyChrome()
         layoutChrome()
@@ -206,6 +223,11 @@ final class PaneView: NSView {
         surfaceHostView.layer?.maskedCorners = [.layerMinXMinYCorner, .layerMaxXMinYCorner]
         surfaceHostView.layer?.masksToBounds = inner > 0
 
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        dimLayer.frame = bounds
+        CATransaction.commit()
+
         // Title text vertically centered, 8pt inset. Sublayer frames are
         // in points, not pixels — no backing-scale multiplication.
         let textH = min(PaneView.titleBarHeight - 6, GCTTheme.current.titleFont.pointSize + 3)
@@ -227,6 +249,14 @@ final class PaneView: NSView {
             statusLabel.frame = .zero
         }
         CATransaction.commit()
+    }
+
+    // Fade the pane toward the canvas (0 = untouched). Animated by the
+    // layer's implicit 0.25s opacity transition.
+    func setDim(_ amount: Float) {
+        guard amount != dimLayer.opacity else { return }
+        dimLayer.backgroundColor = (GCTTheme.isDark() ? NSColor.black : NSColor.white).cgColor
+        dimLayer.opacity = amount
     }
 
     // Colors + font come from GCTTheme; re-run on focus and theme changes.
@@ -304,13 +334,22 @@ final class PaneView: NSView {
         // switcher, screenshots, and anywhere the title goes. Local
         // panes keep the existing "host – name – cwd" shape ("local"
         // elided: it was always "local – Terminal – …" before).
-        let kind = meta.name ?? "Terminal"
+        let kind = displayName
         let pin = meta.floating ? "⬆ " : ""
         let zoom = isZoomed ? "⤢ " : ""
+        let notice = hasNotice ? "● " : ""
+        let cwd = Self.tilde(meta.cwd, local: meta.host == "local" || meta.host.isEmpty)
         if meta.host == "local" || meta.host.isEmpty {
-            return "\(zoom)\(pin)\(kind) – \(meta.cwd)"
+            return "\(notice)\(zoom)\(pin)\(kind) – \(cwd)"
         }
-        return "\(zoom)\(pin)[\(meta.host)] \(kind) – \(meta.cwd)"
+        return "\(notice)\(zoom)\(pin)[\(meta.host)] \(kind) – \(cwd)"
+    }
+
+    // The cwd tail is what truncation eats first; "~" buys it back.
+    private static func tilde(_ path: String, local: Bool) -> String {
+        let home = NSHomeDirectory()
+        guard local, path == home || path.hasPrefix(home + "/") else { return path }
+        return "~" + path.dropFirst(home.count)
     }
 }
 

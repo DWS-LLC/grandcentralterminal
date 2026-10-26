@@ -15,6 +15,9 @@ gctd open name=log size=900,640 cmd="tail -f x.log"   # sized for the job
 gctd list                             # panes + groups
 gctd dump $ID limit=4000 --strip-ansi # scrollback tail as readable text
 gctd send $ID "make test"             # type into the pane (+ newline)
+gctd send $ID --no-newline '\x03'     # \xHH, \e, \n, \t, \r escapes: ^C is \x03
+gctd dump $A --strip-ansi | gctd send $B --paste   # no text reads stdin
+gctd notify $ID "build failed"        # desktop notification; click focuses the pane
 gctd rename $ID name=server
 gctd group $A $B name=feat color=#3b82f6   # or palette:N; omit for auto
 gctd focus $ID                        # focus + center on the canvas
@@ -22,6 +25,11 @@ gctd camera $ID zoom=0.4 dur=3        # glide to a pane (or x= y=) at a zoom
 gctd do fit-all [$ID] [dur=4]         # run any keybind action, focusing $ID first
 gctd close $ID
 ```
+
+`send --paste` wraps the text in bracketed paste, so a multi-line payload lands
+as one paste instead of running line by line (the program must have asked for
+it: shells and editors do). `notify` takes `title=..`; it shows nothing for a
+pane you're already looking at.
 
 Panes are addressed by uuid prefix, exact name, or `self` (the calling pane's
 `$GCT_PANE_ID`). `dump` reads the daemon's 8 MiB VT ring read-only, so poll it
@@ -41,6 +49,11 @@ gctd agent-setup install --hooks --yes   # skill into every harness dir + Claude
 gctd agent-setup print                   # targets + skill text (manual installs)
 gctd agent-setup context                 # live pane state (what the hook emits)
 ```
+
+`install --hooks` also merges Claude `Notification` and `Stop` hooks that call
+`gctd notify self --hook`, so a Claude Code session in a pane pings you when it
+needs input or finishes. The hook exits 0 outside a GCT pane and never blocks
+the agent.
 
 `install` copies `SKILL.md` (staged beside the daemon by `make build`, no
 network) into the Claude, Codex, opencode, Cursor, and Cursor-agents skill

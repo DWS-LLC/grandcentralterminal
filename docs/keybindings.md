@@ -43,6 +43,7 @@ the key, e.g. `new-pane = "cmd+shift+t"`. `⌘⇧R` reloads the config live.
 | `⌘C` / `⌘V` | copy selection (sends `^C` when nothing is selected) / paste | `copy`, `paste` |
 | `⌘⇧S` | toggle window snapping (session-only, never moves panes) | `toggle-snapping` |
 | `⌘⇧R` | reload `config.toml` | `reload-config` |
+| `⌘⇧A` | relax layout: related panes pull together, strangers push apart | `relax-layout` |
 | `⌘Q` | quit the canvas; panes keep running in `gctd` | |
 
 ## Mouse and trackpad
@@ -68,4 +69,5 @@ the key, e.g. `new-pane = "cmd+shift+t"`. `⌘⇧R` reloads the config live.
 
 The Arrange menu (menubar) tidies the selection, else the focused group,
 else everything: sort by clean-up / name / directory / status / last focused /
-activity, as rows / columns / grid. Undo Arrange reverts.
+activity, as rows / columns / grid. Relax by Relation lays out by what runs
+where instead. Undo Arrange reverts.

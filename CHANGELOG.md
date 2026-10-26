@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+### Added
+- Auto names: panes without a custom name show what runs in them (`gct`, `nvim · gct`, `claude · gct · pip fit`, `gct@feat-x`), shortest-unique across the canvas. Rename to nothing to go back to auto.
+- Notifications: OSC 9/777, the bell, and OSC 7501 blocked/done/error from panes you're not looking at post a desktop notification and mark the titlebar with `●`; click focuses the pane. `notifications = false` turns it off.
+- `gctd notify <pane> [title=..] <text>`, and `gctd agent-setup install --hooks` now merges Claude `Notification` and `Stop` hooks that use it.
+- `dim-inactive` / `dim-delay`: quiet unfocused panes fade; output, blocked status, and notices wake them.
+- Relax by Relation (`⌘⇧A`, `relax-layout`): a deterministic spring pass pulls related panes (spawn parent, same repo, same dir, same host) together and pushes strangers apart. Undoable.
+- `gctd send` reads stdin when given no text, takes `--paste` (bracketed paste), and understands `\xHH` / `\e` escapes (`\x03` is ^C).
+
+### Changed
+- Titlebars abbreviate the home directory to `~`.
+- `gctd list` shows auto names.
+
 ## v0.9.0
 
 ### Added

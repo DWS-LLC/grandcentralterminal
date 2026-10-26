@@ -413,6 +413,7 @@ enum GCTAction: String, CaseIterable {
     case toggleSnapping = "toggle-snapping"
     case moveWindowToSnap = "move-window-to-snap"
     case reloadConfig = "reload-config"
+    case relaxLayout = "relax-layout"
 }
 // MARK: - Config
 
@@ -507,6 +508,13 @@ struct GCTConfig {
     var pipAware = true
     // cmd+z fullscreen follows the same rule (needs pip-aware too).
     var pipAwareZoom = true
+    // Unfocused panes that have gone quiet fade by this much (0 = off).
+    var dimInactive = 0.35
+    // Seconds of silence before an unfocused pane dims; output wakes it.
+    var dimDelay = 4.0
+    // Desktop notifications: OSC 9/777, bell, OSC 7501 blocked/done/error,
+    // and `gctd notify`, from panes you are not looking at.
+    var notifications = true
     // Hover behavior: focus-follows-mouse focuses the pane under the
     // cursor on motion (same name as ghostty); scroll-on-terminal-hover
     // routes wheel/trackpad scroll to the hovered terminal, else pan
@@ -639,6 +647,15 @@ struct GCTConfig {
         }
         if let v = root["pip-aware-zoom"] {
             cfg.pipAwareZoom = flag(v, cfg.pipAwareZoom)
+        }
+        if let s = root["dim-inactive"], let n = Double(s), (0.0...0.9).contains(n) {
+            cfg.dimInactive = n
+        }
+        if let s = root["dim-delay"], let n = Double(s), (0.0...3600.0).contains(n) {
+            cfg.dimDelay = n
+        }
+        if let v = root["notifications"] {
+            cfg.notifications = flag(v, cfg.notifications)
         }
         if let v = root["camera-on-focus-click"],
            let c = GCTClickCamera(rawValue: v.lowercased()) {
@@ -862,6 +879,7 @@ struct GCTConfig {
             .toggleSnapping: GCTKeybind("cmd+shift+s")!,
             .moveWindowToSnap: GCTKeybind("cmd+shift+m")!,
             .reloadConfig: GCTKeybind("cmd+shift+r")!,
+            .relaxLayout: GCTKeybind("cmd+shift+a")!,
         ]
     }
 
@@ -937,6 +955,15 @@ struct GCTConfig {
     # cmd+z fullscreen fills the free strip beside the PiP instead of the
     # whole viewport. Needs pip-aware = true.
     pip-aware-zoom = true
+    # Unfocused panes fade after dim-delay seconds without output; output
+    # wakes them, and panes that are blocked or have a notice never dim.
+    # 0 turns it off (max 0.9).
+    dim-inactive = 0.35
+    dim-delay = 4
+    # Desktop notifications from panes you are not looking at: OSC 9/777,
+    # the bell, OSC 7501 blocked/done/error, and `gctd notify`. Clicking
+    # one focuses the pane.
+    notifications = true
     # Clicking another pane to focus it: "none", "center" (keep zoom) or
     # "fit" (zoom to fit). Runs on release, only for a click, never a drag.
     camera-on-focus-click = "center"

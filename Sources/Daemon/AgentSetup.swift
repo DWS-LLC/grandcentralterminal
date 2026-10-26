@@ -4,7 +4,8 @@
 // `agent-setup install [--harness=...] [--hooks] [--yes]`
 //                       copy SKILL.md into harness skill dirs, optionally
 //                       merge a SessionStart hook (Claude) emitting live
-//                       pane state via `gctd agent-setup context`.
+//                       pane state via `gctd agent-setup context`, plus
+//                       Notification/Stop hooks that call `gctd notify`.
 // `agent-setup uninstall [--harness=...]`
 //                       remove installed skill dirs (+ our hook entry).
 // `agent-setup context [--json]`
@@ -174,16 +175,17 @@ func mergeClaudeHook(bin: String) -> Bool {
     // Idempotent: skip when our command is already registered.
     let ours = entry["hooks"] as? [[String: Any]]
     let ourCmd = (ours?.first?["command"] as? String) ?? ""
+    var hasStart = false
     for s in starts {
         for h in (s["hooks"] as? [[String: Any]]) ?? [] {
-            if (h["command"] as? String) == ourCmd { return true }
+            if (h["command"] as? String) == ourCmd { hasStart = true }
         }
     }
     // Migrate: older installs wrote the staged path (contains spaces —
     // hook runners choke on it) or the bare command (an unexecable binary
     // then fails SessionStart with a non-blocking error every session).
     // Rewrite any gctd context entry in place instead of appending a duplicate.
-    var migrated = false
+    var migrated = hasStart
     starts = starts.map { group in
         var group = group
         if var hs = group["hooks"] as? [[String: Any]] {
@@ -204,6 +206,7 @@ func mergeClaudeHook(bin: String) -> Bool {
         starts.append(entry)
     }
     hooks["SessionStart"] = starts
+    mergeNoticeHooks(&hooks, bin: bin)
     root["hooks"] = hooks
     guard let data = try? JSONSerialization.data(
         withJSONObject: root, options: [.prettyPrinted, .sortedKeys]) else { return false }
@@ -213,6 +216,32 @@ func mergeClaudeHook(bin: String) -> Bool {
     } catch {
         fputs("write failed (\(error)); add the hook by hand:\n\(claudeHookEntry(bin: bin))\n", stderr)
         return false
+    }
+}
+
+// Claude events that should ping the desktop: it needs input, or it is done.
+let claudeNoticeEvents = ["Notification", "Stop"]
+let claudeNoticeTimeout = 10
+
+func claudeNoticeCommand(bin: String) -> String {
+    "\(bin) notify self --hook || exit 0"
+}
+
+// Same fail-open rules as SessionStart; `notify --hook` exits 0 itself
+// outside a GCT pane or without a message.
+func mergeNoticeHooks(_ hooks: inout [String: Any], bin: String) {
+    let cmd = claudeNoticeCommand(bin: bin)
+
+    for event in claudeNoticeEvents {
+        var groups = (hooks[event] as? [[String: Any]]) ?? []
+        let present = groups.contains { group in
+            ((group["hooks"] as? [[String: Any]]) ?? []).contains { ($0["command"] as? String) == cmd }
+        }
+        if present { continue }
+
+        groups.append(["matcher": "", "hooks": [["type": "command", "command": cmd,
+                                                  "timeout": claudeNoticeTimeout]]])
+        hooks[event] = groups
     }
 }
 
@@ -248,7 +277,10 @@ func agentSetupInstall(harnesses: [Harness], hooks: Bool, yes: Bool) {
     if !yes {
         print("will install GCT skill into:")
         for h in harnesses { print("  \(h.skillDir)/SKILL.md") }
-        if hooks { print("plus Claude SessionStart hook: \(self0) agent-setup context") }
+        if hooks {
+            print("plus Claude SessionStart hook: \(self0) agent-setup context")
+            print("plus Claude Notification + Stop hooks: \(claudeNoticeCommand(bin: self0))")
+        }
         fputs("re-run with --yes to apply\n", stderr)
         exit(2)
     }
@@ -267,7 +299,7 @@ func agentSetupInstall(harnesses: [Harness], hooks: Bool, yes: Bool) {
             die("--hooks needs the claude harness selected")
         }
         if mergeClaudeHook(bin: self0) {
-            print("merged SessionStart hook into \(agentHome())/.claude/settings.json")
+            print("merged SessionStart, Notification, Stop hooks into \(agentHome())/.claude/settings.json")
         } else {
             die("hook merge failed (manual entry printed above)")
         }
@@ -293,7 +325,7 @@ func agentSetupUninstall(harnesses: [Harness]) {
     // Hook entries stay (cheap, fail-open, and shared files deserve a
     // manual edit); say so explicitly.
     if harnesses.contains(where: { $0.name == "claude" }) {
-        fputs("note: SessionStart hook entry left in \(agentHome())/.claude/settings.json (remove by hand)\n", stderr)
+        fputs("note: GCT hook entries left in \(agentHome())/.claude/settings.json (remove by hand)\n", stderr)
     }
     exit(0)
 }

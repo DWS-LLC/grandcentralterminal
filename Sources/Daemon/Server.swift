@@ -536,6 +536,20 @@ final class Server {
             lock.unlock()
             broadcast(tag: .paneFocus, json: req)
 
+        case .notifyPane:
+            // Harness hook asks for a desktop notification: validate the
+            // pane, then let the canvas post it (it owns notifications).
+            guard let req: PaneNotify = frame.decode() else { return }
+            lock.lock()
+            let known = panes[req.id] != nil
+            lock.unlock()
+            guard known else {
+                _ = remote.conn.send(tag: .errorReply,
+                                     json: ErrorReply(message: "no such pane"))
+                return
+            }
+            broadcast(tag: .paneNotice, json: req)
+
         case .canvasCommand:
             // Scripted camera/action: validate the target pane, then relay
             // verbatim. The canvas owns the semantics.
@@ -739,8 +753,9 @@ final class Server {
         }
         lock.unlock()
         let cwd = req.cwd ?? NSHomeDirectory()
-        let meta = PaneMeta(id: PaneID(), rect: rect, name: req.name,
+        var meta = PaneMeta(id: PaneID(), rect: rect, name: req.name,
                             cwd: cwd, host: "local", title: nil, exited: false)
+        meta.parent = req.orbitAround
         let pane = Pane(meta: meta, command: req.command)
         do {
             try pane.spawn(cols: 80, rows: 24)
@@ -919,10 +934,18 @@ final class Server {
             if pane.pollExit() != nil {
                 dirty = true
                 Task { [weak self] in self?.paneDied(pane) }
-            } else if let cwd = pane.pollCWD() {
-                pane.meta.cwd = cwd
-                dirty = true
-                for r in remotes { _ = r.conn.send(tag: .paneMeta, json: pane.meta) }
+            } else {
+                var changed = false
+                if let cwd = pane.pollCWD() {
+                    pane.meta.cwd = cwd
+                    changed = true
+                }
+                if pane.pollContext() { changed = true }
+
+                if changed {
+                    dirty = true
+                    for r in remotes { _ = r.conn.send(tag: .paneMeta, json: pane.meta) }
+                }
             }
         }
         let saved = snapshotLocked()

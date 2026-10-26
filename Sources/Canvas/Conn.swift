@@ -19,6 +19,7 @@ protocol CanvasConnDelegate: AnyObject {
     func connGroupExit(_ id: GroupID, owner: String)
     func connFocusPane(_ id: PaneID, owner: String)
     func connCanvasCommand(_ cmd: CanvasCommand, owner: String)
+    func connNotice(_ notice: PaneNotify, owner: String)
     func connClosed(owner: String)
 }
 
@@ -116,6 +117,8 @@ final class CanvasConn: @unchecked Sendable {
             if let r: PaneRef = frame.decode() { delegate?.connFocusPane(r.id, owner: owner) }
         case .canvasRelay:
             if let c: CanvasCommand = frame.decode() { delegate?.connCanvasCommand(c, owner: owner) }
+        case .paneNotice:
+            if let n: PaneNotify = frame.decode() { delegate?.connNotice(n, owner: owner) }
         default:
             break
         }

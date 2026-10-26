@@ -30,6 +30,13 @@ enum GCTMenus {
         })
         out.append(shape)
 
+        let relax = NSMenuItem(title: "Relax by Relation",
+                               action: #selector(CanvasView.relaxMenu(_:)),
+                               keyEquivalent: "")
+        relax.target = target
+        relax.representedObject = scope
+        out.append(relax)
+
         let undo = NSMenuItem(title: "Undo Arrange",
                               action: #selector(CanvasView.undoArrangeMenu(_:)),
                               keyEquivalent: "")
@@ -52,6 +59,9 @@ enum GCTMenus {
             menu.addItem(actionItem(shape.title, ArrangeAction(change: .shape(shape), scope: .auto), nil))
         }
         menu.addItem(.separator())
+        menu.addItem(NSMenuItem(title: "Relax by Relation",
+                                action: #selector(CanvasView.relaxMenu(_:)),
+                                keyEquivalent: ""))
         menu.addItem(NSMenuItem(title: "Undo Arrange",
                                 action: #selector(CanvasView.undoArrangeMenu(_:)),
                                 keyEquivalent: ""))
@@ -116,6 +126,10 @@ extension CanvasView: NSMenuItemValidation {
         }
     }
 
+    @objc func relaxMenu(_ sender: NSMenuItem) {
+        relaxCanvas(scope: (sender.representedObject as? ArrangeScope) ?? .auto)
+    }
+
     @objc func undoArrangeMenu(_ sender: NSMenuItem) {
         undoArrange()
     }
@@ -169,6 +183,8 @@ extension CanvasView: NSMenuItemValidation {
             case .key(let key): item.state = key == arrange.key ? .on : .off
             case .shape(let shape): item.state = shape == arrange.shape ? .on : .off
             }
+            return panes.count >= 2
+        case #selector(relaxMenu(_:)):
             return panes.count >= 2
         case #selector(undoArrangeMenu(_:)):
             return !arrange.undo.isEmpty

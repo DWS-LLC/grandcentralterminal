@@ -57,6 +57,7 @@ extension CanvasView: CanvasConnDelegate {
         // the broadcast shrink it back to the saved rect mid-zoom.
         if zoomSavedPane == m.id { panes[m.id]?.syncMetaOnly(m); return }
         panes[m.id]?.update(meta: m)
+        autoNameRefresh.schedule()
         refreshGroupViews()
         restackFloating()
         // Daemon broadcasts relocate frames under a static camera
@@ -73,9 +74,18 @@ extension CanvasView: CanvasConnDelegate {
             // fixed bytes with nothing from any report (spec §Security).
             hub.sendInput(local, ProgramStatusStore.queryReply)
         }
-        if r.changed { panes[local]?.programStatus = programStatus.summary(for: local) }
-        if source == .live { arrange.noteOutput(local) }
+        if r.changed {
+            let was = panes[local]?.programStatus?.state
+            panes[local]?.programStatus = programStatus.summary(for: local)
+            if source == .live { noticeStatus(local, from: was) }
+        }
+        if source == .live { arrange.noteOutput(local) } else { notices.noteReplay(local) }
         panes[local]?.host?.feed(data)
+    }
+
+    func connNotice(_ notice: PaneNotify, owner: String) {
+        let local = hub.localPane(remote: notice.id, owner: owner)
+        postNotice(local, title: notice.title, body: notice.body)
     }
 
     func connPaneExit(_ id: PaneID, _ code: Int32, owner: String) {
@@ -232,6 +242,8 @@ extension CanvasView: GhosttyAppDelegate {
             var m = pane.meta
             m.title = title
             pane.update(meta: m)
+            pane.reportedTitle = title
+            autoNameRefresh.schedule()
         }
     }
 
@@ -248,5 +260,10 @@ extension CanvasView: GhosttyAppDelegate {
 
     func surfaceBell(_ host: SurfaceHost) {
         NSSound.beep()
+        postNotice(host.paneID, title: nil, body: "Bell")
+    }
+
+    func surfaceNotify(_ host: SurfaceHost, title: String?, body: String) {
+        postNotice(host.paneID, title: title, body: body)
     }
 }

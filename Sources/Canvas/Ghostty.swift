@@ -15,6 +15,8 @@ protocol GhosttyAppDelegate: AnyObject {
     func surfacePwd(_ host: SurfaceHost, _ pwd: String)
     // Bell.
     func surfaceBell(_ host: SurfaceHost)
+    // Desktop notification request (OSC 9 / OSC 777;notify).
+    func surfaceNotify(_ host: SurfaceHost, title: String?, body: String)
 }
 
 // Which half of `theme = light:x,dark:y` ghostty resolves to.
@@ -241,6 +243,12 @@ final class GhosttyApp: @unchecked Sendable {
             return true
         case GHOSTTY_ACTION_RING_BELL:
             host.delegate?.surfaceBell(host)
+            return true
+        case GHOSTTY_ACTION_DESKTOP_NOTIFICATION:
+            let n = action.action.desktop_notification
+            let title = n.title.map { String(cString: $0) }
+            let body = n.body.map { String(cString: $0) } ?? ""
+            host.delegate?.surfaceNotify(host, title: title?.isEmpty == true ? nil : title, body: body)
             return true
         default:
             return false

@@ -50,6 +50,9 @@ gctd dump self                         # this pane's scrollback
 gctd dump $ID limit=4000 --strip-ansi  # last 4KB, readable text
 gctd send $ID "make test"              # type into the pane (adds newline)
 gctd send $ID --no-newline "\x1b[A"    # up-arrow, no newline
+gctd send $ID --no-newline '\x03'      # ^C (any byte: \xHH)
+gctd dump $A --strip-ansi | gctd send $B --paste   # no text = stdin; --paste brackets it
+gctd notify self "tests are green"     # desktop ping, click focuses this pane
 ```
 
 `dump` ships the raw VT ring tail (8 MiB retained); `--strip-ansi` scrubs
