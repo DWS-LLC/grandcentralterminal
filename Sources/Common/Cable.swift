@@ -108,6 +108,7 @@ public final class CableSim {
     private static let fanOutS = [0.35, 0.28]
     private static let fanOutSpread = 48.0
     private static let portSpacing = 10.0
+    private static let epsilon = 1e-6
     // Ports stay this share of a side's length away from each corner.
     private static let portInsetShare = 0.15
     // Handle springs, per second: stiffness and damping (about 0.2 of
@@ -221,6 +222,7 @@ public final class CableSim {
         var rect: Rect
         var other: Rect
         var side: Side
+        var target: Vec    // where this cable's own other end is
     }
 
     // One port per cable end, on the side facing the other pane, and where
@@ -245,8 +247,10 @@ public final class CableSim {
             if pins.parent[key] != nil, pins.child[key] == nil { cSide = opposite(pSide) }
             if pins.child[key] != nil, pins.parent[key] == nil { pSide = opposite(cSide) }
 
-            let p = EndRef(key: key, isParent: true, rect: e.parent, other: toward, side: pSide)
-            let c = EndRef(key: key, isParent: false, rect: e.child, other: back, side: cSide)
+            let p = EndRef(key: key, isParent: true, rect: e.parent, other: toward, side: pSide,
+                           target: center(e.child))
+            let c = EndRef(key: key, isParent: false, rect: e.child, other: back, side: cSide,
+                           target: center(e.parent))
             groups[groupID(p), default: []].append(p)
             groups[groupID(c), default: []].append(c)
         }
@@ -309,8 +313,14 @@ public final class CableSim {
         let inset = (to - from) * portInsetShare
         let (lo, hi) = (from + inset, to - inset)
 
+        // Ties in `ideal` (a tied bundle all faces one spot) go by where each
+        // cable's own end is, so the strands leave in the order they end.
         let wanted = group.map { (ref: $0, at: ideal($0, vertical: vertical, lo: lo, hi: hi)) }
-            .sorted { $0.at != $1.at ? $0.at < $1.at : $0.ref.key.order < $1.ref.key.order }
+            .sorted {
+                if abs($0.at - $1.at) > epsilon { return $0.at < $1.at }
+                let (p, q) = vertical ? ($0.ref.target.y, $1.ref.target.y) : ($0.ref.target.x, $1.ref.target.x)
+                return p != q ? p < q : $0.ref.key.order < $1.ref.key.order
+            }
         let at = spread(wanted.map(\.at), lo: lo, hi: hi)
 
         return zip(wanted, at).map { w, t in
