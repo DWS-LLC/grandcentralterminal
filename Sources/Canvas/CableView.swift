@@ -8,9 +8,9 @@ import AppKit
 import Common
 
 final class CableView: NSView {
-    private static let lineWidth: CGFloat = 2.2
+    private static let lineWidth: CGFloat = 3
     // Never thinner than this on screen, however far out the camera is.
-    private static let minScreenWidth: CGFloat = 1.5
+    private static let minScreenWidth: CGFloat = 2
     private static let portRadius: CGFloat = 3.4
     private static let tieThickness: CGFloat = 5
     private static let tieColor = NSColor(white: 0.78, alpha: 1)
@@ -111,13 +111,13 @@ final class CableView: NSView {
     }
 
     private func renderTies(width: CGFloat) {
-        let live = Set(sim.ties.map(\.id))
+        let live = Set(sim.ties.filter { $0.holds >= 2 }.map(\.id))
         for id in tieLayers.keys where !live.contains(id) {
             tieLayers.removeValue(forKey: id)?.removeFromSuperlayer()
         }
 
         let scale = max(1, width / Self.lineWidth)
-        for tie in sim.ties {
+        for tie in sim.ties where tie.holds >= 2 {
             let pill = tieLayers[tie.id] ?? makeTieLayer(tie.id)
             let w = CGFloat(tie.width) * scale
             let h = Self.tieThickness * scale
