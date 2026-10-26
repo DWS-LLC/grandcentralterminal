@@ -228,54 +228,29 @@ public enum Spring {
     }
 }
 
-// How strongly two panes belong together. The canvas folds these into
-// per-unit links (a group moves as one block).
+// How strongly two panes belong together: a cable (one spawned the other)
+// ties them, nothing else does. The canvas folds these into per-unit links
+// (a group moves as one block).
 public enum SpringRelation {
-    private static let spawnParent = 2.0
-    private static let sameRepo = 1.0
-    private static let sameDir = 0.5
-    private static let nestedDir = 0.5
-    private static let sameHost = 0.25
+    private static let cable = 2.0
     // A unit pair's weight never exceeds this: a 30-pane group must not
     // yank a stranger harder than a direct parent does.
     private static let cap = 3.0
-    // Each extra related pair adds this much over the strongest one.
-    private static let extraPair = 0.1
+    // Each extra cable between two blocks adds this much over the first.
+    private static let extraCable = 0.1
 
     public static func weight(_ a: PaneMeta, _ b: PaneMeta) -> Double {
-        var w = 0.0
-        if a.parent == b.id || b.parent == a.id { w += spawnParent }
-
-        if let r = a.repoRoot, r == b.repoRoot { w += sameRepo }
-
-        if a.cwd == b.cwd {
-            w += sameDir
-        } else if nested(a.cwd, b.cwd) {
-            w += nestedDir
-        }
-
-        if a.host != "local", a.host == b.host { w += sameHost }
-        return w
+        a.parent == b.id || b.parent == a.id ? cable : 0
     }
 
     // Link weight between two blocks of panes.
     public static func weight(_ a: [PaneMeta], _ b: [PaneMeta]) -> Double {
-        var best = 0.0
-        var related = 0
+        var cables = 0
 
         for x in a {
-            for y in b {
-                let w = weight(x, y)
-                guard w > 0 else { continue }
-                best = max(best, w)
-                related += 1
-            }
+            for y in b where weight(x, y) > 0 { cables += 1 }
         }
-        guard related > 0 else { return 0 }
-        return min(cap, best + extraPair * Double(related - 1))
-    }
-
-    private static func nested(_ a: String, _ b: String) -> Bool {
-        a.hasPrefix(b + "/") || b.hasPrefix(a + "/")
+        guard cables > 0 else { return 0 }
+        return min(cap, cable + extraCable * Double(cables - 1))
     }
 }

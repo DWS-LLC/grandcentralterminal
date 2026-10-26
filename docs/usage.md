@@ -111,12 +111,8 @@ group actions on a group background, plus "New pane here".
 
 Arrange > Relax by Relation (`⌘⇧A`, `relax-layout`) runs a spring pass over
 the selection, else the focused group, else everything. Panes pull toward the
-ones they belong with, strangers push apart, and groups move as blocks:
-
-- spawned by another pane (`gctd open` from it), strongest
-- same git repo
-- same directory, or one inside the other
-- same remote host
+ones they're cabled to (spawned by, or spawned from), strangers push apart, and
+groups move as blocks.
 
 It starts from where panes are and is deterministic: the same canvas relaxes
 the same way every time. Nothing is live, and Undo Arrange reverts it.
