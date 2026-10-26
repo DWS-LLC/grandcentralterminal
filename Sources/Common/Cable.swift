@@ -101,8 +101,6 @@ public final class CableSim {
     // tie only goes where its strands are still travelling together.
     private static let fanOutS = [0.35, 0.28]
     private static let fanOutSpread = 48.0
-    // A slid tie holds strands no wider apart than this.
-    private static let holdSpread = 120.0
     private static let portSpacing = 8.0
     // Handle springs, per second: stiffness and damping (about 0.2 of
     // critical: a few bouncy swings, then still).
@@ -119,9 +117,10 @@ public final class CableSim {
     // Points either side of a tie that blend from the bundle back to the
     // free curve: at least `tieReach`, more when the strands start far
     // apart (so the funnel never gets steeper than ~45 degrees), at most
-    // `maxReach`. And the margin a tie keeps from the cable ends.
+    // the whole cable: a tie stretches strands from anywhere. And the
+    // margin a tie keeps from the cable ends.
     private static let tieReach = 6.0
-    private static let maxReach = 14.0
+    private static let maxReach = Double(points - 1)
     private static let tieEnds = 7
     private static let edgeMargin = 2.0
     private static let tieGap = 12.0
@@ -616,27 +615,9 @@ public final class CableSim {
         let s = (f - lead.delta) / Double(Self.points - 1)
         guard let next = clear(ties[i], at: s) else { return }
 
-        // Strands that part ways would knot at the tie: it stops where they
-        // do, but may always slide back toward where they run together.
-        let now = grip(ties[i], at: ties[i].s)
-        if grip(ties[i], at: next) > Self.holdSpread, grip(ties[i], at: next) > now { return }
-
         ties[i].s = next
         wake()
         refreshTies()
-    }
-
-    // Widest gap between the tie's strands (their fair curves) at `s`.
-    private func grip(_ t: CableTie, at s: Double) -> Double {
-        let at = t.members.compactMap { m -> Vec? in
-            guard let c = cables[m.key] else { return nil }
-            return Self.at(c.shape, s * Double(Self.points - 1) + m.delta)
-        }
-        var widest = 0.0
-        for (i, p) in at.enumerated() {
-            for q in at[(i + 1)...] { widest = max(widest, (p - q).length) }
-        }
-        return widest
     }
 
     // `s` held off the cable ends and the closest ties either side.
