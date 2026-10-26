@@ -109,13 +109,15 @@ group actions on a group background, plus "New pane here".
 
 ## Relax
 
-Arrange > Relax by Relation (`⌘⇧A`, `relax-layout`) runs a spring pass over
-the selection, else the focused group, else everything. Panes pull toward the
-ones they're cabled to (spawned by, or spawned from), strangers push apart, and
-groups move as blocks.
+Arrange > Relax by Relation (`⌘⇧A`, `relax-layout`) works on
+the selection, else the focused group, else everything. Panes lay out as a
+left-to-right tree of the cables: a pane sits right of the pane that spawned
+it, siblings stack in a column (keeping their top-to-bottom order) with room
+for the cables to bundle, and unrelated panes pack in rows. Groups move as
+blocks.
 
-It starts from where panes are and is deterministic: the same canvas relaxes
-the same way every time. Nothing is live, and Undo Arrange reverts it.
+It keeps your current top-to-bottom order and the middle of the layout, and is
+deterministic: the same canvas relaxes the same way every time. Nothing is live, and Undo Arrange reverts it.
 
 ## Floating
 

@@ -393,9 +393,10 @@ extension CanvasView {
 
     // MARK: Relax
 
-    // Springs instead of a pack: units keep their order of birth (top to
-    // bottom, left to right, id as the last word), so the same canvas
-    // always relaxes the same way. False when refused (beeps).
+    // A left-to-right tree of the cables instead of a pack: a pane sits right
+    // of the pane that spawned it, siblings stack in order (top to bottom,
+    // left to right, id as the last word), so the same canvas always
+    // relaxes the same way. False when refused (beeps).
     @discardableResult
     func relaxCanvas(scope: ArrangeScope) -> Bool {
         guard zoomSavedPane == nil else { NSSound.beep(); return false }
@@ -421,23 +422,33 @@ extension CanvasView {
         return (a.panes.first?.description ?? "") < (b.panes.first?.description ?? "")
     }
 
+    // Spacing between tree columns and rows is never tighter than this,
+    // however small `window-gap` is: cables need room to bundle.
+    private static let minTreeGap = 48.0
+
     private func solveRelax(_ units: [ArrangeUnit], scope: ArrangeScope,
                             rects: [PaneID: Rect]) -> [PaneRect] {
-        let blocks = units.map { $0.panes.compactMap { panes[$0]?.meta } }
-        var links = [Spring.Link]()
-        for i in units.indices {
-            for j in units.indices where j > i {
-                let w = SpringRelation.weight(blocks[i], blocks[j])
-                if w > 0 { links.append(Spring.Link(a: i, b: j, weight: w)) }
-            }
-        }
-
+        let parents = unitParents(units)
         let moving = Set(units.flatMap(\.panes))
         let gap = Double(GCTConfig.current.windowGap)
-        let solved = Spring.relax(units.map(\.frame), links: links,
-                                  fixed: staying(moving: moving, rects: rects), gap: gap)
+        let solved = TreeLayout.place(units.map(\.frame), parents: parents,
+                                      gap: max(gap, Self.minTreeGap))
         let placed = clearance(of: solved, scope: scope, moving: moving, rects: rects, gap: gap)
         return fanOut(units, placed, rects: rects)
+    }
+
+    // The unit holding the pane that spawned any pane of the unit (the
+    // first such unit if several). Nil for a unit nothing in scope spawned.
+    private func unitParents(_ units: [ArrangeUnit]) -> [Int?] {
+        var unitOf = [PaneID: Int]()
+        for (i, u) in units.enumerated() {
+            for id in u.panes { unitOf[id] = i }
+        }
+
+        return units.enumerated().map { i, u in
+            u.panes.compactMap { panes[$0]?.meta.parent.flatMap { unitOf[$0] } }
+                .filter { $0 != i }.min()
+        }
     }
 
     // MARK: Place

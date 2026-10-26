@@ -43,7 +43,7 @@ the key, e.g. `new-pane = "cmd+shift+t"`. `⌘⇧R` reloads the config live.
 | `⌘C` / `⌘V` | copy selection (sends `^C` when nothing is selected) / paste | `copy`, `paste` |
 | `⌘⇧S` | toggle window snapping (session-only, never moves panes) | `toggle-snapping` |
 | `⌘⇧R` | reload `config.toml` | `reload-config` |
-| `⌘⇧A` | relax layout: related panes pull together, strangers push apart | `relax-layout` |
+| `⌘⇧A` | relax layout: a left-to-right tree of the cables | `relax-layout` |
 | `⌘Q` | quit the canvas; panes keep running in `gctd` | |
 
 ## Mouse and trackpad
