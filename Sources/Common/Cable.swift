@@ -24,11 +24,11 @@ public struct Vec: Sendable, Equatable {
     public var y: Double
     public init(_ x: Double, _ y: Double) { self.x = x; self.y = y }
 
-    static func + (a: Vec, b: Vec) -> Vec { Vec(a.x + b.x, a.y + b.y) }
-    static func - (a: Vec, b: Vec) -> Vec { Vec(a.x - b.x, a.y - b.y) }
-    static func * (a: Vec, k: Double) -> Vec { Vec(a.x * k, a.y * k) }
-    var length: Double { hypot(x, y) }
-    func dot(_ o: Vec) -> Double { x * o.x + y * o.y }
+    public static func + (a: Vec, b: Vec) -> Vec { Vec(a.x + b.x, a.y + b.y) }
+    public static func - (a: Vec, b: Vec) -> Vec { Vec(a.x - b.x, a.y - b.y) }
+    public static func * (a: Vec, k: Double) -> Vec { Vec(a.x * k, a.y * k) }
+    public var length: Double { hypot(x, y) }
+    public func dot(_ o: Vec) -> Double { x * o.x + y * o.y }
 }
 
 public struct CableKey: Hashable, Sendable {
@@ -512,14 +512,15 @@ public final class CableSim {
 
     // MARK: Interaction
 
-    // Nearest points of every cable within `radius` of `p`.
-    public func hits(near p: Vec, radius: Double) -> [Hit] {
+    // Nearest point of every cable within `radius` of the stroke a -> b (a
+    // press, when a == b).
+    public func hits(along a: Vec, to b: Vec, radius: Double) -> [Hit] {
         var out = [Hit]()
         for key in cables.keys.sorted(by: { $0.order < $1.order }) {
             guard let c = cables[key] else { continue }
             var best: Hit?
             for (i, q) in c.pts.enumerated() {
-                let d = (q - p).length
+                let d = Self.gap(q, a, b)
                 if d <= radius, d < (best?.distance ?? .infinity) {
                     best = Hit(key: key, index: i, distance: d)
                 }
@@ -529,16 +530,30 @@ public final class CableSim {
         return out
     }
 
+    public func hits(near p: Vec, radius: Double) -> [Hit] {
+        hits(along: p, to: p, radius: radius)
+    }
+
+    // Distance from `p` to the segment a-b.
+    private static func gap(_ p: Vec, _ a: Vec, _ b: Vec) -> Double {
+        let ab = b - a
+        let len2 = ab.dot(ab)
+        guard len2 > 1e-9 else { return (p - a).length }
+
+        let t = min(max((p - a).dot(ab) / len2, 0), 1)
+        return (p - (a + ab * t)).length
+    }
+
     public func tie(near p: Vec, radius: Double) -> Int? {
         ties.filter { ($0.center - p).length <= max(radius, $0.width / 2) }
             .min { ($0.center - p).length < ($1.center - p).length }?.id
     }
 
-    // A tie around every strand passing within reach of `p`. Nil when there
-    // is no cable there, or another tie already holds the spot.
+    // A tie around every strand the stroke a -> b crosses (or touches).
+    // Nil when it crosses none, or another tie already holds the spot.
     @discardableResult
-    public func addTie(at p: Vec, radius: Double? = nil) -> Int? {
-        let found = hits(near: p, radius: radius ?? Self.bundleRadius)
+    public func addTie(from a: Vec, to b: Vec, radius: Double? = nil) -> Int? {
+        let found = hits(along: a, to: b, radius: radius ?? Self.bundleRadius)
         guard let lead = found.min(by: { $0.distance < $1.distance }) else { return nil }
 
         let s = Double(lead.index) / Double(Self.points - 1)

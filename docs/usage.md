@@ -57,15 +57,17 @@ doesn't flicker the title. Remote panes are named per host.
 ## Cables
 
 A pane that spawned another (`gctd open` from it, `⌘T` and `⌘⇧H/J/K/L` from the
-focused pane) is wired to it with a cable, colored by the parent's group (else
-its repo). Cables are ropes: they sag, swing when you drag a pane, and settle,
+focused pane) is wired to it with a cable that blends its two windows' colors
+(remote host, else group, else hashed onto your ghostty palette; `cable-color`
+paints them all one hex or `palette:N`). Cables are ropes: they sag, swing when you drag a pane, and settle,
 leaving each pane edge square. A pane side with several cables spreads them
 along the edge in the order that keeps them from crossing, and cables touching
 the focused pane sit forward.
 
 Strands leaving one pane side get a **tie** that gathers them into a bundle.
-Double-click any cable to add a tie around the strands passing there, drag a
-tie to slide it along the cable, double-click a tie to remove it. Ties on a
+Press on a cable and drag across the strands you want together (a line follows
+the mouse); release and they're tied where you crossed. Drag a tie to slide it
+along the cable, double-click it to remove it. Empty space still pans. Ties on a
 shared cable never pass or overlap each other. Ties last for the session.
 `cables = false` turns all of it off.
 

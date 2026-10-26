@@ -2,7 +2,7 @@
 //
 //   pane.meta.parent ──► edges (world rects) ──► CableSim ──► CableView
 //                                                  ▲
-//   double-click a cable: add a tie                │ ties slide along the
+//   drag across cables: tie them together          │ ties slide along the
 //   drag a tie: slide it     double-click: remove ─┘ cable, never overlap
 //
 // A 60 Hz tick keeps the sim fed and renders only while something moves.
@@ -14,16 +14,20 @@ import Common
 // What the last render saw, so a still canvas costs a few comparisons.
 final class CableMemo {
     var edges = [CableKey: CableSim.Edge]()
-    var colors = [CableKey: NSColor]()
+    var tints = [CableKey: CableTint]()
     var bright = Set<CableKey>()
     var zoom: CGFloat = 0
     var ties = 0
+    // Something outside the sim changed (the tie stroke): draw once more.
+    var dirty = false
 }
 
 extension CanvasView {
     // Pixels around a cable or tie that still count as touching it.
     private static let grabReach: CGFloat = 7
-    private static let cableLift: CGFloat = 0.45
+    private static let cableLift: CGFloat = 0.3
+    // A tie stroke shorter than this on screen is a click, not a stroke.
+    private static let minStroke: CGFloat = 10
 
     func setupCables() {
         worldView.addSubview(cableView, positioned: .below, relativeTo: nil)
@@ -41,18 +45,31 @@ extension CanvasView {
         return out
     }
 
-    // One color per parent: its group's color, else hashed from its repo or
-    // directory, so a fan-out reads as one family.
-    private func cableColor(_ key: CableKey) -> NSColor {
-        let base: NSColor
-        if let g = groupOf(key.parent), let meta = groupMetas[g] {
-            base = GroupColor.resolve(meta.color, key: meta.name ?? g.uuid.uuidString)
-        } else {
-            let meta = panes[key.parent]?.meta
-            base = GroupColor.resolve(nil, key: meta?.repoRoot ?? meta?.cwd ?? key.parent.description)
+    // A window's own color: its host's (remote), else its group's, else
+    // hashed from its name, repo, or directory onto the palette. Both ends
+    // of a cable wear their window's color and blend between them; the
+    // `cable-color` config (hex or palette:N) paints every cable one color.
+    private func windowColor(_ id: PaneID) -> NSColor {
+        if let spec = GCTConfig.current.cableColor {
+            return GroupColor.resolve(spec, key: id.description)
         }
-        // Lighter than the group tint it runs over, or it vanishes there.
-        return base.blended(withFraction: Self.cableLift, of: .white) ?? base
+
+        let meta = panes[id]?.meta
+        if let host = meta?.host, let c = HostStyle.color(for: host) { return c }
+
+        if let g = groupOf(id), let group = groupMetas[g] {
+            return GroupColor.resolve(group.color, key: group.name ?? g.uuid.uuidString)
+        }
+        return GroupColor.resolve(nil, key: meta?.name ?? meta?.repoRoot ?? meta?.cwd ?? id.description)
+    }
+
+    private func cableTint(_ key: CableKey) -> CableTint {
+        CableTint(parent: lifted(windowColor(key.parent)), child: lifted(windowColor(key.child)))
+    }
+
+    // Lighter than the tint it may run over, or it vanishes there.
+    private func lifted(_ c: NSColor) -> NSColor {
+        c.blended(withFraction: Self.cableLift, of: .white) ?? c
     }
 
     func cableTick() {
@@ -74,21 +91,23 @@ extension CanvasView {
             dirty = true
         }
 
-        let colors = Dictionary(uniqueKeysWithValues: edges.keys.map { ($0, cableColor($0)) })
+        let tints = Dictionary(uniqueKeysWithValues: edges.keys.map { ($0, cableTint($0)) })
         let bright = Set(edges.keys.filter { $0.parent == focusedID || $0.child == focusedID })
         let zoom = camera.scale
         let ties = cableView.sim.ties.count
 
-        if colors != memo.colors || bright != memo.bright || zoom != memo.zoom || ties != memo.ties {
-            memo.colors = colors
+        if tints != memo.tints || bright != memo.bright || zoom != memo.zoom || ties != memo.ties
+            || memo.dirty {
+            memo.tints = tints
             memo.bright = bright
             memo.zoom = zoom
             memo.ties = ties
+            memo.dirty = false
             dirty = true
         }
         guard dirty else { return }
 
-        cableView.render(colors: colors, bright: bright, zoom: zoom)
+        cableView.render(tints: tints, bright: bright, zoom: zoom)
     }
 
     // MARK: Mouse
@@ -97,8 +116,9 @@ extension CanvasView {
         Double(camera.screenToWorldDistance(Self.grabReach))
     }
 
-    // Press on a tie grabs it; a double-click on a tie removes it, on a bare
-    // cable adds one. True when the press was ours.
+    // Press on a tie grabs it (double-click removes it); press on a cable
+    // starts a stroke, and dragging it across strands ties them together.
+    // True when the press was ours; anything else pans.
     func cableMouseDown(_ world: CGPoint, clicks: Int) -> Bool {
         guard GCTConfig.current.cables, !cableView.sim.cables.isEmpty else { return false }
 
@@ -108,26 +128,45 @@ extension CanvasView {
         if let tie = sim.tie(near: p, radius: cableReach()) {
             if clicks >= 2 {
                 sim.removeTie(tie)
-                return true
+            } else {
+                cableView.grabbed = tie
             }
-            cableView.grabbed = tie
             return true
         }
 
-        guard clicks >= 2, sim.addTie(at: p, radius: cableReach()) != nil else { return false }
+        guard !sim.hits(near: p, radius: cableReach()).isEmpty else { return false }
+        cableView.stroke = (p, p)
+        cableMemo.dirty = true
         return true
     }
 
     func cableMouseDragged(_ world: CGPoint) -> Bool {
-        guard let tie = cableView.grabbed else { return false }
-        cableView.sim.moveTie(tie, to: Vec(Double(world.x), Double(world.y)))
+        let p = Vec(Double(world.x), Double(world.y))
+
+        if let tie = cableView.grabbed {
+            cableView.sim.moveTie(tie, to: p)
+            return true
+        }
+
+        guard let s = cableView.stroke else { return false }
+        cableView.stroke = (s.from, p)
+        cableMemo.dirty = true
         return true
     }
 
     func cableMouseUp() -> Bool {
-        guard cableView.grabbed != nil else { return false }
-        cableView.grabbed = nil
-        cableMemo.ties = -1
+        if cableView.grabbed != nil {
+            cableView.grabbed = nil
+            cableMemo.dirty = true
+            return true
+        }
+
+        guard let s = cableView.stroke else { return false }
+        cableView.stroke = nil
+        cableMemo.dirty = true
+
+        let long = (s.to - s.from).length > Double(camera.screenToWorldDistance(Self.minStroke))
+        if long { cableView.sim.addTie(from: s.from, to: s.to, radius: cableReach()) }
         return true
     }
 }

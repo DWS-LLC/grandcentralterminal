@@ -89,8 +89,11 @@ dim-delay = 4
 # bell, OSC 7501 blocked/done/error, and `gctd notify`. Click focuses the pane.
 notifications = true
 # Cables from a pane to the panes it spawned, with slidable ties
-# (double-click a cable to add one, a tie to remove it).
+# (drag across cables to add one, double-click a tie to remove it).
 cables = true
+# "auto": each cable blends its two windows' colors (remote host, else group,
+# else hashed onto your ghostty palette). Or one hex or "palette:N".
+cable-color = "auto"
 
 # Focus the pane under the cursor on mouse motion (ghostty's name for it).
 focus-follows-mouse = false
