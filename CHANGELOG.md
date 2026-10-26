@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.10.0
 
 ### Added
 - Auto names: panes without a custom name show what runs in them (`gct`, `nvim · gct`, `claude · gct · pip fit`, `gct@feat-x`), shortest-unique across the canvas. Rename to nothing to go back to auto.
