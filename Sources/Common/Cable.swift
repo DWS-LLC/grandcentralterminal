@@ -513,17 +513,21 @@ public final class CableSim {
     // MARK: Interaction
 
     // Nearest point of every cable within `radius` of the stroke a -> b (a
-    // press, when a == b).
+    // press, when a == b). Measured to the rope between its points, so a
+    // press anywhere along a cable lands, not just near a vertex.
     public func hits(along a: Vec, to b: Vec, radius: Double) -> [Hit] {
         var out = [Hit]()
         for key in cables.keys.sorted(by: { $0.order < $1.order }) {
             guard let c = cables[key] else { continue }
             var best: Hit?
-            for (i, q) in c.pts.enumerated() {
-                let d = Self.gap(q, a, b)
-                if d <= radius, d < (best?.distance ?? .infinity) {
-                    best = Hit(key: key, index: i, distance: d)
-                }
+
+            for i in 0..<(c.pts.count - 1) {
+                let d = Self.gap(a, b, c.pts[i], c.pts[i + 1])
+                guard d <= radius, d < (best?.distance ?? .infinity) else { continue }
+
+                // The nearer end of the link is the tie's anchor.
+                let near = Self.gap(c.pts[i], a, b) <= Self.gap(c.pts[i + 1], a, b) ? i : i + 1
+                best = Hit(key: key, index: near, distance: d)
             }
             if let best { out.append(best) }
         }
@@ -542,6 +546,19 @@ public final class CableSim {
 
         let t = min(max((p - a).dot(ab) / len2, 0), 1)
         return (p - (a + ab * t)).length
+    }
+
+    // Distance between the segments a-b and c-d (0 when they cross).
+    private static func gap(_ a: Vec, _ b: Vec, _ c: Vec, _ d: Vec) -> Double {
+        if crosses(a, b, c, d) { return 0 }
+        return min(gap(a, c, d), gap(b, c, d), gap(c, a, b), gap(d, a, b))
+    }
+
+    private static func crosses(_ a: Vec, _ b: Vec, _ c: Vec, _ d: Vec) -> Bool {
+        func side(_ p: Vec, _ q: Vec, _ r: Vec) -> Double {
+            (q.x - p.x) * (r.y - p.y) - (q.y - p.y) * (r.x - p.x)
+        }
+        return side(a, b, c) * side(a, b, d) < 0 && side(c, d, a) * side(c, d, b) < 0
     }
 
     public func tie(near p: Vec, radius: Double) -> Int? {

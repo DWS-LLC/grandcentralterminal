@@ -91,8 +91,8 @@ notifications = true
 # Cables from a pane to the panes it spawned, with slidable ties
 # (drag across cables to add one, double-click a tie to remove it).
 cables = true
-# "auto": each cable blends its two windows' colors (remote host, else group,
-# else hashed onto your ghostty palette). Or one hex or "palette:N".
+# "auto": each cable gets a palette color hashed from its start -> end window
+# names when it first appears. Or one hex or "palette:N" for every cable.
 cable-color = "auto"
 
 # Focus the pane under the cursor on mouse motion (ghostty's name for it).

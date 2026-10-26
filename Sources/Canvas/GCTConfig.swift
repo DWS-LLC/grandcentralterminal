@@ -517,8 +517,8 @@ struct GCTConfig {
     var notifications = true
     // Cables between a pane and the panes it spawned, with slidable ties.
     var cables = true
-    // nil = each cable blends its two windows' colors; else one hex or
-    // palette:N for every cable.
+    // nil = a palette color per cable, hashed from its window names; else
+    // one hex or palette:N for every cable.
     var cableColor: String?
     // Hover behavior: focus-follows-mouse focuses the pane under the
     // cursor on motion (same name as ghostty); scroll-on-terminal-hover
@@ -979,9 +979,9 @@ struct GCTConfig {
     # Press on a cable and drag across strands to tie them together; drag a
     # tie to slide it, double-click it to remove.
     cables = true
-    # "auto": each cable blends its two windows' colors (remote host, else
-    # group, else hashed onto your ghostty palette). Or one hex ("#ff8800")
-    # or "palette:N" (ghostty ANSI color N) for every cable.
+    # "auto": each cable gets a palette color hashed from its start -> end
+    # window names when it first appears. Or one hex ("#ff8800") or
+    # "palette:N" (ghostty ANSI color N) for every cable.
     cable-color = "auto"
     # Clicking another pane to focus it: "none", "center" (keep zoom) or
     # "fit" (zoom to fit). Runs on release, only for a click, never a drag.

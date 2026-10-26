@@ -57,9 +57,10 @@ doesn't flicker the title. Remote panes are named per host.
 ## Cables
 
 A pane that spawned another (`gctd open` from it, `⌘T` and `⌘⇧H/J/K/L` from the
-focused pane) is wired to it with a cable that blends its two windows' colors
-(remote host, else group, else hashed onto your ghostty palette; `cable-color`
-paints them all one hex or `palette:N`). Cables are ropes: they sag, swing when you drag a pane, and settle,
+focused pane) is wired to it with a cable. Each cable gets one color from your
+ghostty palette, hashed from its "start -> end" window names when the cable
+first appears; it keeps that color if the windows are renamed later.
+`cable-color` paints every cable one hex or `palette:N` instead. Cables are ropes: they sag, swing when you drag a pane, and settle,
 leaving each pane edge square. A pane side with several cables spreads them
 along the edge in the order that keeps them from crossing, and cables touching
 the focused pane sit forward.

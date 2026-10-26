@@ -1,18 +1,11 @@
-// Draws the cable sim: a gradient stroke per cable (parent's color to the
-// child's), a dot at each port, a grey pill per tie, and the stroke you
-// are dragging out to make a tie. A plain world-space view under the panes
+// Draws the cable sim: one stroked path per cable, a dot at each port, a
+// grey pill per tie, and the stroke you are dragging out to make a tie. A plain world-space view under the panes
 // (the world transform scales it with the camera), so it never takes a click.
 //
-//   CableSim (Common) ──► CableView ──► CAGradientLayer (masked by the path)
+//   CableSim (Common) ──► CableView ──► CAShapeLayer per cable / tie
 
 import AppKit
 import Common
-
-// The two ends of a cable: the parent window's color and the child's.
-struct CableTint: Equatable {
-    var parent: NSColor
-    var child: NSColor
-}
 
 final class CableView: NSView {
     private static let lineWidth: CGFloat = 2.2
@@ -27,9 +20,8 @@ final class CableView: NSView {
     private static let tickRate: TimeInterval = 1.0 / 60
 
     private final class Line {
-        let gradient = CAGradientLayer()
-        let mask = CAShapeLayer()
-        let ports = [CAShapeLayer(), CAShapeLayer()]
+        let stroke = CAShapeLayer()
+        let ports = CAShapeLayer()
     }
 
     let sim = CableSim()
@@ -65,9 +57,9 @@ final class CableView: NSView {
         timer = Timer.scheduledTimer(withTimeInterval: Self.tickRate, repeats: true) { _ in tick() }
     }
 
-    // `tints` has one entry per cable; `bright` are the ones touching the
+    // `colors` has one entry per cable; `bright` are the ones touching the
     // focused pane (the rest sit back). `zoom` is the camera scale.
-    func render(tints: [CableKey: CableTint], bright: Set<CableKey>, zoom: CGFloat) {
+    func render(colors: [CableKey: NSColor], bright: Set<CableKey>, zoom: CGFloat) {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         defer { CATransaction.commit() }
@@ -79,62 +71,43 @@ final class CableView: NSView {
 
         for (key, cable) in sim.cables {
             let line = lines[key] ?? make(key)
-            let tint = tints[key] ?? CableTint(parent: .systemBlue, child: .systemBlue)
-            draw(line, cable, tint, width: width)
-            line.gradient.opacity = bright.isEmpty || bright.contains(key) ? 1 : Self.calmAlpha
+            let color = (colors[key] ?? .systemBlue).cgColor
+            let opacity = bright.isEmpty || bright.contains(key) ? 1 : Self.calmAlpha
+
+            line.stroke.path = Self.path(cable.pts)
+            line.stroke.strokeColor = color
+            line.stroke.lineWidth = width
+            line.stroke.opacity = opacity
+
+            let radius = Self.portRadius * max(1, width / Self.lineWidth)
+            let dots = CGMutablePath()
+            for end in [cable.a, cable.b] {
+                dots.addEllipse(in: CGRect(x: end.point.x - radius, y: end.point.y - radius,
+                                           width: radius * 2, height: radius * 2))
+            }
+            line.ports.path = dots
+            line.ports.fillColor = color
+            line.ports.opacity = opacity
         }
 
         renderTies(width: width)
         renderStroke(width: width)
     }
 
-    private func draw(_ line: Line, _ cable: Cable, _ tint: CableTint, width: CGFloat) {
-        let path = Self.path(cable.pts)
-        let box = path.boundingBoxOfPath.insetBy(dx: -width * 2, dy: -width * 2)
-
-        line.gradient.frame = box
-        line.gradient.colors = [tint.parent.cgColor, tint.child.cgColor]
-        line.gradient.startPoint = Self.unit(cable.a.point, in: box)
-        line.gradient.endPoint = Self.unit(cable.b.point, in: box)
-
-        // The path in the gradient layer's own coordinates.
-        var move = CGAffineTransform(translationX: -box.minX, y: -box.minY)
-        line.mask.frame = CGRect(origin: .zero, size: box.size)
-        line.mask.path = path.copy(using: &move)
-        line.mask.lineWidth = width
-
-        let radius = Self.portRadius * max(1, width / Self.lineWidth)
-        let colors = [tint.parent, tint.child]
-        for (i, end) in [cable.a, cable.b].enumerated() {
-            line.ports[i].path = CGPath(ellipseIn: CGRect(x: end.point.x - radius, y: end.point.y - radius,
-                                                         width: radius * 2, height: radius * 2),
-                                        transform: nil)
-            line.ports[i].fillColor = colors[i].cgColor
-        }
-    }
-
-    // Where `p` sits in `box`, 0...1 each way (what a gradient wants).
-    private static func unit(_ p: Vec, in box: CGRect) -> CGPoint {
-        CGPoint(x: (p.x - box.minX) / max(box.width, 1), y: (p.y - box.minY) / max(box.height, 1))
-    }
-
     private func make(_ key: CableKey) -> Line {
         let line = Line()
-        line.mask.fillColor = nil
-        line.mask.strokeColor = NSColor.black.cgColor
-        line.mask.lineCap = .round
-        line.mask.lineJoin = .round
-        line.gradient.mask = line.mask
-        layer?.addSublayer(line.gradient)
-
-        for port in line.ports { layer?.addSublayer(port) }
+        line.stroke.fillColor = nil
+        line.stroke.lineCap = .round
+        line.stroke.lineJoin = .round
+        layer?.addSublayer(line.stroke)
+        layer?.addSublayer(line.ports)
         lines[key] = line
         return line
     }
 
     private func remove(_ line: Line?) {
-        line?.gradient.removeFromSuperlayer()
-        line?.ports.forEach { $0.removeFromSuperlayer() }
+        line?.stroke.removeFromSuperlayer()
+        line?.ports.removeFromSuperlayer()
     }
 
     private func renderTies(width: CGFloat) {

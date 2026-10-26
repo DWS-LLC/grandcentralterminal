@@ -14,17 +14,20 @@ import Common
 // What the last render saw, so a still canvas costs a few comparisons.
 final class CableMemo {
     var edges = [CableKey: CableSim.Edge]()
-    var tints = [CableKey: CableTint]()
+    // Picked when the cable first appears, from its two windows' names,
+    // and kept: renaming a window later does not recolor its cables.
+    var colors = [CableKey: NSColor]()
     var bright = Set<CableKey>()
     var zoom: CGFloat = 0
     var ties = 0
     // Something outside the sim changed (the tie stroke): draw once more.
     var dirty = false
+    var renderedColors = [CableKey: NSColor]()
 }
 
 extension CanvasView {
     // Pixels around a cable or tie that still count as touching it.
-    private static let grabReach: CGFloat = 7
+    private static let grabReach: CGFloat = 14
     private static let cableLift: CGFloat = 0.3
     // A tie stroke shorter than this on screen is a click, not a stroke.
     private static let minStroke: CGFloat = 10
@@ -45,26 +48,29 @@ extension CanvasView {
         return out
     }
 
-    // A window's own color: its host's (remote), else its group's, else
-    // hashed from its name, repo, or directory onto the palette. Both ends
-    // of a cable wear their window's color and blend between them; the
-    // `cable-color` config (hex or palette:N) paints every cable one color.
-    private func windowColor(_ id: PaneID) -> NSColor {
+    // One palette color per cable, hashed from "start -> end" window names
+    // the moment the cable gets its color. `cable-color` (hex or palette:N)
+    // paints every cable the same instead. Nil until both windows have a
+    // name (auto names land a beat after a pane appears).
+    private func pickColor(_ key: CableKey) -> NSColor? {
         if let spec = GCTConfig.current.cableColor {
-            return GroupColor.resolve(spec, key: id.description)
+            return lifted(GroupColor.resolve(spec, key: key.child.description))
         }
 
-        let meta = panes[id]?.meta
-        if let host = meta?.host, let c = HostStyle.color(for: host) { return c }
-
-        if let g = groupOf(id), let group = groupMetas[g] {
-            return GroupColor.resolve(group.color, key: group.name ?? g.uuid.uuidString)
-        }
-        return GroupColor.resolve(nil, key: meta?.name ?? meta?.repoRoot ?? meta?.cwd ?? id.description)
+        guard let from = panes[key.parent].flatMap({ $0.meta.name ?? $0.autoName }),
+              let to = panes[key.child].flatMap({ $0.meta.name ?? $0.autoName }) else { return nil }
+        return lifted(GroupColor.resolve(nil, key: "\(from) -> \(to)"))
     }
 
-    private func cableTint(_ key: CableKey) -> CableTint {
-        CableTint(parent: lifted(windowColor(key.parent)), child: lifted(windowColor(key.child)))
+    private func cableColors(_ keys: Set<CableKey>) -> [CableKey: NSColor] {
+        let memo = cableMemo
+        memo.colors = memo.colors.filter { keys.contains($0.key) }
+
+        for key in keys where memo.colors[key] == nil || GCTConfig.current.cableColor != nil {
+            guard let c = pickColor(key) else { continue }
+            memo.colors[key] = c
+        }
+        return memo.colors
     }
 
     // Lighter than the tint it may run over, or it vanishes there.
@@ -91,14 +97,14 @@ extension CanvasView {
             dirty = true
         }
 
-        let tints = Dictionary(uniqueKeysWithValues: edges.keys.map { ($0, cableTint($0)) })
+        let colors = cableColors(Set(edges.keys))
         let bright = Set(edges.keys.filter { $0.parent == focusedID || $0.child == focusedID })
         let zoom = camera.scale
         let ties = cableView.sim.ties.count
 
-        if tints != memo.tints || bright != memo.bright || zoom != memo.zoom || ties != memo.ties
+        if colors != memo.renderedColors || bright != memo.bright || zoom != memo.zoom || ties != memo.ties
             || memo.dirty {
-            memo.tints = tints
+            memo.renderedColors = colors
             memo.bright = bright
             memo.zoom = zoom
             memo.ties = ties
@@ -107,7 +113,7 @@ extension CanvasView {
         }
         guard dirty else { return }
 
-        cableView.render(tints: tints, bright: bright, zoom: zoom)
+        cableView.render(colors: colors, bright: bright, zoom: zoom)
     }
 
     // MARK: Mouse
