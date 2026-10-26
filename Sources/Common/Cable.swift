@@ -151,6 +151,7 @@ public final class CableSim {
     public private(set) var ties = [CableTie]()
     public private(set) var isAwake = false
 
+    private var edges = [CableKey: Edge]()
     private var calm = 0
     private var nextTie = 1
     // Fan-outs whose tie you removed: the sim leaves them alone.
@@ -161,7 +162,13 @@ public final class CableSim {
     // MARK: Edges
 
     public func setEdges(_ edges: [CableKey: Edge]) {
-        let ends = Self.ports(edges)
+        self.edges = edges
+        layoutPorts()
+    }
+
+    // Ports follow the ties too: strands a tie holds leave together.
+    private func layoutPorts() {
+        let ends = Self.ports(edges, ties: ties)
 
         for key in cables.keys where edges[key] == nil {
             cables.removeValue(forKey: key)
@@ -221,15 +228,25 @@ public final class CableSim {
     // pane when they overlap, else as near as the edge allows. A side with
     // several cables spreads them apart, ordered by where each cable's
     // other end is, so neighbors never cross on the way out.
-    private static func ports(_ edges: [CableKey: Edge]) -> [CableKey: (a: CableEnd, b: CableEnd)] {
+    private static func ports(_ edges: [CableKey: Edge], ties: [CableTie]) -> [CableKey: (a: CableEnd, b: CableEnd)] {
         var groups = [String: [EndRef]]()
+        let pins = Self.pins(edges, ties)
 
         for key in edges.keys.sorted(by: { $0.order < $1.order }) {
             guard let e = edges[key] else { continue }
-            let p = EndRef(key: key, isParent: true, rect: e.parent, other: e.child,
-                           side: side(of: e.parent, facing: e.child))
-            let c = EndRef(key: key, isParent: false, rect: e.child, other: e.parent,
-                           side: side(of: e.child, facing: e.parent))
+            let toward = pins.parent[key] ?? e.child
+            let back = pins.child[key] ?? e.parent
+
+            // A tied end picks its side by the whole tie; the other end then
+            // takes the opposite side, so a bundle leaves one pane's right
+            // and meets each pane's left, whatever the vertical offsets.
+            var pSide = side(of: e.parent, facing: toward)
+            var cSide = side(of: e.child, facing: back)
+            if pins.parent[key] != nil, pins.child[key] == nil { cSide = opposite(pSide) }
+            if pins.child[key] != nil, pins.parent[key] == nil { pSide = opposite(cSide) }
+
+            let p = EndRef(key: key, isParent: true, rect: e.parent, other: toward, side: pSide)
+            let c = EndRef(key: key, isParent: false, rect: e.child, other: back, side: cSide)
             groups[groupID(p), default: []].append(p)
             groups[groupID(c), default: []].append(c)
         }
@@ -246,6 +263,36 @@ public final class CableSim {
             if let x = a[key], let y = b[key] { out[key] = (x, y) }
         }
         return out
+    }
+
+    // What a tied strand faces instead of its own other end: where all the
+    // tie's strands go. Strands that share a pane at one end (a parent and
+    // its children) then leave that pane together, side by side, toward the
+    // tie, not each toward its own window. Only ties you made count.
+    private static func pins(_ edges: [CableKey: Edge], _ ties: [CableTie])
+        -> (parent: [CableKey: Rect], child: [CableKey: Rect]) {
+        var parent = [CableKey: Rect](), child = [CableKey: Rect]()
+
+        for t in ties.sorted(by: { $0.id < $1.id }) where t.fanOut == nil {
+            let keys = t.members.map(\.key).filter { edges[$0] != nil }
+            guard keys.count >= 2 else { continue }
+
+            if Set(keys.map(\.parent)).count == 1 {
+                let all = union(keys.compactMap { edges[$0]?.child })
+                for k in keys where parent[k] == nil { parent[k] = all }
+            }
+            if Set(keys.map(\.child)).count == 1 {
+                let all = union(keys.compactMap { edges[$0]?.parent })
+                for k in keys where child[k] == nil { child[k] = all }
+            }
+        }
+        return (parent, child)
+    }
+
+    private static func union(_ rects: [Rect]) -> Rect {
+        let x0 = rects.map(\.x).min() ?? 0, y0 = rects.map(\.y).min() ?? 0
+        let x1 = rects.map { $0.x + $0.w }.max() ?? 0, y1 = rects.map { $0.y + $0.h }.max() ?? 0
+        return Rect(x: x0, y: y0, w: x1 - x0, h: y1 - y0)
     }
 
     private static func groupID(_ r: EndRef) -> String {
@@ -288,17 +335,31 @@ public final class CableSim {
     }
 
     // Sorted spots pushed apart to `portSpacing` (less if the edge is
-    // short), kept inside lo...hi.
+    // short), kept inside lo...hi. A crowd spreads evenly around where it
+    // wanted to be: the average of pushing everyone up and pushing everyone
+    // down, which keeps every gap.
     private static func spread(_ at: [Double], lo: Double, hi: Double) -> [Double] {
         guard at.count > 1 else { return at }
 
         let gap = min(portSpacing, (hi - lo) / Double(at.count - 1))
-        var out = at
-        for i in 1..<out.count { out[i] = max(out[i], out[i - 1] + gap) }
+        var up = at, down = at
+        for i in 1..<at.count { up[i] = max(up[i], up[i - 1] + gap) }
+        for i in stride(from: at.count - 2, through: 0, by: -1) { down[i] = min(down[i], down[i + 1] - gap) }
 
-        out[out.count - 1] = min(out[out.count - 1], hi)
-        for i in stride(from: out.count - 2, through: 0, by: -1) { out[i] = min(out[i], out[i + 1] - gap) }
+        var out = zip(up, down).map { ($0 + $1) / 2 }
+        let over = max((out.last ?? hi) - hi, 0)
+        let under = max(lo - (out.first ?? lo), 0)
+        out = out.map { $0 - over + under }
         return out
+    }
+
+    private static func opposite(_ s: Side) -> Side {
+        switch s {
+        case .left: return .right
+        case .right: return .left
+        case .top: return .bottom
+        case .bottom: return .top
+        }
     }
 
     // Which side of `r` faces `o` (y grows up): across the wider gap when
@@ -784,6 +845,7 @@ public final class CableSim {
         tie.members = held
         nextTie += 1
         ties.append(tie)
+        layoutPorts()
         wake()
         refreshTies()
         return tie.id
@@ -802,6 +864,7 @@ public final class CableSim {
         tie.s = at
         nextTie += 1
         ties.append(tie)
+        layoutPorts()
         wake()
         refreshTies()
         return tie.id
@@ -821,6 +884,7 @@ public final class CableSim {
         guard let t = ties.first(where: { $0.id == id }) else { return }
         if let fan = t.fanOut { declined.insert(fan) }
         ties.removeAll { $0.id == id }
+        layoutPorts()
         wake()
     }
 
