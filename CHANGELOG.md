@@ -1,12 +1,15 @@
 # Changelog
 
-## Unreleased
+## v0.11.0
 
 ### Added
 - Cables: a pane is wired to the panes it spawned (`gctd open`, `⌘T`, `⌘⇧H/J/K/L`). Bézier cables whose handles hang on springs (they lag, overshoot, and settle when you move a pane), leave each edge square on the side facing the other pane, and sit where the cable comes out straightest (level with the other pane when they overlap, else as near as the edge allows), spread apart so strands don't cross, never within 15% of a corner. Strands of one of your ties that share a pane leave it together, on the side facing the whole tie, and meet each other pane on the opposite side. Each cable gets one palette color hashed from its start -> end window names when it first appears; `cable-color` takes a hex or `palette:N` for all. `cables = false` turns them off.
-- Cable ties (grabbing a cable is forgiving: 14px reach, measured along the rope, not just its points): strands leaving a pane side are tied into a bundle. Press on a cable and drag across strands to tie them together; a stroke needs two or more strands, and always lands (near the ends it slides to the closest free spot); drag a tie to slide it smoothly along the cable (ties collide and keep their order); a tie is a waypoint the strands pass through side by side, drawn as smooth curves, so it works on strands from anywhere, however far apart, with no humps; a strand that would have to loop back through a tie isn't held by it), double-click it to remove.
+- Cable ties (grabbing a cable is forgiving: 14px reach, measured along the rope, not just its points): strands leaving a pane side are tied into a bundle. Press on a cable and drag across strands to tie them together; a stroke needs two or more strands, and always lands (near the ends it slides to the closest free spot); drag a tie to slide it smoothly along the cable (ties collide and keep their order); a tie is a waypoint the strands pass through side by side, drawn as smooth curves, so it works on strands from anywhere, however far apart, with no humps; a strand that would have to loop back through a tie isn't held by it; which way a bundle flows comes from how its ports face, so a wide fan of children still ties), double-click it to remove.
 
 - `gctd open parent=<pane>` wires a new pane to any pane, not just the caller; `gctd tie <parent> <child>...` and `gctd untie` manage cable ties from scripts. Ties (yours and scripted) are kept by the daemon: they survive restarts and show on every canvas. Protocol 4 (older daemons keep working; their ties stay canvas-local).
+
+### Changed
+- Relax by Relation (`⌘⇧A`) uses only the cables as the relation (spawned by) and lays them out as a left-to-right tree: a pane right of the pane that spawned it, siblings in a column with room for their ties, a parent centered on its children, unrelated panes in rows. Replaces the spring pass; same repo, dir and host no longer pull panes together.
 
 ### Fixed
 - A pane's spawn parent never matched a live pane on the canvas, so Relax by Relation ignored the strongest link (spawned by).
@@ -18,7 +21,7 @@
 - Notifications: OSC 9/777, the bell, and OSC 7501 blocked/done/error from panes you're not looking at post a desktop notification and mark the titlebar with `●`; click focuses the pane. `notifications = false` turns it off.
 - `gctd notify <pane> [title=..] <text>`, and `gctd agent-setup install --hooks` now merges Claude `Notification` and `Stop` hooks that use it.
 - `dim-inactive` / `dim-delay`: quiet unfocused panes fade; output, blocked status, and notices wake them.
-- Relax by Relation (`⌘⇧A`, `relax-layout`): lays panes out as a left-to-right tree of the cables (a pane right of the pane that spawned it, siblings in a column with room for ties), unrelated panes in rows. Deterministic; undoable.
+- Relax by Relation (`⌘⇧A`, `relax-layout`): a deterministic spring pass pulls related panes (spawn parent, same repo, same dir, same host) together and pushes strangers apart. Undoable.
 - `gctd send` reads stdin when given no text, takes `--paste` (bracketed paste), and understands `\xHH` / `\e` escapes (`\x03` is ^C).
 
 ### Changed

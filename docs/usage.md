@@ -72,7 +72,9 @@ along the cable, double-click it to remove it. Empty space still pans. Ties on a
 shared cable never pass or overlap each other. The daemon keeps ties, so they
 survive a restart; `gctd tie <parent> <child>...` makes one from a script and
 `gctd untie <tie>` removes it. A tie only holds strands that can pass it
-heading the way the bundle flows (no loops), and only across one daemon.
+heading the way the bundle flows (no loops; the direction comes from how the
+ports face, so children spread far up and down still tie), and only across one
+daemon.
 `cables = false` turns all of it off.
 
 ## Dim and notices
