@@ -6,11 +6,13 @@
 
 import Foundation
 
-public let ProtoVersion: UInt16 = 3
+public let ProtoVersion: UInt16 = 4
 // First protocol revision whose daemon understands MsgTag.arrangePanes.
 public let ArrangeProtoVersion: UInt16 = 2
 // First protocol revision whose daemon understands MsgTag.layoutPolicy.
 public let LayoutProtoVersion: UInt16 = 3
+// First protocol revision whose daemon keeps cable ties (MsgTag.setTie).
+public let TieProtoVersion: UInt16 = 4
 
 public enum MsgTag: UInt8 {
     // client -> daemon
@@ -37,6 +39,8 @@ public enum MsgTag: UInt8 {
     case arrangePanes = 21 // JSON ArrangePanes (exact batch placement)
     case layoutPolicy = 22 // JSON LayoutPolicy (canvas config for headless clients)
     case notifyPane  = 23 // JSON PaneNotify (agent asks canvas to notify)
+    case setTie      = 24 // JSON TieMeta (create or update a cable tie)
+    case removeTie   = 25 // JSON TieRef
 
     // daemon -> client
     case welcome     = 64 // JSON Welcome
@@ -54,6 +58,8 @@ public enum MsgTag: UInt8 {
     case canvasRelay   = 76 // JSON CanvasCommand (daemon -> canvas: run this)
     case replayPane    = 77 // data: uuid + ring snapshot (history, not live)
     case paneNotice    = 78 // JSON PaneNotify (daemon -> canvas: post this)
+    case tieMeta       = 79 // JSON TieMeta (created or updated)
+    case tieExit       = 80 // JSON TieRef
 }
 
 public struct PaneID: Hashable, Sendable, CustomStringConvertible {
@@ -289,21 +295,50 @@ public struct PaneMeta: Codable, Sendable {
     }
 }
 
+// A tie on cables between spawned panes: the strands it bundles (each a
+// parent -> child cable, named by its two panes) and where along the cable
+// it sits (0...1). `delta` is a strand's grip offset, in cable sample points.
+public struct TieMeta: Codable, Sendable, Equatable {
+    public struct Strand: Codable, Sendable, Equatable {
+        public var parent: PaneID
+        public var child: PaneID
+        public var delta: Double
+        public init(parent: PaneID, child: PaneID, delta: Double = 0) {
+            self.parent = parent; self.child = child; self.delta = delta
+        }
+    }
+
+    public var id: String
+    public var s: Double
+    public var strands: [Strand]
+    public init(id: String = UUID().uuidString, s: Double, strands: [Strand]) {
+        self.id = id; self.s = s; self.strands = strands
+    }
+}
+
+public struct TieRef: Codable, Sendable {
+    public var id: String
+    public init(id: String) { self.id = id }
+}
+
 public struct Welcome: Codable, Sendable {
     public var version: UInt16
     public var panes: [PaneMeta]
     // Absent on the wire from old daemons; decode as empty.
     public var groups: [GroupMeta]
+    public var ties: [TieMeta]
     public init(version: UInt16 = ProtoVersion, panes: [PaneMeta],
-                groups: [GroupMeta] = []) {
+                groups: [GroupMeta] = [], ties: [TieMeta] = []) {
         self.version = version; self.panes = panes; self.groups = groups
+        self.ties = ties
     }
-    enum CodingKeys: String, CodingKey { case version, panes, groups }
+    enum CodingKeys: String, CodingKey { case version, panes, groups, ties }
     public init(from decoder: any Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         version = try c.decodeIfPresent(UInt16.self, forKey: .version) ?? ProtoVersion
         panes = try c.decodeIfPresent([PaneMeta].self, forKey: .panes) ?? []
         groups = try c.decodeIfPresent([GroupMeta].self, forKey: .groups) ?? []
+        ties = try c.decodeIfPresent([TieMeta].self, forKey: .ties) ?? []
     }
 }
 

@@ -73,6 +73,7 @@ public struct CableTie: Sendable {
         // Point offset from the tie's own, so strands that pass the tie
         // at slightly different points stay where they were gripped.
         public var delta: Double
+        public init(key: CableKey, delta: Double) { self.key = key; self.delta = delta }
     }
 
     public var id: Int
@@ -786,6 +787,34 @@ public final class CableSim {
         wake()
         refreshTies()
         return tie.id
+    }
+
+    // A tie from saved state: nil unless two or more of its cables exist
+    // and a free spot is left. No hit-testing: the strands are named.
+    @discardableResult
+    public func restoreTie(_ members: [CableTie.Member], s: Double) -> Int? {
+        let live = members.filter { cables[$0.key] != nil }
+        guard live.count >= 2 else { return nil }
+
+        var tie = CableTie(id: nextTie, members: live, s: s)
+        guard let at = clear(tie, at: s) else { return nil }
+
+        tie.s = at
+        nextTie += 1
+        ties.append(tie)
+        wake()
+        refreshTies()
+        return tie.id
+    }
+
+    // Put a tie at `s` (0...1) outright, as when something else moved it.
+    public func slideTie(_ id: Int, to s: Double) {
+        guard let i = ties.firstIndex(where: { $0.id == id }),
+              let at = clear(ties[i], at: s) else { return }
+
+        ties[i].s = at
+        wake()
+        refreshTies()
     }
 
     public func removeTie(_ id: Int) {

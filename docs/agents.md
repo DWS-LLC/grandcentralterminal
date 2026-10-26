@@ -18,6 +18,9 @@ gctd send $ID "make test"             # type into the pane (+ newline)
 gctd send $ID --no-newline '\x03'     # \xHH, \e, \n, \t, \r escapes: ^C is \x03
 gctd dump $A --strip-ansi | gctd send $B --paste   # no text reads stdin
 gctd notify $ID "build failed"        # desktop notification; click focuses the pane
+gctd open parent=$ID name=tests       # wired (cable) to $ID, whoever calls
+gctd tie $ID $A $B at=0.4             # bundle the cables from $ID to $A, $B
+gctd untie $TIE                       # tie ids are in `gctd list`
 gctd rename $ID name=server
 gctd group $A $B name=feat color=#3b82f6   # or palette:N; omit for auto
 gctd focus $ID                        # focus + center on the canvas

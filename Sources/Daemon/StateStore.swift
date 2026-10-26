@@ -59,13 +59,15 @@ final class StateStore {
 struct SavedState: Codable, Sendable {
     var panes: [PaneMeta]
     var groups: [GroupMeta]
-    init(panes: [PaneMeta] = [], groups: [GroupMeta] = []) {
-        self.panes = panes; self.groups = groups
+    var ties: [TieMeta]
+    init(panes: [PaneMeta] = [], groups: [GroupMeta] = [], ties: [TieMeta] = []) {
+        self.panes = panes; self.groups = groups; self.ties = ties
     }
-    enum CodingKeys: String, CodingKey { case panes, groups }
+    enum CodingKeys: String, CodingKey { case panes, groups, ties }
     init(from decoder: any Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         panes = try c.decodeIfPresent([PaneMeta].self, forKey: .panes) ?? []
         groups = try c.decodeIfPresent([GroupMeta].self, forKey: .groups) ?? []
+        ties = try c.decodeIfPresent([TieMeta].self, forKey: .ties) ?? []
     }
 }

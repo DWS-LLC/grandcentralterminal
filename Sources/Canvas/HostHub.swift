@@ -86,6 +86,15 @@ final class HostHub {
         return g
     }
 
+    func inboundTie(_ tie: TieMeta, owner: String) -> TieMeta {
+        var t = tie
+        t.strands = tie.strands.map {
+            TieMeta.Strand(parent: localPane(remote: $0.parent, owner: owner),
+                           child: localPane(remote: $0.child, owner: owner), delta: $0.delta)
+        }
+        return t
+    }
+
     func localPane(remote: PaneID, owner: String) -> PaneID {
         if let hit = paneMap[owner]?[remote] { return hit }
         let fresh = PaneID()
@@ -252,6 +261,29 @@ final class HostHub {
     func deleteGroup(_ id: GroupID) {
         guard let (c, remote) = remoteGroup(id) else { return }
         c.deleteGroup(remote)
+    }
+
+    /// Ties are same-owner only, like groups: a tie across daemons has no
+    /// daemon to keep it. Returns the owner it went to; nil = it stays
+    /// this canvas's own.
+    func setTie(_ tie: TieMeta) -> String? {
+        let panes = tie.strands.flatMap { [$0.parent, $0.child] }
+        guard let owner = panes.first.flatMap({ paneOwner[$0] }),
+              panes.allSatisfy({ paneOwner[$0] == owner }), let c = conns[owner] else { return nil }
+
+        var out = tie
+        out.strands = tie.strands.compactMap { st in
+            guard let p = paneRemote[st.parent], let ch = paneRemote[st.child] else { return nil }
+            return TieMeta.Strand(parent: p, child: ch, delta: st.delta)
+        }
+        guard out.strands.count == tie.strands.count else { return nil }
+
+        c.setTie(out)
+        return owner
+    }
+
+    func removeTie(_ id: String, owner: String) {
+        conns[owner]?.removeTie(id)
     }
 
     func moveGroup(_ req: MoveGroup) {

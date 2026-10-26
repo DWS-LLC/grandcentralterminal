@@ -20,6 +20,9 @@ protocol CanvasConnDelegate: AnyObject {
     func connFocusPane(_ id: PaneID, owner: String)
     func connCanvasCommand(_ cmd: CanvasCommand, owner: String)
     func connNotice(_ notice: PaneNotify, owner: String)
+    func connTies(_ ties: [TieMeta], owner: String)
+    func connTieMeta(_ tie: TieMeta, owner: String)
+    func connTieExit(_ id: String, owner: String)
     func connClosed(owner: String)
 }
 
@@ -94,6 +97,7 @@ final class CanvasConn: @unchecked Sendable {
             if let w: Welcome = frame.decode() {
                 peerVersion = w.version
                 delegate?.connWelcome(w.panes, w.groups, owner: owner)
+                delegate?.connTies(w.ties, owner: owner)
             }
         case .paneCreated:
             if let m: PaneCreated = frame.decode() { delegate?.connPaneCreated(m.meta, owner: owner) }
@@ -119,6 +123,10 @@ final class CanvasConn: @unchecked Sendable {
             if let c: CanvasCommand = frame.decode() { delegate?.connCanvasCommand(c, owner: owner) }
         case .paneNotice:
             if let n: PaneNotify = frame.decode() { delegate?.connNotice(n, owner: owner) }
+        case .tieMeta:
+            if let t: TieMeta = frame.decode() { delegate?.connTieMeta(t, owner: owner) }
+        case .tieExit:
+            if let r: TieRef = frame.decode() { delegate?.connTieExit(r.id, owner: owner) }
         default:
             break
         }
@@ -156,4 +164,14 @@ final class CanvasConn: @unchecked Sendable {
     func updateGroup(_ req: UpdateGroup) { conn.send(tag: .updateGroup, json: req) }
     func deleteGroup(_ id: GroupID) { conn.send(tag: .deleteGroup, json: GroupRef(id: id)) }
     func moveGroup(_ req: MoveGroup) { conn.send(tag: .moveGroup, json: req) }
+
+    // Old daemons don't know ties: the tie stays this canvas's own.
+    func setTie(_ tie: TieMeta) {
+        guard peerVersion >= TieProtoVersion else { return }
+        conn.send(tag: .setTie, json: tie)
+    }
+    func removeTie(_ id: String) {
+        guard peerVersion >= TieProtoVersion else { return }
+        conn.send(tag: .removeTie, json: TieRef(id: id))
+    }
 }

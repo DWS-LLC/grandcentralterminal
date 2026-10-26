@@ -69,7 +69,10 @@ Strands leaving one pane side get a **tie** that gathers them into a bundle.
 Press on a cable and drag across the strands you want together (a line follows
 the mouse); release and they're tied where you crossed. Drag a tie to slide it
 along the cable, double-click it to remove it. Empty space still pans. Ties on a
-shared cable never pass or overlap each other. Ties last for the session.
+shared cable never pass or overlap each other. The daemon keeps ties, so they
+survive a restart; `gctd tie <parent> <child>...` makes one from a script and
+`gctd untie <tie>` removes it. A tie only holds strands that can pass it
+heading the way the bundle flows (no loops), and only across one daemon.
 `cables = false` turns all of it off.
 
 ## Dim and notices

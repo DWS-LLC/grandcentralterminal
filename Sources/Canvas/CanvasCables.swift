@@ -6,7 +6,9 @@
 //   drag a tie: slide it     double-click: remove ─┘ cable, never overlap
 //
 // A 60 Hz tick keeps the sim fed and renders only while something moves.
-// Ties live for the session (pane ids are per-session on the canvas).
+// Ties you make or slide are sent to the daemon that owns the panes, which
+// keeps them (and `gctd tie` makes them too); CanvasTies.swift keeps the sim
+// matching what the daemon holds.
 
 import AppKit
 import Common
@@ -23,6 +25,9 @@ final class CableMemo {
     // Something outside the sim changed (the tie stroke): draw once more.
     var dirty = false
     var renderedColors = [CableKey: NSColor]()
+    // Ties the daemons hold (canvas pane ids), and which sim tie shows each.
+    var tieSpecs = [String: TieSpec]()
+    var tieLinks = [Int: TieLink]()
 }
 
 extension CanvasView {
@@ -95,6 +100,7 @@ extension CanvasView {
             cableView.sim.setEdges(edges)
             dirty = true
         }
+        syncTies()
         if cableView.sim.isAwake {
             cableView.sim.step()
             dirty = true
@@ -136,6 +142,7 @@ extension CanvasView {
 
         if let tie = sim.tie(near: p, radius: cableReach()) {
             if clicks >= 2 {
+                tieRemoved(tie)
                 sim.removeTie(tie)
             } else {
                 cableView.grabbed = tie
@@ -164,7 +171,8 @@ extension CanvasView {
     }
 
     func cableMouseUp() -> Bool {
-        if cableView.grabbed != nil {
+        if let tie = cableView.grabbed {
+            tieMoved(tie)
             cableView.grabbed = nil
             cableMemo.dirty = true
             return true
@@ -175,7 +183,9 @@ extension CanvasView {
         cableMemo.dirty = true
 
         let long = (s.to - s.from).length > Double(camera.screenToWorldDistance(Self.minStroke))
-        if long { cableView.sim.addTie(from: s.from, to: s.to, radius: cableReach()) }
+        if long, let tie = cableView.sim.addTie(from: s.from, to: s.to, radius: cableReach()) {
+            tieMade(tie)
+        }
         return true
     }
 }

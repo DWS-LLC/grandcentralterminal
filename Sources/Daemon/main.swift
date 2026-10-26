@@ -353,8 +353,13 @@ func usage() -> Never {
 
           Agent/harness surface (prefer GCT panes for background tasks:
           grouped, no time limits, user-inspectable on the canvas):
-            open [cwd=..] [name=..] [cmd=..] [group=..] [size=w,h] [rect=x,y,w,h]
+            open [cwd=..] [name=..] [cmd=..] [group=..] [parent=<pane>] [size=w,h] [rect=x,y,w,h]
                                       open a pane beside focused/origin, print its id
+                                      (parent= wires it to that pane, whoever calls)
+            tie <parent> <child>... [at=0.4]
+                                      tie the cables from <parent> to each <child>
+                                      into one bundle; prints the tie id
+            untie <tie>               remove a tie
             move <pane> rect=x,y,w,h  place a pane (overlap rules still apply)
             list                      panes + groups, one per line
             dump <pane> [limit=N] [--strip-ansi]
@@ -423,6 +428,9 @@ guard let verb = args.first else {
 }
 
 let rest = Array(args.dropFirst())
+// Where along the cable `gctd tie` puts a tie unless told (0...1).
+let defaultTieAt = 0.4
+
 func needClient() -> GCTClient {
     guard let c = GCTClient() else { die("daemon not running (\(sockPath))") }
     return c
@@ -448,6 +456,11 @@ case "status", "list":
     for g in w.groups {
         print("group \(g.id)  \(g.name ?? "")  members=\(g.members.count)")
     }
+    let names = Dictionary(uniqueKeysWithValues: w.panes.map { ($0.id, $0.name ?? auto[$0.id] ?? "Terminal") })
+    for t in w.ties {
+        let cables = t.strands.map { "\(names[$0.parent] ?? "?")>\(names[$0.child] ?? "?")" }
+        print("tie \(t.id)  at=\(String(format: "%.2f", t.s))  \(cables.joined(separator: " "))")
+    }
     exit(0)
 
 case "stop":
@@ -465,8 +478,17 @@ case "open":
     var anchor = Rect(x: 0, y: 0, w: 900, h: 560)
     var join: GroupID?
     var orbit: PaneID?
-    if let selfID = env["GCT_PANE_ID"],
-       let me = w.panes.first(where: { $0.id.uuid.uuidString == selfID }) {
+    var caller = env["GCT_PANE_ID"].flatMap { selfID in
+        w.panes.first(where: { $0.id.uuid.uuidString == selfID })
+    }
+    // parent= stands in for the caller: placed beside it, wired to it.
+    var parent: PaneID?
+    if let pq = f["parent"] {
+        guard let p = resolvePane(w, pq) else { die("no such pane \(pq)") }
+        caller = p
+        parent = p.id
+    }
+    if let me = caller {
         anchor = Rect(x: me.rect.x + me.rect.w, y: me.rect.y,
                       w: me.rect.w, h: me.rect.h)
         join = w.groups.first(where: { $0.members.contains(me.id) })?.id
@@ -492,7 +514,7 @@ case "open":
     _ = c.conn.send(tag: .createPane, json: CreatePane(
         rect: anchor, cwd: cwd, name: f["name"], command: f["cmd"],
         joinGroup: join, joinDirection: join == nil ? nil : "right",
-        orbitAround: f["rect"] == nil ? orbit : nil))
+        orbitAround: f["rect"] == nil ? orbit : nil, parent: parent))
     // Answer is a paneCreated broadcast; errorReply on spawn failure.
     // Tag-check first: a stray broadcast decodes as nothing, not as the
     // wrong reply (all reply shapes are [$id] flat strings otherwise).
@@ -608,6 +630,39 @@ case "close":
     guard let w = c.welcome() else { die("no reply from daemon") }
     guard let pane = resolvePane(w, rest[0]) else { die("no such pane \(rest[0])") }
     _ = c.conn.send(tag: .closePane, json: PaneRef(id: pane.id))
+    exit(0)
+
+case "tie":
+    let args = rest.filter { !$0.contains("=") }
+    guard args.count >= 3 else { die("tie <parent> <child> <child>... [at=0.4]") }
+    let f = flags(rest.filter { $0.contains("=") })
+    let at = f["at"].flatMap(Double.init) ?? defaultTieAt
+    guard (0...1).contains(at) else { die("at must be 0...1, got \(f["at"] ?? "")") }
+
+    let c = needClient()
+    guard let w = c.welcome() else { die("no reply from daemon") }
+    guard let parent = resolvePane(w, args[0]) else { die("no such pane \(args[0])") }
+    let strands = args.dropFirst().map { q -> TieMeta.Strand in
+        guard let child = resolvePane(w, q) else { die("no such pane \(q)") }
+        guard child.parent == parent.id else { die("\(q) was not spawned by \(args[0]): no cable to tie") }
+        return TieMeta.Strand(parent: parent.id, child: child.id)
+    }
+
+    let tie = TieMeta(s: at, strands: strands)
+    _ = c.conn.send(tag: .setTie, json: tie)
+    while let r = c.nextReply() {
+        if r.tag == .tieMeta, let m: TieMeta = r.decode(), m.id == tie.id { print(m.id); exit(0) }
+        if r.tag == .errorReply, let e: ErrorReply = r.decode() { die(e.message) }
+    }
+    die("no reply from daemon")
+
+case "untie":
+    guard rest.count == 1 else { die("untie <tie>") }
+    let c = needClient()
+    guard let w = c.welcome() else { die("no reply from daemon") }
+    let matches = w.ties.filter { $0.id.hasPrefix(rest[0].uppercased()) || $0.id == rest[0] }
+    guard matches.count == 1 else { die(matches.isEmpty ? "no such tie \(rest[0])" : "ambiguous tie \(rest[0])") }
+    _ = c.conn.send(tag: .removeTie, json: TieRef(id: matches[0].id))
     exit(0)
 
 case "rename":

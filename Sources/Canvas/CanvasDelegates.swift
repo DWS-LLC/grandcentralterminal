@@ -118,6 +118,12 @@ extension CanvasView: CanvasConnDelegate {
         refreshGroupViews()
     }
 
+    func connTies(_ ties: [TieMeta], owner: String) { tiesSnapshot(ties, owner: owner) }
+
+    func connTieMeta(_ tie: TieMeta, owner: String) { tieUpsert(tie, owner: owner) }
+
+    func connTieExit(_ id: String, owner: String) { tieGone(id) }
+
     func connGroupExit(_ id: GroupID, owner: String) {
         let local = hub.localGroup(remote: id, owner: owner)
         groupViews[local]?.removeFromSuperview()
@@ -178,6 +184,7 @@ extension CanvasView: CanvasConnDelegate {
             groupMetas.removeValue(forKey: id)
             hub.forgetGroup(id)
         }
+        dropTies(owner: owner)
         hub.forgetOwner(owner)
         refreshGroupViews()
     }

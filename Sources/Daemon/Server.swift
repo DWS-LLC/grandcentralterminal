@@ -32,6 +32,9 @@ final class Server {
     // Group ownership: sanitized once on write; member ids pruned to
     // live panes on load and on every pane exit/close.
     private var groups = [GroupID: GroupMeta]()
+    // Cable ties, by id. Each strand names a live parent -> child pair;
+    // pruned on every pane exit/close, and dropped under two strands.
+    private var ties = [String: TieMeta]()
     private var remotes = [Remote]()
     // Canvas window-gap (LayoutPolicy); floor for every placement.
     private var layoutGap: Double = 0
@@ -70,6 +73,10 @@ final class Server {
             // don't resurrect them.
             guard !g.members.isEmpty else { continue }
             groups[g.id] = g
+        }
+        for t in saved.ties {
+            guard let kept = sanitizedTieLocked(t) else { continue }
+            ties[kept.id] = kept
         }
 
         unlink(sockPath)
@@ -352,6 +359,31 @@ final class Server {
             broadcast(tag: .paneExit, json: PaneExit(id: req.id, code: -1))
             for g in pruned.touched { broadcast(tag: .groupMeta, json: g) }
             for gid in pruned.emptied { broadcast(tag: .groupExit, json: GroupRef(id: gid)) }
+            broadcastTies(pruned)
+            state.scheduleSave(saved)
+
+        case .setTie:
+            guard let req: TieMeta = frame.decode() else { return }
+            lock.lock()
+            guard let tie = sanitizedTieLocked(req) else {
+                lock.unlock()
+                _ = remote.conn.send(tag: .errorReply, json: ErrorReply(
+                    message: "a tie needs two or more cables (parent -> child)"))
+                return
+            }
+            ties[tie.id] = tie
+            let saved = snapshotLocked()
+            lock.unlock()
+            broadcast(tag: .tieMeta, json: tie)
+            state.scheduleSave(saved)
+
+        case .removeTie:
+            guard let req: TieRef = frame.decode() else { return }
+            lock.lock()
+            guard ties.removeValue(forKey: req.id) != nil else { lock.unlock(); return }
+            let saved = snapshotLocked()
+            lock.unlock()
+            broadcast(tag: .tieExit, json: TieRef(id: req.id))
             state.scheduleSave(saved)
 
         case .createGroup:
@@ -573,7 +605,8 @@ final class Server {
         lock.lock(); defer { lock.unlock() }
         return Welcome(panes: panes.values
             .sorted { $0.id.uuid.uuidString < $1.id.uuid.uuidString }
-            .map(\.meta), groups: Array(groups.values))
+            .map(\.meta), groups: Array(groups.values),
+            ties: ties.values.sorted { $0.id < $1.id })
     }
 
     // MARK: Groups (all require `lock`)
@@ -596,7 +629,7 @@ final class Server {
 
     private func snapshotLocked() -> SavedState {
         SavedState(panes: panes.values.map(\.meta),
-                   groups: Array(groups.values))
+                   groups: Array(groups.values), ties: Array(ties.values))
     }
 
     // Create + sanitize: unknown ids dropped, members evicted from other
@@ -643,11 +676,20 @@ final class Server {
         return g
     }
 
-    // Drop a dead pane from every group. Groups left with no live
-    // members are deleted (empty groups don't linger in menus);
-    // returns survivors for groupMeta broadcast, dead ids for groupExit.
+    private struct Pruned {
+        var touched = [GroupMeta]()
+        var emptied = [GroupID]()
+        var ties = [TieMeta]()       // lost strands, still tied
+        var tiesGone = [String]()    // under two strands left
+    }
+
+    // Drop a dead pane from every group and tie. Groups left with no live
+    // members are deleted (empty groups don't linger in menus); ties left
+    // under two strands likewise. Returns survivors for the meta
+    // broadcasts, dead ids for the exit ones.
     @discardableResult
-    private func prunePaneLocked(_ id: PaneID) -> (touched: [GroupMeta], emptied: [GroupID]) {
+    private func prunePaneLocked(_ id: PaneID) -> Pruned {
+        var out = Pruned()
         var touched = [GroupMeta]()
         var emptied = [GroupID]()
         for (gid, var g) in groups where g.members.contains(id) {
@@ -660,7 +702,45 @@ final class Server {
                 touched.append(g)
             }
         }
-        return (touched, emptied)
+        out.touched = touched
+        out.emptied = emptied
+
+        for (tid, t) in ties {
+            let live = t.strands.filter { $0.parent != id && $0.child != id }
+            guard live.count != t.strands.count else { continue }
+
+            if live.count < Self.minStrands {
+                ties.removeValue(forKey: tid)
+                out.tiesGone.append(tid)
+                continue
+            }
+            var kept = t
+            kept.strands = live
+            ties[tid] = kept
+            out.ties.append(kept)
+        }
+        return out
+    }
+
+    // MARK: Ties (all require `lock`)
+
+    private static let minStrands = 2
+
+    // Only real cables count: a strand is a live pane and the child it
+    // spawned. Under two strands there is nothing to tie.
+    private func sanitizedTieLocked(_ t: TieMeta) -> TieMeta? {
+        var seen = Set<PaneID>()
+        let strands = t.strands.filter { st in
+            guard let child = panes[st.child], child.meta.parent == st.parent,
+                  panes[st.parent] != nil, seen.insert(st.child).inserted else { return false }
+            return st.delta.isFinite
+        }
+        guard strands.count >= Self.minStrands, t.s.isFinite else { return nil }
+
+        var out = t
+        out.strands = strands
+        out.s = min(max(t.s, 0), 1)
+        return out
     }
 
     private func broadcastLocked(tag: MsgTag, json: some Codable & Sendable) {
@@ -915,7 +995,13 @@ final class Server {
         lock.unlock()
         for g in pruned.touched { broadcast(tag: .groupMeta, json: g) }
         for gid in pruned.emptied { broadcast(tag: .groupExit, json: GroupRef(id: gid)) }
+        broadcastTies(pruned)
         state.scheduleSave(saved)
+    }
+
+    private func broadcastTies(_ pruned: Pruned) {
+        for t in pruned.ties { broadcast(tag: .tieMeta, json: t) }
+        for id in pruned.tiesGone { broadcast(tag: .tieExit, json: TieRef(id: id)) }
     }
 
     private func broadcast(tag: MsgTag, json: some Codable & Sendable) {
