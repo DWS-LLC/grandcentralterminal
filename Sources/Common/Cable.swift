@@ -60,14 +60,17 @@ public struct Cable: Sendable {
     fileprivate var r2: Vec
     // The curve at rest: what ties and spread checks measure against.
     fileprivate var shape: [Vec]
+    // `pts` before ties bent it: what a sliding tie follows, so the strand
+    // it rides is not the one it is reshaping.
+    fileprivate var free: [Vec]
 }
 
 public struct CableTie: Sendable {
     public struct Member: Sendable {
         public var key: CableKey
-        // Index offset from the tie's own, so strands that pass the tie
+        // Point offset from the tie's own, so strands that pass the tie
         // at slightly different points stay where they were gripped.
-        public var delta: Int
+        public var delta: Double
     }
 
     public var id: Int
@@ -89,7 +92,7 @@ public final class CableSim {
 
     public struct Hit: Sendable {
         public var key: CableKey
-        public var index: Int
+        public var at: Double    // fractional point index along the cable
         public var distance: Double
     }
 
@@ -99,12 +102,12 @@ public final class CableSim {
     private static let fanOutS = [0.35, 0.28]
     private static let fanOutSpread = 48.0
     // A slid tie holds strands no wider apart than this.
-    private static let holdSpread = 64.0
+    private static let holdSpread = 120.0
     private static let portSpacing = 8.0
-    // Handle springs, per second: stiffness and damping (about 0.3 of
-    // critical: a couple of visible swings, then still).
+    // Handle springs, per second: stiffness and damping (about 0.2 of
+    // critical: a few bouncy swings, then still).
     private static let stiffness = 220.0
-    private static let damping = 10.0
+    private static let damping = 6.0
     private static let dt = 1.0 / 120
     private static let substeps = 2
     // How far the rest handles hang below the straight pull, as a share of
@@ -114,9 +117,13 @@ public final class CableSim {
     private static let strandGap = 3.2
     private static let tieThickness = 7.0
     // Points either side of a tie that blend from the bundle back to the
-    // free curve, and the margin a tie keeps from the cable ends.
-    private static let tieReach = 6
+    // free curve: at least `tieReach`, more when the strands start far
+    // apart (so the funnel never gets steeper than ~45 degrees), at most
+    // `maxReach`. And the margin a tie keeps from the cable ends.
+    private static let tieReach = 6.0
+    private static let maxReach = 14.0
     private static let tieEnds = 7
+    private static let edgeMargin = 2.0
     private static let tieGap = 12.0
     private static let bundleRadius = 12.0
     // Asleep after this many still frames; "still" is handle speed (and
@@ -295,7 +302,7 @@ public final class CableSim {
     private static func make(a: CableEnd, b: CableEnd) -> Cable {
         let (r1, r2) = rest(a, b)
         let pts = sample(a, b, r1, r2)
-        return Cable(a: a, b: b, pts: pts, h1: r1, h2: r2, r1: r1, r2: r2, shape: pts)
+        return Cable(a: a, b: b, pts: pts, h1: r1, h2: r2, r1: r1, r2: r2, shape: pts, free: pts)
     }
 
     // MARK: Step
@@ -313,6 +320,7 @@ public final class CableSim {
         for key in cables.keys {
             guard var c = cables[key] else { continue }
             c.pts = Self.sample(c.a, c.b, c.h1, c.h2)
+            c.free = c.pts
             cables[key] = c
         }
         bundleTies()
@@ -346,23 +354,34 @@ public final class CableSim {
 
     // MARK: Ties
 
-    private func index(_ t: CableTie, _ m: CableTie.Member) -> Int {
-        let k = Int((t.s * Double(Self.points - 1)).rounded()) + m.delta
-        return min(max(k, Self.tieEnds), Self.points - 1 - Self.tieEnds)
+    // Fractional point index where the tie grips member `m`.
+    private func place(_ t: CableTie, _ m: CableTie.Member) -> Double {
+        let f = t.s * Double(Self.points - 1) + m.delta
+        return min(max(f, Self.edgeMargin), Double(Self.points - 1) - Self.edgeMargin)
+    }
+
+    // The polyline at fractional index `f`.
+    private static func at(_ pts: [Vec], _ f: Double) -> Vec {
+        let g = min(max(f, 0), Double(pts.count - 1))
+        let i = min(Int(g), pts.count - 2)
+        return pts[i] + (pts[i + 1] - pts[i]) * (g - Double(i))
     }
 
     // Pull the strands through each tie into parallel slots across the
-    // bundle. The pull is full at the tie and eases to nothing over
-    // `tieReach` points either side, so cables fan out smoothly.
+    // bundle. The pull is full at the tie and eases to nothing over `reach`
+    // points either side, so cables fan out smoothly. The tie sits at a
+    // fractional point, so sliding it is continuous, not point to point.
     private func bundleTies() {
         for t in ties {
             let live = t.members.filter { cables[$0.key] != nil }
             guard !live.isEmpty else { continue }
 
-            let k0 = live.map { index(t, $0) }
-            let mid = live.indices.map { cables[live[$0].key]!.pts[k0[$0]] }
+            let snap = live.map { cables[$0.key]!.pts }
+            let f = live.map { place(t, $0) }
+            let mid = live.indices.map { Self.at(snap[$0], f[$0]) }
             let c = Self.mean(mid)
-            let cross = Self.cross(live, k0, cables)
+            let cross = Self.cross(snap, f)
+            let reach = Self.reach(mid, around: c, seg: Self.length(snap[0]) / Double(Self.points - 1))
 
             // Slots follow the strands' order across the bundle.
             let order = live.indices.sorted {
@@ -370,30 +389,43 @@ public final class CableSim {
                 return p != q ? p < q : live[$0].key.order < live[$1].key.order
             }
 
-            for reach in -Self.tieReach...Self.tieReach {
-                let fade = cos(Double.pi / 2 * Double(abs(reach)) / Double(Self.tieReach + 1))
-                let weight = fade * fade
-                let at = live.indices.map { cables[live[$0].key]!.pts[k0[$0] + reach] }
-                let cr = Self.mean(at)
+            for (rank, i) in order.enumerated() {
+                let slot = (Double(rank) - Double(live.count - 1) / 2) * Self.strandGap
+                guard var cable = cables[live[i].key] else { continue }
 
-                for (rank, i) in order.enumerated() {
-                    let slot = (Double(rank) - Double(live.count - 1) / 2) * Self.strandGap
+                let first = max(Int((f[i] - reach).rounded(.up)), 1)
+                let last = min(Int((f[i] + reach).rounded(.down)), Self.points - 2)
+                guard first <= last else { continue }
+
+                for j in first...last {
+                    let off = Double(j) - f[i]
+                    let fade = cos(Double.pi / 2 * abs(off) / (reach + 1))
+                    let cr = Self.mean(live.indices.map { Self.at(snap[$0], f[$0] + off) })
                     let want = cr + cross * slot
-                    let k = k0[i] + reach
-                    guard var cable = cables[live[i].key] else { continue }
-                    cable.pts[k] = cable.pts[k] + (want - cable.pts[k]) * weight
-                    cables[live[i].key] = cable
+                    cable.pts[j] = cable.pts[j] + (want - cable.pts[j]) * (fade * fade)
                 }
+                cables[live[i].key] = cable
             }
         }
     }
 
+    // Points a funnel needs: far-apart strands take a longer, gentler one.
+    private static func reach(_ mid: [Vec], around c: Vec, seg: Double) -> Double {
+        let pull = mid.map { ($0 - c).length }.max() ?? 0
+        return min(max(pull / max(seg, 1), tieReach), maxReach)
+    }
+
     // Unit vector across the bundle (perpendicular to the strands' flow).
-    private static func cross(_ m: [CableTie.Member], _ k: [Int], _ cables: [CableKey: Cable]) -> Vec {
+    // Strands running the opposite way are flipped so they don't cancel.
+    private static func cross(_ snap: [[Vec]], _ f: [Double]) -> Vec {
         var flow = Vec(0, 0)
-        for (i, member) in m.enumerated() {
-            guard let c = cables[member.key] else { continue }
-            flow = flow + (c.pts[k[i] + 1] - c.pts[k[i] - 1])
+        var lead: Vec?
+
+        for (pts, k) in zip(snap, f) {
+            var d = at(pts, k + 1) - at(pts, k - 1)
+            if let lead, d.dot(lead) < 0 { d = d * -1 }
+            lead = lead ?? d
+            flow = flow + d
         }
         let len = max(flow.length, 1e-9)
         return Vec(-flow.y / len, flow.x / len)
@@ -410,10 +442,10 @@ public final class CableSim {
             let live = t.members.filter { cables[$0.key] != nil }
             guard !live.isEmpty else { continue }
 
-            let k = live.map { index(t, $0) }
-            let c = Self.mean(live.indices.map { cables[live[$0].key]!.pts[k[$0]] })
-            let cross = Self.cross(live, k, cables)
-            ties[i].center = c
+            let snap = live.map { cables[$0.key]!.pts }
+            let f = live.map { place(t, $0) }
+            let cross = Self.cross(snap, f)
+            ties[i].center = Self.mean(live.indices.map { Self.at(snap[$0], f[$0]) })
             ties[i].angle = atan2(cross.y, cross.x)
             ties[i].width = Double(live.count - 1) * Self.strandGap + Self.tieThickness
         }
@@ -444,7 +476,7 @@ public final class CableSim {
                   let s = Self.fanOutS.first(where: { Self.spread(keys, at: $0, ends) <= Self.fanOutSpread })
             else { continue }
 
-            var t = CableTie(id: nextTie, members: keys.map { .init(key: $0, delta: 0) }, s: s)
+            var t = CableTie(id: nextTie, members: keys.map { .init(key: $0, delta: 0.0) }, s: s)
             t.fanOut = id
             nextTie += 1
             ties.append(t)
@@ -479,12 +511,9 @@ public final class CableSim {
             var best: Hit?
 
             for i in 0..<(c.pts.count - 1) {
-                let d = Self.gap(a, b, c.pts[i], c.pts[i + 1])
-                guard d <= radius, d < (best?.distance ?? .infinity) else { continue }
-
-                // The nearer end of the link is the tie's anchor.
-                let near = Self.gap(c.pts[i], a, b) <= Self.gap(c.pts[i + 1], a, b) ? i : i + 1
-                best = Hit(key: key, index: near, distance: d)
+                let h = Self.touch(a, b, c.pts[i], c.pts[i + 1])
+                guard h.gap <= radius, h.gap < (best?.distance ?? .infinity) else { continue }
+                best = Hit(key: key, at: Double(i) + h.t, distance: h.gap)
             }
             if let best { out.append(best) }
         }
@@ -505,10 +534,27 @@ public final class CableSim {
         return (p - (a + ab * t)).length
     }
 
-    // Distance between the segments a-b and c-d (0 when they cross).
-    private static func gap(_ a: Vec, _ b: Vec, _ c: Vec, _ d: Vec) -> Double {
-        if crosses(a, b, c, d) { return 0 }
-        return min(gap(a, c, d), gap(b, c, d), gap(c, a, b), gap(d, a, b))
+    // Closest approach of the stroke a-b to the rope segment c-d: the
+    // distance (0 when they cross) and how far along c-d it happens (0...1).
+    private static func touch(_ a: Vec, _ b: Vec, _ c: Vec, _ d: Vec) -> (gap: Double, t: Double) {
+        let r = b - a, q = d - c
+        if crosses(a, b, c, d) {
+            let denom = r.x * q.y - r.y * q.x
+            let t = ((c.x - a.x) * r.y - (c.y - a.y) * r.x) / denom
+            return (0, min(max(t, 0), 1))
+        }
+
+        var best = (gap: gap(c, a, b), t: 0.0)
+        let end = gap(d, a, b)
+        if end < best.gap { best = (end, 1) }
+
+        let len2 = max(q.dot(q), 1e-9)
+        for p in [a, b] {
+            let t = min(max((p - c).dot(q) / len2, 0), 1)
+            let g = (p - (c + q * t)).length
+            if g < best.gap { best = (g, t) }
+        }
+        return best
     }
 
     private static func crosses(_ a: Vec, _ b: Vec, _ c: Vec, _ d: Vec) -> Bool {
@@ -518,34 +564,38 @@ public final class CableSim {
         return side(a, b, c) * side(a, b, d) < 0 && side(c, d, a) * side(c, d, b) < 0
     }
 
+    // The tie whose pill is under `p`, give or take `radius / 2`. Measured
+    // in the pill's own frame, so a strand running past it is not a grab.
     public func tie(near p: Vec, radius: Double) -> Int? {
-        ties.filter { ($0.center - p).length <= max(radius, $0.width / 2) }
-            .min { ($0.center - p).length < ($1.center - p).length }?.id
+        let slop = radius / 2
+
+        func hit(_ t: CableTie) -> Bool {
+            let d = p - t.center
+            let across = abs(d.x * cos(t.angle) + d.y * sin(t.angle))
+            let along = abs(-d.x * sin(t.angle) + d.y * cos(t.angle))
+            return across <= t.width / 2 + slop && along <= Self.tieThickness / 2 + slop
+        }
+        return ties.filter(hit).min { ($0.center - p).length < ($1.center - p).length }?.id
     }
 
     // A tie around every strand the stroke a -> b crosses (or touches).
-    // Nil when it crosses none, or another tie already holds the spot.
+    // Nil unless it meets two or more: one strand has nothing to bundle.
+    // A spot too near the ends or another tie slides to the nearest free one.
     @discardableResult
     public func addTie(from a: Vec, to b: Vec, radius: Double? = nil) -> Int? {
         let found = hits(along: a, to: b, radius: radius ?? Self.bundleRadius)
-        guard let lead = found.min(by: { $0.distance < $1.distance }) else { return nil }
+        guard found.count >= 2, let lead = found.min(by: { $0.distance < $1.distance }) else { return nil }
 
-        // Only strands that are close where the stroke met them: a tie across
-        // strands far apart would yank them together into a spike.
-        let anchor = cables[lead.key]!.pts[lead.index]
-        let near = found.filter { (cables[$0.key]!.pts[$0.index] - anchor).length <= Self.holdSpread }
+        let members = found.map { CableTie.Member(key: $0.key, delta: $0.at - lead.at) }
+        var tie = CableTie(id: nextTie, members: members, s: lead.at / Double(Self.points - 1))
+        guard let s = clear(tie, at: tie.s) else { return nil }
 
-        let s = Double(lead.index) / Double(Self.points - 1)
-        let id = nextTie
-        let members = near.map { CableTie.Member(key: $0.key, delta: $0.index - lead.index) }
-        let tie = CableTie(id: id, members: members, s: s)
-        guard clear(tie, at: s) == s else { return nil }
-
+        tie.s = s
         nextTie += 1
         ties.append(tie)
         wake()
         refreshTies()
-        return id
+        return tie.id
     }
 
     public func removeTie(_ id: Int) {
@@ -562,9 +612,9 @@ public final class CableSim {
               let lead = ties[i].members.first(where: { cables[$0.key] != nil }),
               let c = cables[lead.key] else { return }
 
-        let f = Self.along(c.pts, p)
-        let s = (f - Double(lead.delta)) / Double(Self.points - 1)
-        let next = clear(ties[i], at: s)
+        let f = Self.along(c.free, p)
+        let s = (f - lead.delta) / Double(Self.points - 1)
+        guard let next = clear(ties[i], at: s) else { return }
 
         // Strands that part ways would knot at the tie: it stops where they
         // do, but may always slide back toward where they run together.
@@ -580,8 +630,7 @@ public final class CableSim {
     private func grip(_ t: CableTie, at s: Double) -> Double {
         let at = t.members.compactMap { m -> Vec? in
             guard let c = cables[m.key] else { return nil }
-            let k = Int((s * Double(Self.points - 1)).rounded()) + m.delta
-            return c.shape[min(max(k, 0), Self.points - 1)]
+            return Self.at(c.shape, s * Double(Self.points - 1) + m.delta)
         }
         var widest = 0.0
         for (i, p) in at.enumerated() {
@@ -591,7 +640,7 @@ public final class CableSim {
     }
 
     // `s` held off the cable ends and the closest ties either side.
-    private func clear(_ t: CableTie, at s: Double) -> Double {
+    private func clear(_ t: CableTie, at s: Double) -> Double? {
         let keys = Set(t.members.map(\.key))
         let length = Double(Self.points - 1)
         var lo = Double(Self.tieEnds) / length
@@ -602,7 +651,7 @@ public final class CableSim {
             let gap = Self.tieGap / long
             if o.s <= t.s { lo = max(lo, o.s + gap) } else { hi = min(hi, o.s - gap) }
         }
-        guard lo <= hi else { return t.s }
+        guard lo <= hi else { return nil }
         return min(max(s, lo), hi)
     }
 
