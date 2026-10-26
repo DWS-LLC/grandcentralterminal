@@ -23,6 +23,7 @@ final class CableMemo {
 extension CanvasView {
     // Pixels around a cable or tie that still count as touching it.
     private static let grabReach: CGFloat = 7
+    private static let cableLift: CGFloat = 0.45
 
     func setupCables() {
         worldView.addSubview(cableView, positioned: .below, relativeTo: nil)
@@ -43,11 +44,15 @@ extension CanvasView {
     // One color per parent: its group's color, else hashed from its repo or
     // directory, so a fan-out reads as one family.
     private func cableColor(_ key: CableKey) -> NSColor {
+        let base: NSColor
         if let g = groupOf(key.parent), let meta = groupMetas[g] {
-            return GroupColor.resolve(meta.color, key: meta.name ?? g.uuid.uuidString)
+            base = GroupColor.resolve(meta.color, key: meta.name ?? g.uuid.uuidString)
+        } else {
+            let meta = panes[key.parent]?.meta
+            base = GroupColor.resolve(nil, key: meta?.repoRoot ?? meta?.cwd ?? key.parent.description)
         }
-        let meta = panes[key.parent]?.meta
-        return GroupColor.resolve(nil, key: meta?.repoRoot ?? meta?.cwd ?? key.parent.description)
+        // Lighter than the group tint it runs over, or it vanishes there.
+        return base.blended(withFraction: Self.cableLift, of: .white) ?? base
     }
 
     func cableTick() {

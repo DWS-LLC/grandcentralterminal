@@ -87,8 +87,10 @@ public final class CableSim {
     }
 
     public static let points = 32
-    // Where along the cable a fan-out's tie first sits.
-    private static let fanOutS = 0.3
+    // Where along the cable a fan-out's tie first sits, nearest first. A
+    // tie only goes where its strands are still travelling together.
+    private static let fanOutS = [0.3, 0.2]
+    private static let fanOutSpread = 48.0
     private static let portSpacing = 8.0
     private static let slack = 1.04
     private static let gravity = 520.0
@@ -459,7 +461,8 @@ public final class CableSim {
     }
 
     // Fan-outs: two or more cables leaving one pane side get a tie of
-    // their own, so the strands travel together.
+    // their own, so the strands travel together, but only where they do
+    // travel together: a tie across strands heading opposite ways knots.
     private func syncFanOutTies(_ ends: [CableKey: (a: CableEnd, b: CableEnd)]) {
         var groups = [String: [CableKey]]()
         for (key, e) in ends {
@@ -471,19 +474,34 @@ public final class CableSim {
 
         ties.removeAll { t in
             guard let id = t.fanOut else { return false }
-            return wanted[id].map { Set($0) != Set(t.members.map(\.key)) } ?? true
+            guard let keys = wanted[id], Set(keys) == Set(t.members.map(\.key)) else { return true }
+            return Self.spread(keys, at: t.s, ends) > Self.fanOutSpread * 1.5
         }
         declined = declined.filter { wanted[$0] != nil }
 
         for id in wanted.keys.sorted() {
             let keys = wanted[id]!
-            guard !declined.contains(id), !ties.contains(where: { $0.fanOut == id }) else { continue }
-            var t = CableTie(id: nextTie, members: keys.map { .init(key: $0, delta: 0) }, s: Self.fanOutS)
+            guard !declined.contains(id), !ties.contains(where: { $0.fanOut == id }),
+                  let s = Self.fanOutS.first(where: { Self.spread(keys, at: $0, ends) <= Self.fanOutSpread })
+            else { continue }
+
+            var t = CableTie(id: nextTie, members: keys.map { .init(key: $0, delta: 0) }, s: s)
             t.fanOut = id
             nextTie += 1
             ties.append(t)
         }
         refreshTies()
+    }
+
+    // Widest gap between the strands' fair curves at fraction `s`.
+    private static func spread(_ keys: [CableKey], at s: Double,
+                               _ ends: [CableKey: (a: CableEnd, b: CableEnd)]) -> Double {
+        let at = keys.compactMap { k in ends[k].map { curve($0.a, $0.b, s) } }
+        var widest = 0.0
+        for (i, p) in at.enumerated() {
+            for q in at[(i + 1)...] { widest = max(widest, (p - q).length) }
+        }
+        return widest
     }
 
     private func dropOrphanTies() {
