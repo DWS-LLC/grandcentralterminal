@@ -77,6 +77,7 @@ final class ArrangeState {
     var key: ArrangeKey = .name
     var shape: ArrangeShape = .rows
     private(set) var undo = [ArrangeUndo]()
+    let glide = PaneGlide()
 
     private var focusClock: UInt64 = 0
     private var focusStamp = [PaneID: UInt64]()
@@ -130,6 +131,8 @@ extension CanvasView {
     // False when refused (beeps); true when it ran, even if nothing moved.
     @discardableResult
     func arrangeCanvas(scope: ArrangeScope) -> Bool {
+        arrange.glide.finish()
+
         // A zoomed pane's frame is local-only until unzoom.
         guard zoomSavedPane == nil else { NSSound.beep(); return false }
 
@@ -152,6 +155,7 @@ extension CanvasView {
     // old spot makes the snapshot stale, and a stale restore would stack
     // panes on each other.
     func undoArrange() {
+        arrange.glide.finish()
         guard let entry = arrange.popUndo(), undoIsFresh(entry) else { NSSound.beep(); return }
         placePanes(entry.before)
     }
@@ -399,6 +403,8 @@ extension CanvasView {
     // relaxes the same way. False when refused (beeps).
     @discardableResult
     func relaxCanvas(scope: ArrangeScope) -> Bool {
+        arrange.glide.finish()
+
         guard zoomSavedPane == nil else { NSSound.beep(); return false }
 
         let rects = paneRects()
@@ -411,7 +417,7 @@ extension CanvasView {
 
         let before = moves.compactMap { m in rects[m.id].map { PaneRect(id: m.id, rect: $0) } }
         arrange.pushUndo(ArrangeUndo(before: before, after: moves))
-        placePanes(moves)
+        placePanes(moves, mode: .glide)
         return true
     }
 
@@ -453,13 +459,48 @@ extension CanvasView {
 
     // MARK: Place
 
-    private func placePanes(_ moves: [PaneRect]) {
+    private enum PlaceMode {
+        case snap
+        case glide
+    }
+
+    private func placePanes(_ moves: [PaneRect], mode: PlaceMode = .snap) {
         let live = moves.filter { panes[$0.id] != nil }
+        switch mode {
+        case .snap: land(live)
+        case .glide: glide(live)
+        }
+    }
+
+    private func land(_ live: [PaneRect]) {
         for m in live {
             panes[m.id]?.setRect(NSRectOverlap.to(m.rect), notifySurface: true)
         }
         hub.arrangePanes(live)
         refreshGroupViews()
         refreshOcclusion()
+    }
+
+    // Ease frames over the camera animation time; terminals and the
+    // daemon only hear about it on land.
+    private func glide(_ live: [PaneRect]) {
+        let steps = live.compactMap { m in
+            panes[m.id].map { GlideStep(id: m.id, from: NSRectOverlap.from($0.frame), to: m.rect) }
+        }
+        let secs = GCTConfig.current.cameraAnimDuration
+
+        arrange.glide.run(steps, duration: secs) { [weak self] rects, phase in
+            guard let self else { return }
+            if phase == .land {
+                land(rects.filter { self.panes[$0.id] != nil })
+                return
+            }
+
+            for r in rects {
+                panes[r.id]?.setRect(NSRectOverlap.to(r.rect), notifySurface: false)
+            }
+            refreshGroupViews()
+            refreshOcclusion()
+        }
     }
 }
