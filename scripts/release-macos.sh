@@ -40,10 +40,11 @@ fi
 
 # 2. Sources + toolchain.
 ./scripts/fetch-ghostty.sh
-ZIG_BIN="$(command -v zig || true)"
-if [ -z "$ZIG_BIN" ]; then
-  echo "== installing zig 0.17.0 =="
-  ZIG_VER="0.17.0"
+ZIG_VER="0.17.0"
+# A zig already on PATH only counts if it is the pinned version: ghostty
+# refuses older toolchains (a stale 0.16 on the runner would fail the build).
+if [ "$(zig version 2>/dev/null || true)" != "$ZIG_VER" ]; then
+  echo "== installing zig $ZIG_VER =="
   ZIG_ARCH="$(uname -m | sed -e 's/arm64/aarch64/')"
   curl -fsSL -o /tmp/zig.tar.xz \
     "https://ziglang.org/download/${ZIG_VER}/zig-${ZIG_ARCH}-macos-${ZIG_VER}.tar.xz"
