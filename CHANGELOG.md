@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.11.1
+
+### Added
+- Remote hosts that drop or aren't up at launch are redialed every 60s, so updating a remote daemon no longer needs a config reload. "New remote pane" shows a retry button on the row of a host that's down.
+
+### Changed
+- Relax by Relation glides panes to their new spots (over `camera-animation-duration`) instead of jumping, and holds the focused pane where it is: the rest of the layout moves around it.
+- Resizing a pane with the mouse no longer zooms the camera to fit it. `camera-fits-resize` covers keyboard resizes only.
+
+### Fixed
+- Dead remote connections (sleep, wifi flip, killed daemon) are noticed in ~30s via TCP keepalive. Before, the host looked connected forever and creating a remote pane did nothing.
+
 ## v0.11.0
 
 ### Added
@@ -9,7 +21,6 @@
 - `gctd open parent=<pane>` wires a new pane to any pane, not just the caller; `gctd tie <parent> <child>...` and `gctd untie` manage cable ties from scripts. Ties (yours and scripted) are kept by the daemon: they survive restarts and show on every canvas. Protocol 4 (older daemons keep working; their ties stay canvas-local).
 
 ### Changed
-- Remote hosts that drop or aren't up at launch are redialed every 60s; "New remote pane" shows a retry button on the row of a host that's down. Dead connections (sleep, wifi flip, killed daemon) are noticed in ~30s via TCP keepalive instead of looking connected forever.
 - Relax by Relation (`⌘⇧A`) uses only the cables as the relation (spawned by) and lays them out as a left-to-right tree: a pane right of the pane that spawned it, siblings in a column with room for their ties, a parent centered on its children, unrelated panes in rows. Replaces the spring pass; same repo, dir and host no longer pull panes together.
 
 ### Fixed
