@@ -2760,7 +2760,7 @@ final class CanvasView: NSView {
     private func pasteIntoFocused() {
         guard let id = focusedID, let pane = panes[id] else { return }
         let text = NSPasteboard.general.string(forType: .string) ?? ""
-        pane.host?.text(text)
+        pane.host?.paste(text)
     }
 
     private func copyFromFocused() {

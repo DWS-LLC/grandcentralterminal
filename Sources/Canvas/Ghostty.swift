@@ -64,16 +64,14 @@ final class GhosttyApp: @unchecked Sendable {
         runtime.action_cb = { app, target, action in
             GhosttyApp.handleAction(app, target, action)
         }
-        runtime.read_clipboard_cb = { _, _, _, _, _, _ in
-            // OSC 52 remote reads: unsupported.
-            GHOSTTY_CLIPBOARD_READ_UNAVAILABLE
+        runtime.read_clipboard_cb = { ud, location, state, mimes, count, list in
+            GhosttyClipboard.read(ud, location, state, mimes, count, list)
         }
-        runtime.confirm_read_clipboard_cb = { _, _, request, _ in
-            guard let request else { return }
-            ghostty_surface_deny_clipboard_request(request, request)
+        runtime.confirm_read_clipboard_cb = { ud, confirm, state, request in
+            GhosttyClipboard.confirm(ud, confirm, state, request)
         }
-        runtime.write_clipboard_cb = { _, clipboard, contents, count, _ in
-            GhosttyApp.writeClipboard(clipboard: clipboard, contents: contents, count: count)
+        runtime.write_clipboard_cb = { ud, location, contents, count, confirm in
+            GhosttyClipboard.write(ud, location, contents, count, confirm)
         }
         runtime.close_surface_cb = { ud, confirmed in
             // Surface userdata is the owning SurfaceHost.
@@ -283,23 +281,5 @@ final class GhosttyApp: @unchecked Sendable {
 
         guard let app else { return }
         ghostty_app_update_config(app, config)
-    }
-
-    private static func writeClipboard(
-        clipboard: ghostty_clipboard_e,
-        contents: UnsafePointer<ghostty_clipboard_content_s>?,
-        count: Int
-    ) {
-        guard clipboard == GHOSTTY_CLIPBOARD_STANDARD,
-              let contents, count > 0 else { return }
-        for i in 0..<count {
-            let c = contents[i]
-            guard let mime = c.mime, strcmp(mime, "text/plain") == 0,
-                  let data = c.data else { continue }
-            let text = String(decoding: Data(bytes: data, count: c.len), as: UTF8.self)
-            NSPasteboard.general.clearContents()
-            NSPasteboard.general.setString(text, forType: .string)
-            break
-        }
     }
 }

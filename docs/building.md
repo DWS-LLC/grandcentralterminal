@@ -1,6 +1,6 @@
 # Building and releasing
 
-Prereqs: Xcode (macOS SDK), [zig 0.16.0](https://ziglang.org/download/) on
+Prereqs: Xcode (macOS SDK), [zig 0.17.0](https://ziglang.org/download/) on
 `PATH` (or `ZIG=/path/to/zig`), and the Metal Toolchain
 (`xcodebuild -downloadComponent MetalToolchain`, one-time).
 

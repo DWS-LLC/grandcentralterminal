@@ -42,8 +42,8 @@ fi
 ./scripts/fetch-ghostty.sh
 ZIG_BIN="$(command -v zig || true)"
 if [ -z "$ZIG_BIN" ]; then
-  echo "== installing zig 0.16.0 =="
-  ZIG_VER="0.16.0"
+  echo "== installing zig 0.17.0 =="
+  ZIG_VER="0.17.0"
   ZIG_ARCH="$(uname -m | sed -e 's/arm64/aarch64/')"
   curl -fsSL -o /tmp/zig.tar.xz \
     "https://ziglang.org/download/${ZIG_VER}/zig-${ZIG_ARCH}-macos-${ZIG_VER}.tar.xz"

@@ -3,7 +3,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-PIN="a4aacd918ba9e79929ff608034c60a4341773ef0"   # upstream master, 2026-10-06
+PIN="83fb95624b0439ee660c2679b43b38c8b63769cd"   # ghostty v1.4.0
 
 if [ ! -d vendor/ghostty ]; then
   git clone --depth 1 https://github.com/ghostty-org/ghostty.git vendor/ghostty

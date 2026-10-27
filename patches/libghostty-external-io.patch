@@ -1,5 +1,5 @@
 diff --git a/include/ghostty.h b/include/ghostty.h
-index eec6550..23aa8a4 100644
+index 9a12b9cad..a585c4748 100644
 --- a/include/ghostty.h
 +++ b/include/ghostty.h
 @@ -505,6 +505,18 @@ typedef enum {
@@ -39,16 +39,16 @@ index eec6550..23aa8a4 100644
  GHOSTTY_API void ghostty_surface_set_size(ghostty_surface_t, uint32_t, uint32_t);
  GHOSTTY_API ghostty_surface_size_s ghostty_surface_size(ghostty_surface_t);
  GHOSTTY_API uint64_t ghostty_surface_foreground_pid(ghostty_surface_t);
-@@ -1202,6 +1218,7 @@ GHOSTTY_API bool ghostty_surface_key_is_binding(ghostty_surface_t,
-                                                    ghostty_input_key_s,
+@@ -1203,6 +1219,7 @@ GHOSTTY_API bool ghostty_surface_key_is_binding(ghostty_surface_t,
                                                     ghostty_binding_flags_e*);
  GHOSTTY_API void ghostty_surface_text(ghostty_surface_t, const char*, uintptr_t);
+ GHOSTTY_API void ghostty_surface_paste_text(ghostty_surface_t, const char*, uintptr_t);
 +GHOSTTY_API void ghostty_surface_write_output(ghostty_surface_t, const char*, uintptr_t);
  GHOSTTY_API void ghostty_surface_preedit(ghostty_surface_t, const char*, uintptr_t);
  GHOSTTY_API bool ghostty_surface_mouse_captured(ghostty_surface_t);
  GHOSTTY_API bool ghostty_surface_mouse_button(ghostty_surface_t,
 diff --git a/src/Surface.zig b/src/Surface.zig
-index 22e4ae4..0eb7c67 100644
+index 369bb2399..2e2d14062 100644
 --- a/src/Surface.zig
 +++ b/src/Surface.zig
 @@ -141,6 +141,9 @@ inspector: ?*inspectorpkg.Inspector = null,
@@ -61,16 +61,19 @@ index 22e4ae4..0eb7c67 100644
  /// The configuration derived from the main config. We "derive" it so that
  /// we don't have a shared pointer hanging around that we need to worry about
  /// the lifetime of. This makes updating config at runtime easier.
-@@ -644,37 +647,55 @@ pub fn init(
+@@ -662,43 +665,61 @@ pub fn init(
      // This separate block ({}) is important because our errdefers must
      // be scoped here to be valid.
      {
--        var env = rt_surface.defaultTermioEnv() catch |err| env: {
--            // If an error occurs, we don't want to block surface startup.
--            log.warn("error getting env map for surface err={}", .{err});
--            break :env global.environMap() catch std.process.Environ.Map.init(alloc);
--        };
--        errdefer env.deinit();
+-        // Exec.init takes ownership of the env even if it fails, so the
+-        // errdefer for it must not reach past the call.
+-        const env = termio_env: {
+-            var env = rt_surface.defaultTermioEnv() catch |err| env: {
+-                // If an error occurs, we don't want to block surface startup.
+-                log.warn("error getting env map for surface err={}", .{err});
+-                break :env global.environMap() catch std.process.Environ.Map.init(alloc);
+-            };
+-            errdefer env.deinit();
 +        // External backend: embedded surfaces can specify an external IO
 +        // backend (remote PTY bytes fed via ghostty_surface_write_output)
 +        // instead of spawning a subprocess.
@@ -79,8 +82,8 @@ index 22e4ae4..0eb7c67 100644
 +        else
 +            false;
  
--        // don't leak GHOSTTY_LOG to any subprocesses
--        _ = env.orderedRemove("GHOSTTY_LOG");
+-            // don't leak GHOSTTY_LOG to any subprocesses
+-            _ = env.orderedRemove("GHOSTTY_LOG");
 +        var io_backend: termio.Backend = if (uses_external) backend: {
 +            if (@hasDecl(apprt.runtime.Surface, "getTermioBackend")) {
 +                break :backend try rt_surface.getTermioBackend(alloc);
@@ -88,20 +91,31 @@ index 22e4ae4..0eb7c67 100644
 +                return error.ExternalBackendNotSupported;
 +            }
 +        } else backend: {
-+            var env = rt_surface.defaultTermioEnv() catch |err| env: {
-+                // If an error occurs, we don't want to block surface startup.
-+                log.warn("error getting env map for surface err={}", .{err});
-+                break :env global.environMap() catch std.process.Environ.Map.init(alloc);
-+            };
-+            errdefer env.deinit();
++            // Exec.init takes ownership of the env even if it fails, so the
++            // errdefer for it must not reach past the call.
++            const env = termio_env: {
++                var env = rt_surface.defaultTermioEnv() catch |err| env: {
++                    // If an error occurs, we don't want to block surface startup.
++                    log.warn("error getting env map for surface err={}", .{err});
++                    break :env global.environMap() catch std.process.Environ.Map.init(alloc);
++                };
++                errdefer env.deinit();
  
--        var buf: [18]u8 = undefined;
--        try env.put(
--            "GHOSTTY_SURFACE_ID",
--            std.fmt.bufPrint(&buf, "0x{x:0>16}", .{self.id}) catch unreachable,
--        );
-+            // don't leak GHOSTTY_LOG to any subprocesses
-+            _ = env.orderedRemove("GHOSTTY_LOG");
+-            var buf: [18]u8 = undefined;
+-            try env.put(
+-                "GHOSTTY_SURFACE_ID",
+-                std.mem.print(&buf, "0x{x:0>16}", .{self.id}) catch unreachable,
+-            );
++                // don't leak GHOSTTY_LOG to any subprocesses
++                _ = env.orderedRemove("GHOSTTY_LOG");
+ 
+-            break :termio_env env;
+-        };
++                var buf: [18]u8 = undefined;
++                try env.put(
++                    "GHOSTTY_SURFACE_ID",
++                    std.mem.print(&buf, "0x{x:0>16}", .{self.id}) catch unreachable,
++                );
  
 -        // Initialize our IO backend
 -        var io_exec = try termio.Exec.init(alloc, .{
@@ -118,11 +132,8 @@ index 22e4ae4..0eb7c67 100644
 -            .rt_post_fork_info = .init(config),
 -        });
 -        errdefer io_exec.deinit();
-+            var buf: [18]u8 = undefined;
-+            try env.put(
-+                "GHOSTTY_SURFACE_ID",
-+                std.fmt.bufPrint(&buf, "0x{x:0>16}", .{self.id}) catch unreachable,
-+            );
++                break :termio_env env;
++            };
 +
 +            // Initialize our IO backend
 +            var io_exec = try termio.Exec.init(alloc, .{
@@ -145,24 +156,24 @@ index 22e4ae4..0eb7c67 100644
  
          // Initialize our IO mailbox
          var io_mailbox = try termio.Mailbox.initSPSC(alloc);
-@@ -684,7 +705,7 @@ pub fn init(
+@@ -712,7 +733,7 @@ pub fn init(
              .size = size,
              .full_config = config,
-             .config = try termio.Termio.DerivedConfig.init(alloc, config),
+             .config = io_config,
 -            .backend = .{ .exec = io_exec },
 +            .backend = io_backend,
              .mailbox = io_mailbox,
              .renderer_state = &self.renderer_state,
              .renderer_wakeup = render_thread.wakeup,
-@@ -1353,6 +1374,7 @@ fn childExitedAbnormally(
+@@ -1386,6 +1407,7 @@ fn childExitedAbnormally(
      // Build up our command for the error message
      const command = try std.mem.join(alloc, " ", switch (self.io.backend) {
          .exec => |*exec| exec.subprocess.args,
 +        .external => &[_][]const u8{"<external>"},
      });
-     const runtime_str = try std.fmt.allocPrint(alloc, "{d} ms", .{info.runtime_ms});
+     const runtime_str = try alloc.print("{d} ms", .{info.runtime_ms});
  
-@@ -2474,7 +2496,7 @@ fn setCellSize(self: *Surface, size: rendererpkg.CellSize) !void {
+@@ -2513,7 +2535,7 @@ fn setCellSize(self: *Surface, size: rendererpkg.CellSize) !void {
      self.balancePaddingIfNeeded();
  
      // Notify the terminal
@@ -171,7 +182,7 @@ index 22e4ae4..0eb7c67 100644
  
      // Update our terminal default size if necessary.
      self.recomputeInitialSize() catch |err| {
-@@ -2596,7 +2618,7 @@ fn resize(self: *Surface, size: rendererpkg.ScreenSize) !void {
+@@ -2635,7 +2657,7 @@ fn resize(self: *Surface, size: rendererpkg.ScreenSize) !void {
      }
  
      // Mail the IO thread
@@ -180,7 +191,7 @@ index 22e4ae4..0eb7c67 100644
  
      // Mail the render thread so it updates its padding and screen size.
      _ = self.renderer_thread.mailbox.push(
-@@ -2609,6 +2631,24 @@ fn resize(self: *Surface, size: rendererpkg.ScreenSize) !void {
+@@ -2648,6 +2670,24 @@ fn resize(self: *Surface, size: rendererpkg.ScreenSize) !void {
      };
  }
  
@@ -206,7 +217,7 @@ index 22e4ae4..0eb7c67 100644
  fn balancePaddingIfNeeded(self: *Surface) void {
      if (self.config.window_padding_balance == .false) return;
 diff --git a/src/apprt/embedded.zig b/src/apprt/embedded.zig
-index b90366a..0bc08f3 100644
+index 697f0a786..b0d6c03ab 100644
 --- a/src/apprt/embedded.zig
 +++ b/src/apprt/embedded.zig
 @@ -16,6 +16,7 @@ const input = @import("../input.zig");
@@ -298,7 +309,7 @@ index b90366a..0bc08f3 100644
          };
  
          // Add ourselves to the list of surfaces on the app.
-@@ -1003,6 +1060,39 @@ pub const Surface = struct {
+@@ -1005,6 +1062,39 @@ pub const Surface = struct {
          };
      }
  
@@ -338,7 +349,7 @@ index b90366a..0bc08f3 100644
      pub fn updateContentScale(self: *Surface, x: f64, y: f64) void {
          // We are an embedded API so the caller can send us all sorts of
          // garbage. We want to make sure that the float values are valid
-@@ -2008,6 +2098,12 @@ pub const CAPI = struct {
+@@ -2048,6 +2138,12 @@ pub const CAPI = struct {
          surface.occlusionCallback(visible);
      }
  
@@ -351,8 +362,8 @@ index b90366a..0bc08f3 100644
      /// Filter the mods if necessary. This handles settings such as
      /// `macos-option-as-alt`. The filtered mods should be used for
      /// key translation but should NOT be sent back via the `_key`
-@@ -2075,6 +2171,32 @@ pub const CAPI = struct {
-         surface.textCallback(ptr[0..len]);
+@@ -2128,6 +2224,32 @@ pub const CAPI = struct {
+         surface.pasteText(ptr[0..len :0]);
      }
  
 +    /// Write data directly to the terminal output. This feeds data to the
@@ -385,7 +396,7 @@ index b90366a..0bc08f3 100644
      /// composition. If the length is 0, then the preedit text is cleared.
      export fn ghostty_surface_preedit(
 diff --git a/src/termio.zig b/src/termio.zig
-index b168851..f0dab45 100644
+index b16885109..f0dab45bb 100644
 --- a/src/termio.zig
 +++ b/src/termio.zig
 @@ -23,6 +23,7 @@ const message = @import("termio/message.zig");
@@ -398,7 +409,7 @@ index b168851..f0dab45 100644
  pub const Thread = @import("termio/Thread.zig");
 diff --git a/src/termio/External.zig b/src/termio/External.zig
 new file mode 100644
-index 0000000..3c26cbe
+index 000000000..3c26cbe6f
 --- /dev/null
 +++ b/src/termio/External.zig
 @@ -0,0 +1,255 @@
@@ -658,18 +669,18 @@ index 0000000..3c26cbe
 +    }
 +};
 diff --git a/src/termio/Termio.zig b/src/termio/Termio.zig
-index 824c16c..8be9b95 100644
+index 49bd6e0cd..9b11c3734 100644
 --- a/src/termio/Termio.zig
 +++ b/src/termio/Termio.zig
-@@ -518,7 +518,6 @@ pub fn resize(
+@@ -526,7 +526,6 @@ pub fn resize(
      td: *ThreadData,
      size: renderer.Size,
  ) !void {
 -    self.size = size;
      const grid_size = size.grid();
  
-     // Update the size of our pty.
-@@ -529,6 +528,11 @@ pub fn resize(
+     // Enter the critical area that we want to keep small
+@@ -534,6 +533,11 @@ pub fn resize(
          self.renderer_state.mutex.lockUncancelable(global.io());
          defer self.renderer_state.mutex.unlock(global.io());
  
@@ -678,11 +689,11 @@ index 824c16c..8be9b95 100644
 +        // self.size under this same mutex.
 +        self.size = size;
 +
-         // Update the size of our terminal state
-         try self.terminal.resize(
-             self.alloc,
+         // Resizing the pty can immediately wake the shell with SIGWINCH.
+         // Hold the same lock used by processOutput before notifying it, so
+         // its redraw cannot be parsed against the old terminal dimensions.
 diff --git a/src/termio/backend.zig b/src/termio/backend.zig
-index c29009a..c203f89 100644
+index c29009acb..c203f89aa 100644
 --- a/src/termio/backend.zig
 +++ b/src/termio/backend.zig
 @@ -11,28 +11,35 @@ const ProcessInfo = @import("../pty.zig").ProcessInfo;

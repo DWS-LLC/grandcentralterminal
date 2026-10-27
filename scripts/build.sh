@@ -2,7 +2,7 @@
 # Builds everything: libghostty (patched), gctd, Grand Central Terminal.app.
 #
 # Prereqs (first run only):
-#   - zig 0.16.0 on PATH (or ZIG env var)
+#   - zig 0.17.0 on PATH (or ZIG env var)
 #   - Metal Toolchain: xcodebuild -downloadComponent MetalToolchain
 #   - Xcode with macOS SDK
 set -euo pipefail

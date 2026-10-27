@@ -278,6 +278,17 @@ final class SurfaceHost: @unchecked Sendable {
         }
     }
 
+    // Paste with ghostty's paste protection: unsafe text (newlines, control
+    // chars) asks for confirmation through the clipboard confirm callback.
+    func paste(_ str: String) {
+        assert(Thread.isMainThread)
+        guard let s = surfaceIfOpen(), !str.isEmpty else { return }
+        userInput?(paneID)
+        str.withCString { ptr in
+            ghostty_surface_paste_text(s, ptr, UInt(strlen(ptr)))
+        }
+    }
+
     func mouseButton(_ state: ghostty_input_mouse_state_e,
                      _ button: ghostty_input_mouse_button_e,
                      _ mods: ghostty_input_mods_e) {
