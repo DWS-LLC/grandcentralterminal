@@ -185,6 +185,23 @@ public func connectUnixSocket(_ path: String) -> Int32 {
     return fd
 }
 
+#if canImport(Darwin)
+// A peer that vanishes (sleep, wifi flip, host killed) never sends a FIN, so
+// the read loop would wait forever. Probes make it notice: idle 15s, then 3
+// misses 5s apart, ~30s to a dropped connection.
+private func armKeepalive(_ s: Int32) {
+    let size = socklen_t(MemoryLayout<Int32>.size)
+    var on: Int32 = 1
+    var idle: Int32 = 15
+    var interval: Int32 = 5
+    var misses: Int32 = 3
+    setsockopt(s, SOL_SOCKET, SO_KEEPALIVE, &on, size)
+    setsockopt(s, IPPROTO_TCP, TCP_KEEPALIVE, &idle, size)
+    setsockopt(s, IPPROTO_TCP, TCP_KEEPINTVL, &interval, size)
+    setsockopt(s, IPPROTO_TCP, TCP_KEEPCNT, &misses, size)
+}
+#endif
+
 public func connectTCP(host: String, port: UInt16) -> Int32 {
     var hints = addrinfo()
     hints.ai_family = AF_UNSPEC
@@ -218,6 +235,9 @@ public func connectTCP(host: String, port: UInt16) -> Int32 {
                            socklen_t(MemoryLayout<timeval>.size))
                 setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, &tv,
                            socklen_t(MemoryLayout<timeval>.size))
+                #if canImport(Darwin)
+                armKeepalive(s)
+                #endif
                 fd = s
                 break
             }

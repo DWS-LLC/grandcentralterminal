@@ -165,11 +165,12 @@ extension CanvasView: CanvasConnDelegate {
                 }
             }
         } else {
-            // Remote dropped: clear its panes now, retry on reload-config
-            // (no auto-reconnect loop hammering a dead host).
+            // Remote dropped: clear its panes now, redial on a slow timer
+            // (RemoteRetry), never a tight loop hammering a dead host.
             removeOwnerPanes(owner: owner)
             hub.disconnect(owner: owner)
-            NSLog("[gct] remote host \(owner) disconnected (reload-config to retry)")
+            NSLog("[gct] remote host \(owner) disconnected (retrying every \(Int(RemoteRetry.interval))s)")
+            armRemoteRetry()
         }
     }
 
@@ -204,9 +205,54 @@ extension CanvasView: CanvasConnDelegate {
             if hub.connectRemote(h, delegate: self) {
                 NSLog("[gct] remote host \(h.name) (\(h.host):\(h.port)) connected")
             } else {
-                NSLog("[gct] remote host \(h.name) (\(h.host):\(h.port)) unreachable (reload-config to retry)")
+                NSLog("[gct] remote host \(h.name) (\(h.host):\(h.port)) unreachable (retrying every \(Int(RemoteRetry.interval))s)")
             }
         }
+        armRemoteRetry()
+    }
+
+    private func missingRemotes() -> [GCTRemoteHost] {
+        GCTConfig.current.remotes.filter { hub.conn(forOwner: $0.name) == nil }
+    }
+
+    // Keeps redialing dropped hosts until every configured one is back.
+    private func armRemoteRetry() {
+        guard !missingRemotes().isEmpty else { return }
+
+        remoteRetry.arm { [weak self] in
+            guard let self else { return false }
+            let missing = missingRemotes()
+            missing.forEach(redial)
+            return !missing.isEmpty
+        }
+    }
+
+    // Off-main dial; adopted only if the host is still configured as it was
+    // and nothing else connected it meanwhile.
+    private func redial(_ h: GCTRemoteHost) {
+        guard remoteRetry.begin(h.name) else { return }
+
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            let conn = HostHub.dial(h)
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.remoteRetry.end(h.name)
+
+                let current = GCTConfig.current.remotes.contains(h)
+                guard let conn, current, self.hub.conn(forOwner: h.name) == nil else {
+                    conn?.close()
+                    return
+                }
+                self.hub.adopt(conn, as: h.name, delegate: self)
+                NSLog("[gct] remote host \(h.name) (\(h.host):\(h.port)) connected")
+            }
+        }
+    }
+
+    func retryRemote(_ name: String) {
+        guard let h = GCTConfig.current.remotes.first(where: { $0.name == name }),
+              hub.conn(forOwner: name) == nil else { return }
+        redial(h)
     }
 
     // Spawn gctd if it isn't already listening.

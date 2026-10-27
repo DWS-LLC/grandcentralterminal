@@ -70,8 +70,10 @@ resize, groups, and persistence all work. Three exceptions:
 - Each daemon arbitrates its own layout. The canvas pre-resolves against the
   union world, so cross-host windows never overlap.
 
-`⌘⇧R` reconnects when `[host.*]` changes. A dropped host clears its panes
-(retry via reload).
+`⌘⇧R` reconnects when `[host.*]` changes. A dropped host clears its panes and
+is redialed every 60s until it answers (a dead connection is noticed within
+~30s). A host that's down is greyed out under "New remote pane", with a
+retry button on its row to dial it now.
 
 ## CLI against a remote
 

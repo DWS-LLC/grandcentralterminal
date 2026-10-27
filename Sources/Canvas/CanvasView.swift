@@ -100,6 +100,7 @@ final class CanvasView: NSView {
     // host (canvas-local; the daemon never sees these bytes).
     let programStatus = ProgramStatusStore()
     let arrange = ArrangeState()
+    let remoteRetry = RemoteRetry()
     let notifier = Notifier()
     let notices = NoticeState()
     let dimTicker = DimTicker()
@@ -1914,6 +1915,11 @@ final class CanvasView: NSView {
                     item.attributedTitle = NSAttributedString(
                         string: "  \(h.name)",
                         attributes: [.foregroundColor: c])
+                }
+                if hub.conn(forOwner: h.name) == nil {
+                    item.view = RemoteRetryRow(name: h.name, color: HostStyle.color(for: h.name)) { [weak self] in
+                        self?.retryRemote(h.name)
+                    }
                 }
                 submenu.addItem(item)
             }
