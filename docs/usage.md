@@ -118,6 +118,10 @@ it, siblings stack in a column (keeping their top-to-bottom order) with room
 for the cables to bundle, and unrelated panes pack in rows. Groups move as
 blocks.
 
+Panes glide to their new spots (over `camera-animation-duration`) and the
+focused pane holds still: the camera stays put and the rest of the layout moves
+around it.
+
 It keeps your current top-to-bottom order and the middle of the layout, and is
 deterministic: the same canvas relaxes the same way every time. Nothing is live, and Undo Arrange reverts it.
 
@@ -144,6 +148,7 @@ every terminal. A Dock click re-summons a doom-hidden window.
 ```sh
 gctd status     # list panes
 gctd stop       # kill daemon + panes
+gctd version    # print the gctd version
 ```
 
 ## Pane environment

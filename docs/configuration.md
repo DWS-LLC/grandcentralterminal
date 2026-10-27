@@ -66,6 +66,9 @@ resize-step-points = 40
 # Animate the camera to center a pane created with cmd+t or an
 # open-new-window-* bind.
 move-focus-on-new-window = true
+# Clicking another pane to focus it: "none", "center" (keep zoom) or "fit"
+# (zoom to fit). Runs on release, only for a click, never a drag.
+camera-on-focus-click = "center"
 # Directional focus moves (cmd+h/j/k/l): center the new pane and/or zoom to
 # fit it. Independent; both true just zooms to fit.
 camera-follows-focus-move = true

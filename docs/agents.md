@@ -21,8 +21,10 @@ gctd notify $ID "build failed"        # desktop notification; click focuses the 
 gctd open parent=$ID name=tests       # wired (cable) to $ID, whoever calls
 gctd tie $ID $A $B at=0.4             # bundle the cables from $ID to $A, $B
 gctd untie $TIE                       # tie ids are in `gctd list`
+gctd move $ID rect=x,y,w,h            # place a pane (overlap rules still apply)
 gctd rename $ID name=server
 gctd group $A $B name=feat color=#3b82f6   # or palette:N; omit for auto
+gctd ungroup $GROUP                   # dissolve a group (panes survive)
 gctd focus $ID                        # focus + center on the canvas
 gctd camera $ID zoom=0.4 dur=3        # glide to a pane (or x= y=) at a zoom
 gctd do fit-all [$ID] [dur=4]         # run any keybind action, focusing $ID first

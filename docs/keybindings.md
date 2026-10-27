@@ -25,6 +25,7 @@ the key, e.g. `new-pane = "cmd+shift+t"`. `⌘⇧R` reloads the config live.
 | `⌘P` | pane switcher (type to filter, ⏎ to jump) | `switcher` |
 | `⌘0` | fit all panes | `fit-all` |
 | `⌘Z` | focus-zoom pane to a sharp local fullscreen (toggle restores) | `zoom-pane` |
+| `⌘⇧Z` | camera-only zoom into the focused pane (it keeps its size, the camera moves) | `camera-zoom-pane` |
 | `⌘+` / `⌘-` | per-pane font zoom (ghostty's, carries to new panes) | |
 
 ## Selection and groups
@@ -43,6 +44,7 @@ the key, e.g. `new-pane = "cmd+shift+t"`. `⌘⇧R` reloads the config live.
 | `⌘C` / `⌘V` | copy selection (sends `^C` when nothing is selected) / paste | `copy`, `paste` |
 | `⌘⇧S` | toggle window snapping (session-only, never moves panes) | `toggle-snapping` |
 | `⌘⇧R` | reload `config.toml` | `reload-config` |
+| `⌘⇧M` | move the focused pane to its nearest snap target (works with snapping off) | `move-window-to-snap` |
 | `⌘⇧A` | relax layout: a left-to-right tree of the cables | `relax-layout` |
 | `⌘Q` | quit the canvas; panes keep running in `gctd` | |
 
