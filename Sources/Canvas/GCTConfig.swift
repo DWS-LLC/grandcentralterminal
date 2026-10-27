@@ -501,7 +501,7 @@ struct GCTConfig {
     // cmd+h/j/k/l remember where you came from: the opposite key goes
     // back, staggered layouts included.
     var focusMoveMemory = true
-    // Zoom to fit a pane after resizing it (mouse or keyboard).
+    // Zoom to fit a pane after resizing it with the keyboard.
     var cameraFitsResize = true
     // Camera fits and centering dodge the system picture-in-picture
     // window: panes land in the free strip beside it, not under it.
@@ -957,7 +957,7 @@ struct GCTConfig {
     # back to that pane, even when staggered panes make another one
     # nearer. Set false for pure nearest-edge geometry.
     focus-move-memory = true
-    # Zoom to fit a pane after you resize it (mouse or keyboard).
+    # Zoom to fit a pane after you resize it with the keyboard.
     camera-fits-resize = true
     # Picture-in-picture: every camera fit/center (focus moves, fit-all,
     # resize, click) lands panes in the free strip beside the PiP window

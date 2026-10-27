@@ -73,7 +73,7 @@ camera-fits-focus-move = true
 # cmd+h/j/k/l remember where you came from: the opposite key goes back to
 # that pane, even when staggered panes make another one nearer.
 focus-move-memory = true
-# Zoom to fit a pane after resizing it (mouse or keyboard).
+# Zoom to fit a pane after resizing it with the keyboard.
 camera-fits-resize = true
 # Picture-in-picture: every camera fit/center lands panes in the free strip
 # beside the PiP window instead of under it. Checked at fit time.

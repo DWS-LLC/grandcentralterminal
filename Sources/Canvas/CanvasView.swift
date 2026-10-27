@@ -1613,9 +1613,6 @@ final class CanvasView: NSView {
         default:
             break
         }
-        if case .resize(let id, _, let rect0) = drag, panes[id]?.frame != rect0 {
-            followResize(id)
-        }
         if case .multiMove(let members, _, _) = drag {
             for m in members {
                 guard let pane = panes[m] else { continue }
@@ -3288,8 +3285,8 @@ final class CanvasView: NSView {
         }
     }
 
-    // Camera response to a finished resize (mouse release or keyboard
-    // step): zoom-fit the new size when camera-fits-resize.
+    // Camera response to a keyboard resize step: zoom-fit the new size
+    // when camera-fits-resize. Mouse resizes never move the camera.
     private func followResize(_ id: PaneID) {
         guard GCTConfig.current.cameraFitsResize, !isPaneZoomed else { return }
         zoomToPane(id)
