@@ -439,8 +439,21 @@ extension CanvasView {
         let gap = Double(GCTConfig.current.windowGap)
         let solved = TreeLayout.place(units.map(\.frame), parents: parents,
                                       gap: max(gap, Self.minTreeGap))
-        let placed = clearance(of: solved, scope: scope, moving: moving, rects: rects, gap: gap)
+        let anchored = anchorFocused(solved, units: units)
+        let placed = clearance(of: anchored, scope: scope, moving: moving, rects: rects, gap: gap)
         return fanOut(units, placed, rects: rects)
+    }
+
+    // One rigid shift of the whole layout so the focused unit stays put:
+    // the camera and the pane you're looking at hold still, the rest
+    // moves around them. Nothing shifts when focus is outside the scope.
+    private func anchorFocused(_ frames: [Rect], units: [ArrangeUnit]) -> [Rect] {
+        guard let focus = focusedID,
+              let i = units.firstIndex(where: { $0.panes.contains(focus) }) else { return frames }
+
+        let dx = units[i].frame.x - frames[i].x
+        let dy = units[i].frame.y - frames[i].y
+        return frames.map { Rect(x: $0.x + dx, y: $0.y + dy, w: $0.w, h: $0.h) }
     }
 
     // The unit holding the pane that spawned any pane of the unit (the
