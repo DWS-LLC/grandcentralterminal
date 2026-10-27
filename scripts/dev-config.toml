@@ -24,3 +24,10 @@ accent = "#d79921"
 toggle = "ctrl+alt+space"
 start-hidden = false
 launch-at-login = false
+
+# Remote daemon that always fails, to exercise drop / retry: nothing listens
+# on port 1, so it's refused instantly and stays greyed out with a retry button.
+[host.bogus]
+host = "127.0.0.1"
+port = 1
+token = "bogus"
