@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.12.0
+
+### Added
+- Clipboard access from programs in a pane: OSC 52 and kitty's OSC 5522 read and write the macOS pasteboard, with a confirm sheet before anything is read or written.
+
+### Changed
+- Ghostty 1.4.0 (zig 0.17) under the hood.
+- Paste goes through Ghostty's own paste path, so bracketed paste and unsafe-paste protection apply.
+
 ## v0.11.1
 
 ### Added
