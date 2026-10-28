@@ -1784,6 +1784,25 @@ final class CanvasView: NSView {
         let menu = NSMenu()
         let owner = hub.owner(of: id) ?? "local"
         let current = groupOf(id)
+
+        let rename = NSMenuItem(title: "Rename…",
+                                action: #selector(renamePaneFromMenu(_:)),
+                                keyEquivalent: "")
+        rename.target = self
+        rename.representedObject = id.uuid.uuidString
+        menu.addItem(rename)
+
+        // Custom name set: offer the way back to the auto name.
+        if panes[id]?.meta.name != nil {
+            let reset = NSMenuItem(title: "Use auto name",
+                                   action: #selector(resetPaneNameFromMenu(_:)),
+                                   keyEquivalent: "")
+            reset.target = self
+            reset.representedObject = id.uuid.uuidString
+            menu.addItem(reset)
+        }
+        menu.addItem(.separator())
+
         if let g = current, let meta = groupMetas[g] {
             let title = NSMenuItem(title: "In group: \(meta.name ?? "Group")",
                                    action: nil, keyEquivalent: "")
@@ -1958,6 +1977,18 @@ final class CanvasView: NSView {
 
     @objc func toggleSnappingFromMenu(_ sender: NSMenuItem) {
         toggleSnapping()
+    }
+
+    @objc func renamePaneFromMenu(_ sender: NSMenuItem) {
+        guard let s = sender.representedObject as? String,
+              let id = PaneID(string: s) else { return }
+        renamePane(id)
+    }
+
+    @objc func resetPaneNameFromMenu(_ sender: NSMenuItem) {
+        guard let s = sender.representedObject as? String,
+              let id = PaneID(string: s) else { return }
+        hub.renamePane(RenamePane(id: id, name: nil))
     }
 
     @objc func renameGroupFromMenu(_ sender: NSMenuItem) {
