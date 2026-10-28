@@ -111,7 +111,7 @@ group actions on a group background, plus "New pane here".
 
 ## Relax
 
-Arrange > Relax by Relation (`⌘⇧A`, `relax-layout`) works on
+Arrange > Arrange By > Relation (the default; `⌘⇧A`, `relax-layout`) works on
 the selection, else the focused group, else everything. Panes lay out as a
 left-to-right tree of the cables: a pane sits right of the pane that spawned
 it, siblings stack in a column (keeping their top-to-bottom order) with room

@@ -17,10 +17,11 @@ import AppKit
 import Common
 
 enum ArrangeKey: String, CaseIterable {
-    case position, name, directory, status, focus, activity
+    case relation, position, name, directory, status, focus, activity
 
     var title: String {
         switch self {
+        case .relation: "Relation"
         case .position: "Clean Up"
         case .name: "Name"
         case .directory: "Directory"
@@ -74,7 +75,7 @@ final class ArrangeState {
     // Coarser than any human-visible difference; spares the hot path.
     private static let outputResolution: CFAbsoluteTime = 1
 
-    var key: ArrangeKey = .name
+    var key: ArrangeKey = .relation
     var shape: ArrangeShape = .rows
     private(set) var undo = [ArrangeUndo]()
     let glide = PaneGlide()
@@ -131,6 +132,11 @@ extension CanvasView {
     // False when refused (beeps); true when it ran, even if nothing moved.
     @discardableResult
     func arrangeCanvas(scope: ArrangeScope) -> Bool {
+        // Relation isn't a sort: it's the cable tree (Relax below).
+        if arrange.key == .relation {
+            return relaxCanvas(scope: scope)
+        }
+
         arrange.glide.finish()
 
         // A zoomed pane's frame is local-only until unzoom.
@@ -259,7 +265,7 @@ extension CanvasView {
     private func rank(_ u: ArrangeUnit, _ key: ArrangeKey) -> (text: String, num: Double) {
         let first = u.panes.first.flatMap { panes[$0] }
         switch key {
-        case .position:
+        case .position, .relation:
             return ("", 0)
         case .name:
             if let g = u.group, let name = groupMetas[g]?.name { return (name, 0) }

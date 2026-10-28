@@ -70,6 +70,7 @@ the key, e.g. `new-pane = "cmd+shift+t"`. `⌘⇧R` reloads the config live.
 | right-click window chrome | add to / remove from group, new group |
 
 The Arrange menu (menubar) tidies the selection, else the focused group,
-else everything: sort by clean-up / name / directory / status / last focused /
-activity, as rows / columns / grid. Relax by Relation lays out by cables
-(which pane spawned which) instead. Undo Arrange reverts.
+else everything. Arrange By defaults to Relation, which lays out by cables
+(which pane spawned which); pick clean-up / name / directory / status / last
+focused / activity instead to sort, as rows / columns / grid (Arrange As).
+Undo Arrange reverts.
