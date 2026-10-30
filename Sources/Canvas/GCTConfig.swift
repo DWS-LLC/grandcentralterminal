@@ -520,6 +520,8 @@ struct GCTConfig {
     // nil = a palette color per cable, hashed from its window names; else
     // one hex or palette:N for every cable.
     var cableColor: String?
+    // Rope a reel lets out past the straight line, as a share of it.
+    var cableSlack = 0.06
     // Hover behavior: focus-follows-mouse focuses the pane under the
     // cursor on motion (same name as ghostty); scroll-on-terminal-hover
     // routes wheel/trackpad scroll to the hovered terminal, else pan
@@ -667,6 +669,9 @@ struct GCTConfig {
         }
         if let v = root["cable-color"] {
             cfg.cableColor = v.lowercased() == "auto" ? nil : v
+        }
+        if let v = root["cable-slack"], let n = Double(v), (0.0...1.0).contains(n) {
+            cfg.cableSlack = n
         }
         if let v = root["camera-on-focus-click"],
            let c = GCTClickCamera(rawValue: v.lowercased()) {
@@ -983,6 +988,10 @@ struct GCTConfig {
     # window names when it first appears. Or one hex ("#ff8800") or
     # "palette:N" (ghostty ANSI color N) for every cable.
     cable-color = "auto"
+    # Cables run off reels (at each window, and at each tie) that keep
+    # reeling in to this much slack past a straight line: 0 is taut, 0.2
+    # hangs loose. 0...1.
+    cable-slack = 0.06
     # Clicking another pane to focus it: "none", "center" (keep zoom) or
     # "fit" (zoom to fit). Runs on release, only for a click, never a drag.
     camera-on-focus-click = "center"

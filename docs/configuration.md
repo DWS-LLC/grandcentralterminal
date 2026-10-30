@@ -97,6 +97,9 @@ cables = true
 # "auto": each cable gets a palette color hashed from its start -> end window
 # names when it first appears. Or one hex or "palette:N" for every cable.
 cable-color = "auto"
+# Reels at each window and tie keep their cable this much past a straight
+# line (0 taut, 0.2 loose). 0...1.
+cable-slack = 0.06
 
 # Focus the pane under the cursor on mouse motion (ghostty's name for it).
 focus-follows-mouse = false

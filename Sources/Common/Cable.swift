@@ -1,22 +1,28 @@
-// Cables between panes that spawned each other: springy Béziers with ties.
+// Cables between panes that spawned each other: ropes under gravity, with ties.
 //
-//        ┌────────┐ port                         port ┌────────┐
-//        │ parent ├──╮     ties keep strands      ╭───┤ child  │
-//        └────────┘  ╰──╥══════════╥══════════════╯   └────────┘
-//                       tie        tie     (slide along the cable;
-//                                           they never pass each other)
+//        ┌────────┐                                   ┌────────┐
+//        │ parent ◎─╮      ┌───────────┐          ╭───◎ child  │
+//        └────────┘ ╰╮ ●●●●┤ any pane  ├●●●●    ╭─╯   └────────┘
+//          reel (◎)   ╰●●  │           │   ●●═●●╯
+//                          └───────────┘     tie (a reel too)
 //
-//   spring  a cable is a cubic Bézier whose two handles hang on springs:
-//           each handle is pulled to its rest spot (out of the port, square
-//           to the pane edge, drooping a little). Move a pane and the ends
-//           follow at once while the handles lag, overshoot, and settle.
-//   ports   each pane side spreads its cables along the edge, ordered by
-//           where the other end sits, so strands leave uncrossed.
-//   tie     a waypoint every strand passes through, side by side, running
-//           parallel for a short stretch. Each strand is re-drawn as smooth
-//           curves port -> tie -> port, so strands stretch to the tie from
-//           anywhere (no length is conserved, no humps). Ties on a shared
-//           cable keep their order and a gap.
+//   rope    a chain of beads (Verlet), links held to length, falling under
+//           gravity, a little stiff, heavily damped. It starts at the
+//           center of each pane, under it; the two beads at each end are
+//           held, aimed at the side it leaves by.
+//   reels   the rope is split at its ties into stretches, window or tie to
+//           tie or window. The upstream end of each is a reel: it winds in
+//           until the stretch is `slack` past a straight line, and pays out
+//           only when its ends move apart. No spare rope, no loops.
+//   panes   every other pane is solid: the rope drapes over tops, catches
+//           on corners, rests against sides. Pushed into, the rope can only
+//           stretch (the reels give nothing); past maxStretch it gives up on
+//           that pane and passes through it (a ghost) until it is clear.
+//   ports   a pane's cables start a few points apart at its center, in the
+//           order they leave, so strands leave uncrossed.
+//   tie     fixed at its spot (`s` along its strands' straight runs, on
+//           average), holding each strand in a slot across the bundle.
+//           Ties on a shared cable keep their order and a gap.
 //
 // The sim sleeps once everything is still; moving a port, a tie, or a pane
 // wakes it. Pure math, same as Spring: no AppKit, runs in the CLI.
@@ -51,27 +57,29 @@ public struct CableEnd: Sendable, Equatable {
 public struct Cable: Sendable {
     public var a: CableEnd    // parent port
     public var b: CableEnd    // child port
-    // What you see: the sprung curve, re-drawn through its ties.
+    // What you see: the rope's beads, port a to port b.
     public fileprivate(set) var pts: [Vec]
-    // The two handles and their velocities; `r1`/`r2` are where they rest.
-    fileprivate var h1: Vec
-    fileprivate var h2: Vec
-    fileprivate var v1 = Vec(0, 0)
-    fileprivate var v2 = Vec(0, 0)
-    fileprivate var r1: Vec
-    fileprivate var r2: Vec
-    // The curve at rest: what ties and spread checks measure against.
-    fileprivate var shape: [Vec]
-    // The sprung curve in `points` samples, ties ignored: where ties sit
-    // (their `s` indexes it) and what a sliding tie follows.
-    fileprivate var free: [Vec]
+    // Each bead a substep ago: Verlet keeps velocity as the gap.
+    fileprivate var prev: [Vec]
+    // Rope in each stretch, a -> b, split at its ties (`chain`, by id):
+    // each stretch is wound by its own reel, at the port or tie upstream.
+    fileprivate var spans: [Double]
+    fileprivate var chain = [Int]()
+    // Panes the rope passes through instead of draping over.
+    fileprivate var ghosts = Set<PaneID>()
+
+    // Unstretched, port to port.
+    fileprivate var length: Double { spans.reduce(0, +) }
+
+    // Where ties sit (their `s` indexes it) and what a sliding tie follows.
+    fileprivate var free: [Vec] { pts }
 }
 
 public struct CableTie: Sendable {
     public struct Member: Sendable {
         public var key: CableKey
-        // Point offset from the tie's own, so strands that pass the tie
-        // at slightly different points stay where they were gripped.
+        // Point offset from the tie's own where the stroke met the strand.
+        // Kept for saved ties; the rope grip now comes from geometry.
         public var delta: Double
         public init(key: CableKey, delta: Double) { self.key = key; self.delta = delta }
     }
@@ -102,7 +110,7 @@ public final class CableSim {
         public var distance: Double
     }
 
-    public static let points = 32
+    public static let points = 48
     // Where along the cable a fan-out's tie first sits, nearest first. A
     // tie only goes where its strands are still travelling together.
     private static let fanOutS = [0.35, 0.28]
@@ -111,40 +119,54 @@ public final class CableSim {
     private static let epsilon = 1e-6
     // Ports stay this share of a side's length away from each corner.
     private static let portInsetShare = 0.15
-    // Handle springs, per second: stiffness and damping (about 0.2 of
-    // critical: a few bouncy swings, then still).
-    private static let stiffness = 220.0
-    private static let damping = 6.0
-    private static let dt = 1.0 / 120
-    private static let substeps = 2
-    // How far the rest handles hang below the straight pull, as a share of
-    // the cable's length, and at most.
+    // Rope: gravity (points/s², y grows up), drag (per second), and how
+    // much longer than the straight line between its ports it is.
+    private static let gravity = Vec(0, -2400)
+    private static let drag = 8.0
+    // Share of each bead's speed traded with its neighbors' every substep:
+    // waves along the cable die (no twang) while it still swings whole.
+    private static let viscosity = 0.3
+    // Reels: each stretch is wound in at reelSpeed (points/s) until it is
+    // `slack` past the straight line, plus minSlack; pulled, it pays out
+    // at once. Never more rope than that hanging around to loop.
+    public static let defaultSlack = 0.06
+    private static let minSlack = 12.0
+    private static let reelSpeed = 600.0
+    // Share of a fold undone per pass: a cable, not a string.
+    private static let stiffness = 0.12
+    // One display frame: substeps of integrate, then relax the links,
+    // ties, and panes this many times. Fixed: same input, same motion.
+    private static let dt = 1.0 / 60
+    private static let substeps = 6
+    private static let iterations = 10
+    // Beads held at each end: the port, and one just out of it.
+    private static let held = 2
+    // How far off a pane the rope rests (about half its drawn width), the
+    // share of its slide a pane's surface takes each substep, and how far
+    // it stretches against panes before passing through the hardest one.
+    private static let radius = 2.0
+    private static let friction = 0.4
+    private static let maxStretch = 0.1
+    // A pane the rope runs through counts if it is this far inside, so a
+    // port on the pane's own edge is not "through" it.
+    private static let inside = 0.5
+    // The rope's first shape, before gravity takes it: hanging handles,
+    // this share of the cable's length below the straight pull, at most.
     private static let sagShare = 0.05
     private static let maxSag = 36.0
     private static let strandGap = 4.2
     private static let tieThickness = 7.0
-    // Half the stretch a bundle runs parallel through its tie, the share
-    // of a segment's length its handles reach, and how often a drawn
-    // segment is sampled.
-    private static let runHalf = 14.0
-    private static let handleShare = 0.4
     // A strand must reach a tie within this angle of the bundle's flow
-    // (as a cosine): sideways or behind, it would loop back on itself. The
-    // handles of a bend that sharp are shortened to this share, at least.
+    // (as a cosine): sideways or behind, it would loop back on itself.
     private static let minTurn = 0.12
-    private static let minHandle = 0.35
-    private static let sampleEvery = 10.0
-    private static let minSamples = 4
     // The margin a tie keeps from the cable ends.
-    private static let tieEnds = 7
-    private static let edgeMargin = 2.0
+    private static let tieEnds = 10
+    private static let edgeMargin = 3.0
     private static let scanStep = 0.1
     private static let tieGap = 40.0
     private static let bundleRadius = 12.0
-    // Asleep after this many still frames; "still" is handle speed (and
-    // displacement x calmGain) under calmMove.
-    private static let calmMove = 0.4
-    private static let calmGain = 20.0
+    // Asleep after this many frames with no bead moving calmMove a substep.
+    private static let calmMove = 0.02
     private static let calmFrames = 30
     private static let moved = 0.01
 
@@ -153,6 +175,8 @@ public final class CableSim {
     public private(set) var isAwake = false
 
     private var edges = [CableKey: Edge]()
+    private var panes = [PaneID: Rect]()
+    private var slack = defaultSlack
     private var calm = 0
     private var nextTie = 1
     // Fan-outs whose tie you removed: the sim leaves them alone.
@@ -185,20 +209,20 @@ public final class CableSim {
         dropOrphanTies()
     }
 
+    // A new rope starts as a ghost to every pane it lies across, or the
+    // first step would fling it clear.
     private func update(_ key: CableKey, a: CableEnd, b: CableEnd) {
         guard var c = cables[key] else {
-            cables[key] = Self.make(a: a, b: b)
+            var c = Self.make(a: a, b: b)
+            c.ghosts = Self.crossed(c.pts, panes)
+            cables[key] = c
             wake()
             return
         }
         guard !Self.same(c.a, a) || !Self.same(c.b, b) else { return }
 
-        let (r1, r2) = Self.rest(a, b)
         c.a = a
         c.b = b
-        c.r1 = r1
-        c.r2 = r2
-        c.shape = Self.sample(a, b, r1, r2)
         cables[key] = c
         wake()
     }
@@ -210,6 +234,67 @@ public final class CableSim {
     private func wake() {
         isAwake = true
         calm = 0
+    }
+
+    // How far past a straight line the reels let each stretch hang.
+    public func setSlack(_ slack: Double) {
+        guard slack != self.slack else { return }
+
+        self.slack = slack
+        wake()
+    }
+
+    // MARK: Panes
+
+    // Every pane on the canvas: what the ropes drape over. A pane that
+    // opens on top of a rope starts as a ghost to it, same as a new rope.
+    public func setPanes(_ panes: [PaneID: Rect]) {
+        guard panes != self.panes else { return }
+
+        let fresh = panes.filter { self.panes[$0.key] == nil }
+        self.panes = panes
+        for key in cables.keys {
+            cables[key]!.ghosts.formUnion(Self.crossed(cables[key]!.pts, fresh))
+        }
+        wake()
+    }
+
+    // Panes some stretch of the rope runs through.
+    private static func crossed(_ pts: [Vec], _ panes: [PaneID: Rect]) -> Set<PaneID> {
+        Set(panes.filter { enters(pts, $0.value) }.map(\.key))
+    }
+
+    private static func enters(_ pts: [Vec], _ r: Rect) -> Bool {
+        let core = grow(r, by: -inside)
+        return zip(pts, pts.dropFirst()).contains { cuts($0, $1, core) }
+    }
+
+    // Does the segment p-q pass inside r? Clips it to r one axis at a time
+    // (Liang-Barsky): what is left of 0...1 after both is inside.
+    private static func cuts(_ p: Vec, _ q: Vec, _ r: Rect) -> Bool {
+        let d = q - p
+        var (t0, t1) = (0.0, 1.0)
+
+        for (step, from, lo, hi) in [(d.x, p.x, r.x, r.x + r.w), (d.y, p.y, r.y, r.y + r.h)] {
+            if abs(step) < epsilon {
+                if from <= lo || from >= hi { return false }
+                continue
+            }
+
+            let (u, v) = ((lo - from) / step, (hi - from) / step)
+            t0 = max(t0, min(u, v))
+            t1 = min(t1, max(u, v))
+            if t0 >= t1 { return false }
+        }
+        return true
+    }
+
+    private static func grow(_ r: Rect, by d: Double) -> Rect {
+        Rect(x: r.x - d, y: r.y - d, w: r.w + 2 * d, h: r.h + 2 * d)
+    }
+
+    private static func overlap(_ a: Rect, _ b: Rect) -> Bool {
+        a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h
     }
 
     // MARK: Ports
@@ -321,14 +406,17 @@ public final class CableSim {
                 let (p, q) = vertical ? ($0.ref.target.y, $1.ref.target.y) : ($0.ref.target.x, $1.ref.target.x)
                 return p != q ? p < q : $0.ref.key.order < $1.ref.key.order
             }
-        let at = spread(wanted.map(\.at), lo: lo, hi: hi)
+        // Every cable starts at the pane's center (under the pane, out of
+        // sight), the side's cables a port apart in the order they leave.
+        let mid = center(r)
+        let spacing = (0..<wanted.count).map { (Double($0) - Double(wanted.count - 1) / 2) * portSpacing }
 
-        return zip(wanted, at).map { w, t in
+        return zip(wanted, spacing).map { w, d in
             switch w.ref.side {
-            case .right: return (w.ref, CableEnd(point: Vec(r.x + r.w, t), normal: Vec(1, 0)))
-            case .left: return (w.ref, CableEnd(point: Vec(r.x, t), normal: Vec(-1, 0)))
-            case .top: return (w.ref, CableEnd(point: Vec(t, r.y + r.h), normal: Vec(0, 1)))
-            case .bottom: return (w.ref, CableEnd(point: Vec(t, r.y), normal: Vec(0, -1)))
+            case .right: return (w.ref, CableEnd(point: mid + Vec(0, d), normal: Vec(1, 0)))
+            case .left: return (w.ref, CableEnd(point: mid + Vec(0, d), normal: Vec(-1, 0)))
+            case .top: return (w.ref, CableEnd(point: mid + Vec(d, 0), normal: Vec(0, 1)))
+            case .bottom: return (w.ref, CableEnd(point: mid + Vec(d, 0), normal: Vec(0, -1)))
             }
         }
     }
@@ -342,25 +430,6 @@ public final class CableSim {
         let shared = (max(a0, b0), min(a1, b1))
         let want = shared.0 < shared.1 ? (shared.0 + shared.1) / 2 : (b0 + b1) / 2
         return min(max(want, lo), hi)
-    }
-
-    // Sorted spots pushed apart to `portSpacing` (less if the edge is
-    // short), kept inside lo...hi. A crowd spreads evenly around where it
-    // wanted to be: the average of pushing everyone up and pushing everyone
-    // down, which keeps every gap.
-    private static func spread(_ at: [Double], lo: Double, hi: Double) -> [Double] {
-        guard at.count > 1 else { return at }
-
-        let gap = min(portSpacing, (hi - lo) / Double(at.count - 1))
-        var up = at, down = at
-        for i in 1..<at.count { up[i] = max(up[i], up[i - 1] + gap) }
-        for i in stride(from: at.count - 2, through: 0, by: -1) { down[i] = min(down[i], down[i + 1] - gap) }
-
-        var out = zip(up, down).map { ($0 + $1) / 2 }
-        let over = max((out.last ?? hi) - hi, 0)
-        let under = max(lo - (out.first ?? lo), 0)
-        out = out.map { $0 - over + under }
-        return out
     }
 
     private static func opposite(_ s: Side) -> Side {
@@ -418,65 +487,294 @@ public final class CableSim {
         return bezier(a.point, r1, r2, b.point, t)
     }
 
+    // Laid out along the resting curve, still, then left to fall; the
+    // reels take up whatever it has too much of.
     private static func make(a: CableEnd, b: CableEnd) -> Cable {
         let (r1, r2) = rest(a, b)
         let pts = sample(a, b, r1, r2)
-        return Cable(a: a, b: b, pts: pts, h1: r1, h2: r2, r1: r1, r2: r2, shape: pts, free: pts)
+        return Cable(a: a, b: b, pts: pts, prev: pts, spans: [length(pts)])
     }
 
     // MARK: Step
 
-    // One display frame: a couple of small, fixed spring steps, then the
-    // curve is re-sampled and the ties pulled in. Same input, same motion.
+    // One display frame. Each substep: every bead coasts and falls, then
+    // the links, ties, and panes are satisfied in turn, panes last so the
+    // rope never ends a step inside one. Same input, same motion.
     public func step() {
         guard isAwake else { return }
 
+        var lay = layout()
+        let keys = Array(cables.keys)
+        let h = Self.dt / Double(Self.substeps)
         var worst = 0.0
-        for _ in 0..<Self.substeps {
-            worst = max(worst, spring())
+
+        for key in keys {
+            reel(key, &lay)
         }
 
-        for key in cables.keys {
-            guard var c = cables[key] else { continue }
-            c.free = Self.sample(c.a, c.b, c.h1, c.h2)
-            c.pts = c.free
-            cables[key] = c
+        for _ in 0..<Self.substeps {
+            var near = [CableKey: [(PaneID, Rect)]]()
+            for key in keys {
+                worst = max(worst, Self.integrate(&cables[key]!, h))
+                near[key] = solids(key, cables[key]!)
+            }
+
+            var pushed = [CableKey: [PaneID: Double]]()
+            var touched = [CableKey: [Int: Side]]()
+            for pass in 0..<Self.iterations {
+                for key in keys {
+                    Self.links(&cables[key]!, pass.isMultiple(of: 2) ? .forward : .backward)
+                }
+                grip(lay)
+                for key in keys {
+                    Self.collide(&cables[key]!, near[key]!, &pushed[key, default: [:]], &touched[key, default: [:]])
+                }
+            }
+
+            for key in keys {
+                Self.settle(&cables[key]!, touched[key] ?? [:])
+                Self.give(&cables[key]!, pushed[key] ?? [:])
+            }
         }
-        bundleTies()
+
+        for key in keys {
+            cables[key]!.ghosts = cables[key]!.ghosts.filter { id in
+                panes[id].map { Self.enters(cables[key]!.pts, $0) } ?? false
+            }
+        }
         refreshTies()
 
         calm = worst < Self.calmMove ? calm + 1 : 0
         if calm >= Self.calmFrames { isAwake = false }
     }
 
-    // Each handle is a damped spring on its rest spot. Returns how far from
-    // still the worst handle is.
-    private func spring() -> Double {
+    private static func isHeld(_ i: Int) -> Bool { i < held || i >= points - held }
+
+    // One frame of the cable's reels. Each stretch (port or tie to the next
+    // tie or port) winds in toward `slack` past its straight line, and pays
+    // out only when that line grows: an end moved. A pane pushing into the
+    // rope earns it nothing, so it stretches (and past maxStretch, passes
+    // through). Then each tie grips the cable where the rope before it
+    // runs out:
+    //
+    //   port ──120──▶ tie ──300──▶ tie ──180──▶ port   (600 of rope, 47 links)
+    //                 bead 9.4     bead 32.9
+    private func reel(_ key: CableKey, _ lay: inout Layout) {
+        var c = cables[key]!
+        let chain = lay.chains[key] ?? []
+
+        // New ties (or one gone): split the rope where the ties sit now.
+        if chain != c.chain {
+            let cuts = [0] + chain.map { lay.spots[$0]!.f[key]! } + [Double(Self.points - 1)]
+            c.spans = zip(cuts, cuts.dropFirst()).map { Self.arc(c.pts, from: $0, to: $1) }
+            c.chain = chain
+        }
+
+        let stops = [c.a.point] + chain.map { lay.spots[$0]!.center } + [c.b.point]
+        for k in c.spans.indices {
+            let want = (stops[k + 1] - stops[k]).length * (1 + slack) + Self.minSlack
+            c.spans[k] = max(want, c.spans[k] - Self.reelSpeed * Self.dt)
+        }
+
+        var run = 0.0
+        let (n, total) = (Double(Self.points - 1), max(c.length, Self.epsilon))
+        for (k, id) in chain.enumerated() {
+            run += c.spans[k]
+            lay.spots[id]!.f[key] = min(max(n * run / total, Self.edgeMargin), n - Self.edgeMargin)
+        }
+        cables[key] = c
+    }
+
+    // Rope along the beads between fractional indexes `from` and `to`.
+    private static func arc(_ pts: [Vec], from: Double, to: Double) -> Double {
+        let inner = pts.indices.filter { Double($0) > from && Double($0) < to }.map { pts[$0] }
+        return length([at(pts, from)] + inner + [at(pts, to)])
+    }
+
+    // Verlet: each bead keeps going the way it went (less drag, and blended
+    // with its neighbors: viscosity) and falls. Returns the fastest step.
+    private static func integrate(_ c: inout Cable, _ h: Double) -> Double {
+        let keep = 1 - drag * h
+        let v = zip(c.pts, c.prev).map { $0 - $1 }
         var worst = 0.0
 
-        for key in cables.keys {
-            guard var c = cables[key] else { continue }
-            Self.pull(&c.h1, &c.v1, toward: c.r1)
-            Self.pull(&c.h2, &c.v2, toward: c.r2)
-            worst = max(worst, c.v1.length, c.v2.length,
-                        (c.h1 - c.r1).length * Self.calmGain, (c.h2 - c.r2).length * Self.calmGain)
-            cables[key] = c
+        for i in held..<(points - held) {
+            let shared = (v[i - 1] + v[i + 1]) * 0.5
+            let step = (v[i] * (1 - viscosity) + shared * viscosity) * keep
+            worst = max(worst, step.length)
+            c.prev[i] = c.pts[i]
+            c.pts[i] = c.pts[i] + step + gravity * (h * h)
         }
+        pin(&c)
         return worst
     }
 
-    private static func pull(_ h: inout Vec, _ v: inout Vec, toward r: Vec) {
-        let acc = (r - h) * stiffness - v * damping
-        v = v + acc * dt
-        h = h + v * dt
+    // The held beads: on the port, and one link out of it, square to the
+    // pane edge, so the rope leaves the way a plug does.
+    private static func pin(_ c: inout Cable) {
+        let seg = c.length / Double(points - 1)
+        let n = points
+
+        c.pts[0] = c.a.point
+        c.pts[1] = c.a.point + c.a.normal * seg
+        c.pts[n - 1] = c.b.point
+        c.pts[n - 2] = c.b.point + c.b.normal * seg
+        for i in [0, 1, n - 2, n - 1] {
+            c.prev[i] = c.pts[i]
+        }
+    }
+
+    private enum Sweep { case forward, backward }
+
+    // Every link back to its length, then every fold eased open a little
+    // (bead i to i+2: the cable's stiffness). Sweeps alternate, so a tug
+    // at either end travels the whole cable in one pass.
+    private static func links(_ c: inout Cable, _ sweep: Sweep) {
+        let seg = c.length / Double(points - 1)
+
+        for k in 0..<(points - 1) {
+            let i = sweep == .forward ? k : points - 2 - k
+            pull(&c, i, i + 1, to: seg, share: 1)
+        }
+        for i in 0..<(points - 2) {
+            pull(&c, i, i + 2, to: 2 * seg, share: stiffness)
+        }
+    }
+
+    // Beads i and j `share` of the way back to `rest` apart, split between
+    // them; a held bead does not budge.
+    private static func pull(_ c: inout Cable, _ i: Int, _ j: Int, to rest: Double, share: Double) {
+        let (wa, wb) = (isHeld(i) ? 0.0 : 1.0, isHeld(j) ? 0.0 : 1.0)
+        let d = c.pts[j] - c.pts[i]
+        let len = d.length
+        guard wa + wb > 0, len > epsilon else { return }
+
+        let fix = d * ((len - rest) / len / (wa + wb) * share)
+        c.pts[i] = c.pts[i] + fix * wa
+        c.pts[j] = c.pts[j] - fix * wb
+    }
+
+    // The panes this rope could touch this substep, grown by its radius.
+    // Ghosts are left out: the rope passes through those. So are its own
+    // two panes: it starts at their centers, under them.
+    private func solids(_ key: CableKey, _ c: Cable) -> [(PaneID, Rect)] {
+        let reach = c.length / Double(Self.points - 1) + Self.radius
+        let xs = c.pts.map(\.x), ys = c.pts.map(\.y)
+        let (x0, y0) = (xs.min() ?? 0, ys.min() ?? 0)
+        let box = Self.grow(Rect(x: x0, y: y0, w: (xs.max() ?? 0) - x0, h: (ys.max() ?? 0) - y0), by: reach)
+        let own: Set = [key.parent, key.child]
+
+        return panes
+            .filter { !own.contains($0.key) && !c.ghosts.contains($0.key) && Self.overlap(box, $0.value) }
+            .map { ($0.key, Self.grow($0.value, by: Self.radius)) }
+    }
+
+    // A bead inside a pane goes back out the side it came in by (else the
+    // nearest). Notes how deep each pane pushed, and which side each bead
+    // ended against.
+    private static func collide(_ c: inout Cable, _ solids: [(PaneID, Rect)],
+                                _ pushed: inout [PaneID: Double], _ touched: inout [Int: Side]) {
+        for i in held..<(points - held) {
+            for (id, r) in solids {
+                guard let side = face(c.pts[i], was: c.prev[i], r) else { continue }
+
+                let (p, depth) = out(c.pts[i], side, r)
+                c.pts[i] = p
+                pushed[id] = max(pushed[id] ?? 0, depth)
+                touched[i] = side
+            }
+        }
+    }
+
+    // Which side of `r` the bead at `p` (last at `was`) leaves by, if it is
+    // inside. Above the top before: the top, so a rope falling on a pane
+    // drapes over it rather than squirting out a side.
+    private static func face(_ p: Vec, was: Vec, _ r: Rect) -> Side? {
+        let (x1, y1) = (r.x + r.w, r.y + r.h)
+        guard p.x > r.x, p.x < x1, p.y > r.y, p.y < y1 else { return nil }
+
+        if was.y >= y1 { return .top }
+        if was.y <= r.y { return .bottom }
+        if was.x <= r.x { return .left }
+        if was.x >= x1 { return .right }
+
+        let gaps: [(Side, Double)] = [(.top, y1 - p.y), (.bottom, p.y - r.y), (.left, p.x - r.x), (.right, x1 - p.x)]
+        return gaps.min { $0.1 < $1.1 }?.0
+    }
+
+    // `p` moved out onto `side` of `r`, and how far it went.
+    private static func out(_ p: Vec, _ side: Side, _ r: Rect) -> (Vec, Double) {
+        switch side {
+        case .top: return (Vec(p.x, r.y + r.h), r.y + r.h - p.y)
+        case .bottom: return (Vec(p.x, r.y), p.y - r.y)
+        case .left: return (Vec(r.x, p.y), p.x - r.x)
+        case .right: return (Vec(r.x + r.w, p.y), r.x + r.w - p.x)
+        }
+    }
+
+    // A bead that ended against a pane loses its speed into it, and some
+    // of its slide along it: ropes rest on panes instead of bouncing.
+    private static func settle(_ c: inout Cable, _ touched: [Int: Side]) {
+        for (i, side) in touched {
+            let v = c.pts[i] - c.prev[i]
+            switch side {
+            case .top, .bottom: c.prev[i] = c.pts[i] - Vec(v.x * (1 - friction), 0)
+            case .left, .right: c.prev[i] = c.pts[i] - Vec(0, v.y * (1 - friction))
+            }
+        }
+    }
+
+    // Stretched past maxStretch against panes, the rope gives up on the
+    // one that pushed hardest and passes through it until it is clear.
+    private static func give(_ c: inout Cable, _ pushed: [PaneID: Double]) {
+        guard length(c.pts) > c.length * (1 + maxStretch),
+              let hardest = pushed.max(by: { $0.value < $1.value })?.key else { return }
+
+        c.ghosts.insert(hardest)
     }
 
     // MARK: Ties
 
-    // Fractional point index where the tie at `s` grips member `m`.
+    // Fractional bead index where the tie at `s` would grip member `m`, by
+    // distance: port 200 from the tie, far end 800, bead 0.2 of the way.
+    // A first guess (which strands it can hold, where a new tie cuts the
+    // rope); once tied, the reels decide (see reel).
     private func place(_ t: CableTie, _ m: CableTie.Member, at s: Double? = nil) -> Double {
-        let f = (s ?? t.s) * Double(Self.points - 1) + m.delta
-        return min(max(f, Self.edgeMargin), Double(Self.points - 1) - Self.edgeMargin)
+        let n = Double(Self.points - 1)
+        guard let c = cables[m.key] else { return (s ?? t.s) * n }
+
+        let hub = anchor(t.members.map(\.key), at: s ?? t.s)
+        let (near, far) = ((hub - c.a.point).length, (c.b.point - hub).length)
+        let f = n * near / max(near + far, Self.epsilon)
+        return min(max(f, Self.edgeMargin), n - Self.edgeMargin)
+    }
+
+    // Where a tie at `s` sits: `s` of the way along the visible part of
+    // each strand's straight run (out of one pane, into the other), on
+    // average. Fixed there, like a mounted reel; it moves when you slide
+    // it or its panes move.
+    private func anchor(_ keys: [CableKey], at s: Double) -> Vec {
+        let at = keys.compactMap { k -> Vec? in
+            guard let c = cables[k], let e = edges[k] else { return nil }
+
+            let (a, b) = (c.a.point, c.b.point)
+            let from = Self.leave(a, b, e.parent)
+            let to = max(from, 1 - Self.leave(b, a, e.child))
+            return a + (b - a) * (from + (to - from) * s)
+        }
+        return Self.mean(at)
+    }
+
+    // How far along p -> q (0...1) the line leaves r, p inside it.
+    private static func leave(_ p: Vec, _ q: Vec, _ r: Rect) -> Double {
+        let d = q - p
+        var t = 1.0
+
+        if d.x > epsilon { t = min(t, (r.x + r.w - p.x) / d.x) }
+        if d.x < -epsilon { t = min(t, (r.x - p.x) / d.x) }
+        if d.y > epsilon { t = min(t, (r.y + r.h - p.y) / d.y) }
+        if d.y < -epsilon { t = min(t, (r.y - p.y) / d.y) }
+        return max(t, 0)
     }
 
     // The polyline at fractional index `f`.
@@ -549,8 +847,9 @@ public final class CableSim {
     private struct Spot {
         var keys: [CableKey]
         var f: [CableKey: Double] = [:]       // point index on each free curve
-        var center = Vec(0, 0)
-        var flow = Vec(1, 0)                  // unit, port a -> port b
+        var s: Double
+        var center = Vec(0, 0)                // where it sits: see anchor
+        var flow = Vec(1, 0)                 // unit, port a -> port b
         var way: [CableKey: Double] = [:]     // +1, or -1 for a strand running b -> a
         var before: [CableKey: Vec] = [:]     // where each strand comes from, and goes next
         var after: [CableKey: Vec] = [:]
@@ -563,8 +862,8 @@ public final class CableSim {
         var chains: [CableKey: [Int]] = [:]   // tie ids along each cable, a -> b
     }
 
-    // Work out every tie: its center (the mean of where its strands would
-    // run), the direction the bundle flows (from the spots just before the
+    // Work out every tie: its center (its anchor, over the strands it
+    // holds), the direction the bundle flows (from the spots just before the
     // strands to just after: the neighboring tie, or the port), and each
     // strand's slot across it. Also keeps the pills' own numbers current.
     private func layout() -> Layout {
@@ -574,9 +873,9 @@ public final class CableSim {
             let live = holders(t)
             guard live.count >= 2 else { continue }
 
-            var spot = Spot(keys: live.map(\.key))
+            var spot = Spot(keys: live.map(\.key), s: t.s)
             for m in live { spot.f[m.key] = place(t, m) }
-            spot.center = Self.mean(live.map { Self.at(cables[$0.key]!.free, spot.f[$0.key]!) })
+            spot.center = anchor(spot.keys, at: t.s)
             out.spots[t.id] = spot
             for m in live { out.chains[m.key, default: []].append(t.id) }
         }
@@ -627,7 +926,7 @@ public final class CableSim {
         spot.keys.removeAll { keys.contains($0) }
         guard !spot.keys.isEmpty else { return }
 
-        spot.center = Self.mean(spot.keys.map { Self.at(cables[$0]!.free, spot.f[$0]!) })
+        spot.center = anchor(spot.keys, at: spot.s)
     }
 
     private func flow(_ spot: inout Spot, _ id: Int, _ out: Layout) {
@@ -664,55 +963,28 @@ public final class CableSim {
         }
     }
 
-    // Re-draw every tied cable as smooth curves through its ties: the port,
-    // then for each tie a short parallel run, then the other port. Handles
-    // at a tie point along the bundle; at a port they are the sprung
-    // handle (scaled to the stretch), so the swing still shows.
-    private func bundleTies() {
-        let lay = layout()
-
-        for (key, chain) in lay.chains {
-            guard var c = cables[key] else { continue }
-
-            var knots = [(p: Vec, dir: Vec?)]()
-            knots.append((c.a.point, nil))
-            for id in chain {
-                let spot = lay.spots[id]!
-                let dir = spot.flow * spot.way[key]!
-                let at = spot.center + spot.cross * spot.slot[key]!
-                knots.append((at - dir * Self.runHalf, dir))
-                knots.append((at + dir * Self.runHalf, dir))
+    // Every tie is a reel mount at its spot: each strand's grip point is
+    // held there, in its own slot across the bundle.
+    private func grip(_ lay: Layout) {
+        for spot in lay.spots.values {
+            for key in spot.keys {
+                let want = spot.center + spot.cross * spot.slot[key]!
+                Self.nudge(&cables[key]!, spot.f[key]!, by: want - Self.at(cables[key]!.pts, spot.f[key]!))
             }
-            knots.append((c.b.point, nil))
-
-            c.pts = Self.draw(knots, c)
-            cables[key] = c
         }
     }
 
-    private static func draw(_ knots: [(p: Vec, dir: Vec?)], _ c: Cable) -> [Vec] {
-        let span = max((c.b.point - c.a.point).length, 1)
-        var out = [Vec]()
+    // Moves the rope's point at fractional bead `f` by `d`, split between
+    // the beads either side by how near each is: the point lands exactly.
+    private static func nudge(_ c: inout Cable, _ f: Double, by d: Vec) {
+        let i = min(Int(f), points - 2)
+        let t = f - Double(i)
+        let (wa, wb) = (isHeld(i) ? 0 : 1 - t, isHeld(i + 1) ? 0 : t)
+        let w = wa * wa + wb * wb
+        guard w > epsilon else { return }
 
-        for j in 0..<(knots.count - 1) {
-            let (p, q) = (knots[j], knots[j + 1])
-            let chord = (q.p - p.p).length
-            let share = min(max(chord / span, 0.25), 1)
-
-            // A handle shortens as its strand turns away from the bundle.
-            func reach(_ dir: Vec) -> Double {
-                let along = chord > 1e-6 ? dir.dot(q.p - p.p) / chord : 1
-                return chord * handleShare * min(max(along, minHandle), 1)
-            }
-            let c1 = p.dir.map { p.p + $0 * reach($0) } ?? p.p + (c.h1 - c.a.point) * share
-            let c2 = q.dir.map { q.p - $0 * reach($0) } ?? q.p + (c.h2 - c.b.point) * share
-
-            let n = max(minSamples, Int(chord / sampleEvery))
-            for i in (j == 0 ? 0 : 1)...n {
-                out.append(bezier(p.p, c1, c2, q.p, Double(i) / Double(n)))
-            }
-        }
-        return out
+        c.pts[i] = c.pts[i] + d * (wa / w)
+        c.pts[i + 1] = c.pts[i + 1] + d * (wb / w)
     }
 
     private func refreshTies() {
@@ -860,6 +1132,7 @@ public final class CableSim {
 
         let members = found.map { CableTie.Member(key: $0.key, delta: index($0) - f0) }
         var tie = CableTie(id: nextTie, members: members, s: f0 / Double(Self.points - 1))
+        tie.s = nearest(tie, to: Self.mean(found.map(\.point)), keep: 2) ?? tie.s
         guard let s = clear(tie, at: tie.s) else { return nil }
 
         // Strands that would loop through the spot are left out.
@@ -916,35 +1189,35 @@ public final class CableSim {
     // Slide a tie toward `p`, along its cable. It stops at the ends and at
     // its neighbors on any shared cable: ties never pass or overlap.
     public func moveTie(_ id: Int, to p: Vec) {
-        guard let i = ties.firstIndex(where: { $0.id == id }) else { return }
+        guard let i = ties.firstIndex(where: { $0.id == id }),
+              let s = nearest(ties[i], to: p, keep: max(2, ties[i].holds)) else { return }
 
-        // The spot whose bundle center is nearest the pointer: the tie
-        // follows the mouse, however far apart its strands are.
-        var best: (s: Double, d: Double)?
-        let length = Double(Self.points - 1)
-        let keep = max(2, ties[i].holds)
-
-        for f in stride(from: 0.0, through: length, by: Self.scanStep) {
-            guard let s = clear(ties[i], at: f / length),
-                  holders(ties[i], at: s).count >= keep,
-                  let c = center(ties[i], at: s) else { continue }
-
-            let d = (c - p).length
-            if d < (best?.d ?? .infinity) { best = (s, d) }
-        }
-        guard let best else { return }
-
-        ties[i].s = best.s
+        ties[i].s = s
         wake()
         refreshTies()
     }
 
-    // Where the tie's strands run at `s`, on average.
-    private func center(_ t: CableTie, at s: Double) -> Vec? {
-        let at = t.members.compactMap { m in
-            cables[m.key].map { Self.at($0.free, place(t, m, at: s)) }
+    // The spot whose bundle center is nearest `p`, still holding `keep`
+    // strands: a tie follows the mouse, however far apart its strands are.
+    private func nearest(_ t: CableTie, to p: Vec, keep: Int) -> Double? {
+        var best: (s: Double, d: Double)?
+        let length = Double(Self.points - 1)
+
+        for f in stride(from: 0.0, through: length, by: Self.scanStep) {
+            guard let s = clear(t, at: f / length),
+                  holders(t, at: s).count >= keep,
+                  let c = center(t, at: s) else { continue }
+
+            let d = (c - p).length
+            if d < (best?.d ?? .infinity) { best = (s, d) }
         }
-        return at.isEmpty ? nil : Self.mean(at)
+        return best?.s
+    }
+
+    // Where the tie would sit at `s`.
+    private func center(_ t: CableTie, at s: Double) -> Vec? {
+        let keys = t.members.map(\.key).filter { cables[$0] != nil }
+        return keys.isEmpty ? nil : anchor(keys, at: s)
     }
 
     // `s` held off the cable ends and the closest ties either side.
@@ -955,7 +1228,7 @@ public final class CableSim {
         var hi = 1 - lo
 
         for o in ties where o.id != t.id && o.members.contains(where: { keys.contains($0.key) }) {
-            let long = keys.compactMap { cables[$0].map { Self.length($0.shape) } }.max() ?? 1
+            let long = keys.compactMap { cables[$0]?.length }.max() ?? 1
             let gap = Self.tieGap / long
             if o.s <= t.s { lo = max(lo, o.s + gap) } else { hi = min(hi, o.s - gap) }
         }

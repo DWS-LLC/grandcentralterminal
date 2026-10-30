@@ -95,6 +95,9 @@ extension CanvasView {
         let edges = cableEdges()
         var dirty = false
 
+        // Before the edges: a new cable checks which panes it starts across.
+        cableView.sim.setPanes(panes.mapValues { $0.meta.rect })
+        cableView.sim.setSlack(GCTConfig.current.cableSlack)
         if edges != memo.edges {
             memo.edges = edges
             cableView.sim.setEdges(edges)
