@@ -1,5 +1,19 @@
 # Changelog
 
+## v0.13.0
+
+### Added
+- Cables are ropes: they hang under gravity, drape over panes, catch on corners and rest against sides instead of cutting through. Each runs off a reel at its windows and ties that winds it in to `cable-slack` (default 0.06) past a straight line, so there's no spare rope to loop. Pushed hard into a pane, a rope passes through it until it's clear.
+- Pane right-click: Rename… and Use auto name.
+
+### Changed
+- Arrange By has Relation (the cable tree, the default) alongside the sort keys, replacing the separate Relax by Relation item. Picking Rows / Columns / Grid from Relation sorts by the last key (Name at first).
+- `⌘⇧A` relaxes the whole canvas, whatever is focused. The Arrange menu still narrows to the selection or the focused group.
+- Holding a key repeats it (vim `hjkl`) instead of opening the accent picker. `defaults write <bundle> ApplePressAndHoldEnabled -bool true` brings the picker back.
+
+### Fixed
+- Ties saved by earlier versions come back where they were drawn.
+
 ## v0.12.0
 
 ### Added
