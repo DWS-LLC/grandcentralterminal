@@ -269,24 +269,29 @@ public final class CableSim {
         return zip(pts, pts.dropFirst()).contains { cuts($0, $1, core) }
     }
 
-    // Does the segment p-q pass inside r? Clips it to r one axis at a time
-    // (Liang-Barsky): what is left of 0...1 after both is inside.
+    // Does the segment p-q pass inside r?
     private static func cuts(_ p: Vec, _ q: Vec, _ r: Rect) -> Bool {
+        clip(p, q, r) != nil
+    }
+
+    // The stretch of p-q inside r, as 0...1 along it. Clips one axis at a
+    // time (Liang-Barsky): what is left of 0...1 after both is inside.
+    private static func clip(_ p: Vec, _ q: Vec, _ r: Rect) -> (Double, Double)? {
         let d = q - p
         var (t0, t1) = (0.0, 1.0)
 
         for (step, from, lo, hi) in [(d.x, p.x, r.x, r.x + r.w), (d.y, p.y, r.y, r.y + r.h)] {
             if abs(step) < epsilon {
-                if from <= lo || from >= hi { return false }
+                if from <= lo || from >= hi { return nil }
                 continue
             }
 
             let (u, v) = ((lo - from) / step, (hi - from) / step)
             t0 = max(t0, min(u, v))
             t1 = min(t1, max(u, v))
-            if t0 >= t1 { return false }
+            if t0 >= t1 { return nil }
         }
-        return true
+        return (t0, t1)
     }
 
     private static func grow(_ r: Rect, by d: Double) -> Rect {
@@ -682,6 +687,29 @@ public final class CableSim {
                 c.pts[i] = p
                 pushed[id] = max(pushed[id] ?? 0, depth)
                 touched[i] = side
+            }
+        }
+        corners(&c, solids, &pushed)
+    }
+
+    // Beads outside can still have the link between them cut a corner:
+    // the middle of the cut goes out the nearest side, beads following.
+    //
+    //   bead ●───────●            ●────────●
+    //          ╲ ┌───────     →    ╲┌───────
+    //        ●  ╲│                ● │
+    private static func corners(_ c: inout Cable, _ solids: [(PaneID, Rect)], _ pushed: inout [PaneID: Double]) {
+        for i in 0..<(points - 1) {
+            for (id, r) in solids {
+                guard let (t0, t1) = clip(c.pts[i], c.pts[i + 1], r) else { continue }
+
+                let t = (t0 + t1) / 2
+                let m = c.pts[i] + (c.pts[i + 1] - c.pts[i]) * t
+                guard let side = face(m, was: m, r) else { continue }
+
+                let (p, depth) = out(m, side, r)
+                nudge(&c, Double(i) + t, by: p - m)
+                pushed[id] = max(pushed[id] ?? 0, depth)
             }
         }
     }
