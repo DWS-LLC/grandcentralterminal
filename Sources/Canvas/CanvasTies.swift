@@ -96,7 +96,9 @@ extension CanvasView {
         guard let tie = cableView.sim.ties.first(where: { $0.id == id }),
               let link = memo.tieLinks[id], var spec = memo.tieSpecs[link.spec] else { return }
 
+        // Strands too: an older spec's deltas are already folded into `s`.
         spec.meta.s = tie.s
+        spec.meta.strands = strands(tie)
         memo.tieSpecs[link.spec] = spec
         memo.tieLinks[id]?.s = tie.s
         _ = hub.setTie(spec.meta)

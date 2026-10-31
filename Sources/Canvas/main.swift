@@ -237,7 +237,8 @@ func killDaemon() {
 
 // Holding "k" must repeat k (vim), not pop the accent picker (ķ). Set
 // before NSApplication exists: the default is read when keys are handled.
-UserDefaults.standard.set(false, forKey: "ApplePressAndHoldEnabled")
+// Registered, not written: `defaults write` still wins.
+UserDefaults.standard.register(defaults: ["ApplePressAndHoldEnabled": false])
 
 // Minimal app menu: Cmd+Q only (terminal key handling is our own).
 // Hide/Minimize carry no key equivalent: they are always enabled, so a

@@ -16,6 +16,7 @@ import Common
 // What the last render saw, so a still canvas costs a few comparisons.
 final class CableMemo {
     var edges = [CableKey: CableSim.Edge]()
+    var rects = [PaneID: Rect]()
     // Picked when the cable first appears, from its two windows' names,
     // and kept: renaming a window later does not recolor its cables.
     var colors = [CableKey: NSColor]()
@@ -96,7 +97,12 @@ extension CanvasView {
         var dirty = false
 
         // Before the edges: a new cable checks which panes it starts across.
-        cableView.sim.setPanes(panes.mapValues { $0.meta.rect })
+        // Compared in place first: a still canvas allocates nothing.
+        let same = panes.count == memo.rects.count && panes.allSatisfy { memo.rects[$0.key] == $0.value.meta.rect }
+        if !same {
+            memo.rects = panes.mapValues { $0.meta.rect }
+            cableView.sim.setPanes(memo.rects)
+        }
         cableView.sim.setSlack(GCTConfig.current.cableSlack)
         if edges != memo.edges {
             memo.edges = edges

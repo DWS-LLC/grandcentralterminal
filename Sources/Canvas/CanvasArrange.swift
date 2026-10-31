@@ -16,12 +16,18 @@
 import AppKit
 import Common
 
+// Relation lays out the cable tree (Relax); sort packs by key and shape.
+enum ArrangeMode {
+    case relation, sort
+
+    static let relationTitle = "Relation"
+}
+
 enum ArrangeKey: String, CaseIterable {
-    case relation, position, name, directory, status, focus, activity
+    case position, name, directory, status, focus, activity
 
     var title: String {
         switch self {
-        case .relation: "Relation"
         case .position: "Clean Up"
         case .name: "Name"
         case .directory: "Directory"
@@ -52,6 +58,7 @@ enum ArrangeScope {
 // What a menu item asks for: change one axis, then arrange.
 struct ArrangeAction {
     enum Change {
+        case relation
         case key(ArrangeKey)
         case shape(ArrangeShape)
     }
@@ -75,7 +82,8 @@ final class ArrangeState {
     // Coarser than any human-visible difference; spares the hot path.
     private static let outputResolution: CFAbsoluteTime = 1
 
-    var key: ArrangeKey = .relation
+    var mode: ArrangeMode = .relation
+    var key: ArrangeKey = .name
     var shape: ArrangeShape = .rows
     private(set) var undo = [ArrangeUndo]()
     let glide = PaneGlide()
@@ -133,7 +141,7 @@ extension CanvasView {
     @discardableResult
     func arrangeCanvas(scope: ArrangeScope) -> Bool {
         // Relation isn't a sort: it's the cable tree (Relax below).
-        if arrange.key == .relation {
+        if arrange.mode == .relation {
             return relaxCanvas(scope: scope)
         }
 
@@ -265,7 +273,7 @@ extension CanvasView {
     private func rank(_ u: ArrangeUnit, _ key: ArrangeKey) -> (text: String, num: Double) {
         let first = u.panes.first.flatMap { panes[$0] }
         switch key {
-        case .position, .relation:
+        case .position:
             return ("", 0)
         case .name:
             if let g = u.group, let name = groupMetas[g]?.name { return (name, 0) }

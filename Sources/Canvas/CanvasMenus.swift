@@ -19,7 +19,8 @@ enum GCTMenus {
         var out = [NSMenuItem]()
 
         let by = NSMenuItem(title: "Arrange By", action: nil, keyEquivalent: "")
-        by.submenu = submenu("Arrange By", ArrangeKey.allCases.map {
+        let relation = actionItem(ArrangeMode.relationTitle, ArrangeAction(change: .relation, scope: scope), target)
+        by.submenu = submenu("Arrange By", [relation] + ArrangeKey.allCases.map {
             actionItem($0.title, ArrangeAction(change: .key($0), scope: scope), target)
         })
         out.append(by)
@@ -44,6 +45,7 @@ enum GCTMenus {
         menu.addItem(NSMenuItem(title: "Arranges", action: #selector(CanvasView.arrangeScopeInfo(_:)),
                                 keyEquivalent: ""))
         menu.addItem(.separator())
+        menu.addItem(actionItem(ArrangeMode.relationTitle, ArrangeAction(change: .relation, scope: .auto), nil))
         for key in ArrangeKey.allCases {
             menu.addItem(actionItem(key.title, ArrangeAction(change: .key(key), scope: .auto), nil))
         }
@@ -105,14 +107,16 @@ extension CanvasView: NSMenuItemValidation {
 
     @objc func arrangeMenu(_ sender: NSMenuItem) {
         guard let action = sender.representedObject as? ArrangeAction else { return }
-        let prior = (key: arrange.key, shape: arrange.shape)
+        let prior = (mode: arrange.mode, key: arrange.key, shape: arrange.shape)
+        // A key or a shape is a sort: from Relation, the remembered other half.
         switch action.change {
-        case .key(let key): arrange.key = key
-        case .shape(let shape): arrange.shape = shape
+        case .relation: arrange.mode = .relation
+        case .key(let key): (arrange.mode, arrange.key) = (.sort, key)
+        case .shape(let shape): (arrange.mode, arrange.shape) = (.sort, shape)
         }
         // A refused arrange must not silently change the remembered choice.
         if !arrangeCanvas(scope: action.scope) {
-            (arrange.key, arrange.shape) = prior
+            (arrange.mode, arrange.key, arrange.shape) = prior
         }
     }
 
@@ -165,12 +169,11 @@ extension CanvasView: NSMenuItemValidation {
         switch item.action {
         case #selector(arrangeMenu(_:)):
             guard let action = item.representedObject as? ArrangeAction else { return false }
+            let sorting = arrange.mode == .sort
             switch action.change {
-            case .key(let key): item.state = key == arrange.key ? .on : .off
-            case .shape(let shape):
-                // Relation is a tree, not a pack: a shape would do nothing.
-                guard arrange.key != .relation else { item.state = .off; return false }
-                item.state = shape == arrange.shape ? .on : .off
+            case .relation: item.state = sorting ? .off : .on
+            case .key(let key): item.state = sorting && key == arrange.key ? .on : .off
+            case .shape(let shape): item.state = sorting && shape == arrange.shape ? .on : .off
             }
             return panes.count >= 2
         case #selector(undoArrangeMenu(_:)):

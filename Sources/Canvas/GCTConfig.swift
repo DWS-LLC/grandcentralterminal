@@ -521,7 +521,7 @@ struct GCTConfig {
     // one hex or palette:N for every cable.
     var cableColor: String?
     // Rope a reel lets out past the straight line, as a share of it.
-    var cableSlack = 0.06
+    var cableSlack = CableSim.defaultSlack
     // Hover behavior: focus-follows-mouse focuses the pane under the
     // cursor on motion (same name as ghostty); scroll-on-terminal-hover
     // routes wheel/trackpad scroll to the hovered terminal, else pan

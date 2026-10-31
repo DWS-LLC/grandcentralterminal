@@ -73,4 +73,5 @@ The Arrange menu (menubar) tidies the selection, else the focused group,
 else everything. Arrange By defaults to Relation, which lays out by cables
 (which pane spawned which); pick clean-up / name / directory / status / last
 focused / activity instead to sort, as rows / columns / grid (Arrange As).
+Picking a shape alone sorts by the last key (Name at first).
 Undo Arrange reverts.

@@ -70,16 +70,13 @@ public struct Cable: Sendable {
 
     // Unstretched, port to port.
     fileprivate var length: Double { spans.reduce(0, +) }
-
-    // Where ties sit (their `s` indexes it) and what a sliding tie follows.
-    fileprivate var free: [Vec] { pts }
 }
 
 public struct CableTie: Sendable {
     public struct Member: Sendable {
         public var key: CableKey
-        // Point offset from the tie's own where the stroke met the strand.
-        // Kept for saved ties; the rope grip now comes from geometry.
+        // Older builds' grip offset, in beads off `s`: restoreTie folds it
+        // into `s`. New ties keep 0.
         public var delta: Double
         public init(key: CableKey, delta: Double) { self.key = key; self.delta = delta }
     }
@@ -214,7 +211,7 @@ public final class CableSim {
     private func update(_ key: CableKey, a: CableEnd, b: CableEnd) {
         guard var c = cables[key] else {
             var c = Self.make(a: a, b: b)
-            c.ghosts = Self.crossed(c.pts, panes)
+            c.ghosts = Self.crossed(key, c.pts, panes)
             cables[key] = c
             wake()
             return
@@ -248,20 +245,30 @@ public final class CableSim {
 
     // Every pane on the canvas: what the ropes drape over. A pane that
     // opens on top of a rope starts as a ghost to it, same as a new rope.
+    // Only a pane that came, went, or moved within reach of a rope (where
+    // it was, or where it is) wakes the sim: dragging one far off is free.
     public func setPanes(_ panes: [PaneID: Rect]) {
         guard panes != self.panes else { return }
+
+        var changed = panes.filter { self.panes[$0.key] != $0.value }.map(\.value)
+        changed += self.panes.filter { panes[$0.key] != $0.value }.map(\.value)
 
         let fresh = panes.filter { self.panes[$0.key] == nil }
         self.panes = panes
         for key in cables.keys {
-            cables[key]!.ghosts.formUnion(Self.crossed(cables[key]!.pts, fresh))
+            cables[key]!.ghosts.formUnion(Self.crossed(key, cables[key]!.pts, fresh))
         }
-        wake()
+
+        let near = cables.values.contains { c in changed.contains { Self.overlap(Self.box(c), $0) } }
+        if near {
+            wake()
+        }
     }
 
-    // Panes some stretch of the rope runs through.
-    private static func crossed(_ pts: [Vec], _ panes: [PaneID: Rect]) -> Set<PaneID> {
-        Set(panes.filter { enters(pts, $0.value) }.map(\.key))
+    // Panes some stretch of the rope runs through, bar its own two: it
+    // starts under those.
+    private static func crossed(_ key: CableKey, _ pts: [Vec], _ panes: [PaneID: Rect]) -> Set<PaneID> {
+        Set(panes.filter { $0.key != key.parent && $0.key != key.child && enters(pts, $0.value) }.map(\.key))
     }
 
     private static func enters(_ pts: [Vec], _ r: Rect) -> Bool {
@@ -276,22 +283,28 @@ public final class CableSim {
 
     // The stretch of p-q inside r, as 0...1 along it. Clips one axis at a
     // time (Liang-Barsky): what is left of 0...1 after both is inside.
+    // Hot: runs per link, per pane, per pass. No arrays.
     private static func clip(_ p: Vec, _ q: Vec, _ r: Rect) -> (Double, Double)? {
         let d = q - p
-        var (t0, t1) = (0.0, 1.0)
+        var span = (0.0, 1.0)
 
-        for (step, from, lo, hi) in [(d.x, p.x, r.x, r.x + r.w), (d.y, p.y, r.y, r.y + r.h)] {
-            if abs(step) < epsilon {
-                if from <= lo || from >= hi { return nil }
-                continue
-            }
+        guard narrow(&span, d.x, p.x, r.x, r.x + r.w),
+              narrow(&span, d.y, p.y, r.y, r.y + r.h) else { return nil }
+        return span
+    }
 
-            let (u, v) = ((lo - from) / step, (hi - from) / step)
-            t0 = max(t0, min(u, v))
-            t1 = min(t1, max(u, v))
-            if t0 >= t1 { return nil }
+    // One axis of clip: `span` cut to where from + step * t is in lo...hi.
+    // False once nothing is left.
+    private static func narrow(_ span: inout (Double, Double), _ step: Double,
+                               _ from: Double, _ lo: Double, _ hi: Double) -> Bool {
+        if abs(step) < epsilon {
+            return from > lo && from < hi
         }
-        return (t0, t1)
+
+        let (u, v) = ((lo - from) / step, (hi - from) / step)
+        span.0 = max(span.0, min(u, v))
+        span.1 = min(span.1, max(u, v))
+        return span.0 < span.1
     }
 
     private static func grow(_ r: Rect, by d: Double) -> Rect {
@@ -486,12 +499,6 @@ public final class CableSim {
         (0..<points).map { bezier(a.point, h1, h2, b.point, Double($0) / Double(points - 1)) }
     }
 
-    // The curve at rest, at fraction `t`.
-    private static func curve(_ a: CableEnd, _ b: CableEnd, _ t: Double) -> Vec {
-        let (r1, r2) = rest(a, b)
-        return bezier(a.point, r1, r2, b.point, t)
-    }
-
     // Laid out along the resting curve, still, then left to fall; the
     // reels take up whatever it has too much of.
     private static func make(a: CableEnd, b: CableEnd) -> Cable {
@@ -663,15 +670,21 @@ public final class CableSim {
     // Ghosts are left out: the rope passes through those. So are its own
     // two panes: it starts at their centers, under them.
     private func solids(_ key: CableKey, _ c: Cable) -> [(PaneID, Rect)] {
-        let reach = c.length / Double(Self.points - 1) + Self.radius
-        let xs = c.pts.map(\.x), ys = c.pts.map(\.y)
-        let (x0, y0) = (xs.min() ?? 0, ys.min() ?? 0)
-        let box = Self.grow(Rect(x: x0, y: y0, w: (xs.max() ?? 0) - x0, h: (ys.max() ?? 0) - y0), by: reach)
+        let box = Self.box(c)
         let own: Set = [key.parent, key.child]
 
         return panes
             .filter { !own.contains($0.key) && !c.ghosts.contains($0.key) && Self.overlap(box, $0.value) }
             .map { ($0.key, Self.grow($0.value, by: Self.radius)) }
+    }
+
+    // What the rope could touch: its beads' bounds, grown by a link and
+    // its radius.
+    private static func box(_ c: Cable) -> Rect {
+        let reach = c.length / Double(points - 1) + radius
+        let xs = c.pts.map(\.x), ys = c.pts.map(\.y)
+        let (x0, y0) = (xs.min() ?? 0, ys.min() ?? 0)
+        return grow(Rect(x: x0, y: y0, w: (xs.max() ?? 0) - x0, h: (ys.max() ?? 0) - y0), by: reach)
     }
 
     // A bead inside a pane goes back out the side it came in by (else the
@@ -784,13 +797,16 @@ public final class CableSim {
     private func anchor(_ keys: [CableKey], at s: Double) -> Vec {
         let at = keys.compactMap { k -> Vec? in
             guard let c = cables[k], let e = edges[k] else { return nil }
-
-            let (a, b) = (c.a.point, c.b.point)
-            let from = Self.leave(a, b, e.parent)
-            let to = max(from, 1 - Self.leave(b, a, e.child))
-            return a + (b - a) * (from + (to - from) * s)
+            return Self.run(c.a.point, c.b.point, e, s)
         }
         return Self.mean(at)
+    }
+
+    // `s` of the way along the visible part of the straight run a -> b.
+    private static func run(_ a: Vec, _ b: Vec, _ e: Edge, _ s: Double) -> Vec {
+        let from = leave(a, b, e.parent)
+        let to = max(from, 1 - leave(b, a, e.child))
+        return a + (b - a) * (from + (to - from) * s)
     }
 
     // How far along p -> q (0...1) the line leaves r, p inside it.
@@ -841,7 +857,7 @@ public final class CableSim {
 
         let ends = live.map { (a: cables[$0.key]!.a.point, b: cables[$0.key]!.b.point) }
         let runs = live.map { Self.travel(cables[$0.key]!) }
-        let mid = live.map { Self.at(cables[$0.key]!.free, place(t, $0, at: s)) }
+        let mid = live.map { Self.at(cables[$0.key]!.pts, place(t, $0, at: s)) }
         var best = [Int]()
 
         for lead in live.indices {
@@ -874,7 +890,7 @@ public final class CableSim {
     // Where one tie sits and how its strands pass it.
     private struct Spot {
         var keys: [CableKey]
-        var f: [CableKey: Double] = [:]       // point index on each free curve
+        var f: [CableKey: Double] = [:]       // bead index it grips on each rope
         var s: Double
         var center = Vec(0, 0)                // where it sits: see anchor
         var flow = Vec(1, 0)                 // unit, port a -> port b
@@ -984,7 +1000,7 @@ public final class CableSim {
 
         // Slots follow the strands' order across the bundle.
         let cross = spot.cross
-        let across = spot.keys.map { ($0, (Self.at(cables[$0]!.free, spot.f[$0]!) - spot.center).dot(cross)) }
+        let across = spot.keys.map { ($0, (Self.at(cables[$0]!.pts, spot.f[$0]!) - spot.center).dot(cross)) }
         let order = across.sorted { $0.1 != $1.1 ? $0.1 < $1.1 : $0.0.order < $1.0.order }
         for (rank, item) in order.enumerated() {
             spot.slot[item.0] = (Double(rank) - Double(order.count - 1) / 2) * Self.strandGap
@@ -1034,14 +1050,14 @@ public final class CableSim {
         ties.removeAll { t in
             guard let id = t.fanOut else { return false }
             guard let keys = wanted[id], Set(keys) == Set(t.members.map(\.key)) else { return true }
-            return Self.spread(keys, at: t.s, ends) > Self.fanOutSpread * 1.5
+            return spread(keys, at: t.s, ends) > Self.fanOutSpread * 1.5
         }
         declined = declined.filter { wanted[$0] != nil }
 
         for id in wanted.keys.sorted() {
             let keys = wanted[id]!
             guard !declined.contains(id), !ties.contains(where: { $0.fanOut == id }),
-                  let s = Self.fanOutS.first(where: { Self.spread(keys, at: $0, ends) <= Self.fanOutSpread })
+                  let s = Self.fanOutS.first(where: { spread(keys, at: $0, ends) <= Self.fanOutSpread })
             else { continue }
 
             var t = CableTie(id: nextTie, members: keys.map { .init(key: $0, delta: 0.0) }, s: s)
@@ -1052,10 +1068,14 @@ public final class CableSim {
         refreshTies()
     }
 
-    // Widest gap between the strands' fair curves at fraction `s`.
-    private static func spread(_ keys: [CableKey], at s: Double,
-                               _ ends: [CableKey: (a: CableEnd, b: CableEnd)]) -> Double {
-        let at = keys.compactMap { k in ends[k].map { curve($0.a, $0.b, s) } }
+    // Widest gap between the strands where a tie at `s` would grip them
+    // (see anchor), not inside the pane they all start under.
+    private func spread(_ keys: [CableKey], at s: Double,
+                        _ ends: [CableKey: (a: CableEnd, b: CableEnd)]) -> Double {
+        let at = keys.compactMap { k -> Vec? in
+            guard let x = ends[k], let e = edges[k] else { return nil }
+            return Self.run(x.a.point, x.b.point, e, s)
+        }
         var widest = 0.0
         for (i, p) in at.enumerated() {
             for q in at[(i + 1)...] { widest = max(widest, (p - q).length) }
@@ -1152,15 +1172,14 @@ public final class CableSim {
     @discardableResult
     public func addTie(from a: Vec, to b: Vec, radius: Double? = nil) -> Int? {
         let found = hits(along: a, to: b, radius: radius ?? Self.bundleRadius)
-        guard found.count >= 2, let lead = found.min(by: { $0.distance < $1.distance }) else { return nil }
+        guard found.count >= 2 else { return nil }
 
-        // Each strand is gripped where the stroke met it, on its free curve.
-        func index(_ h: Hit) -> Double { Self.along(cables[h.key]!.free, h.point) }
-        let f0 = index(lead)
-
-        let members = found.map { CableTie.Member(key: $0.key, delta: index($0) - f0) }
-        var tie = CableTie(id: nextTie, members: members, s: f0 / Double(Self.points - 1))
-        tie.s = nearest(tie, to: Self.mean(found.map(\.point)), keep: 2) ?? tie.s
+        // First guess where the stroke crossed: it picks which side of
+        // its neighbors the tie lands on.
+        let hit = Self.mean(found.map(\.point))
+        var tie = CableTie(id: nextTie, members: found.map { .init(key: $0.key, delta: 0) }, s: 0)
+        tie.s = project(tie, hit)
+        tie.s = nearest(tie, to: hit, keep: 2) ?? tie.s
         guard let s = clear(tie, at: tie.s) else { return nil }
 
         // Strands that would loop through the spot are left out.
@@ -1184,8 +1203,11 @@ public final class CableSim {
         let live = members.filter { cables[$0.key] != nil }
         guard live.count >= 2 else { return nil }
 
-        var tie = CableTie(id: nextTie, members: live, s: s)
-        guard let at = clear(tie, at: s) else { return nil }
+        // Saved by older builds: each strand gripped `delta` beads off `s`.
+        // The tie sat at their average; fold it into `s`, once.
+        let shift = live.map(\.delta).reduce(0, +) / Double(live.count) / Double(Self.points - 1)
+        var tie = CableTie(id: nextTie, members: live.map { .init(key: $0.key, delta: 0) }, s: s + shift)
+        guard let at = clear(tie, at: tie.s) else { return nil }
 
         tie.s = at
         nextTie += 1
@@ -1248,17 +1270,42 @@ public final class CableSim {
         return keys.isEmpty ? nil : anchor(keys, at: s)
     }
 
-    // `s` held off the cable ends and the closest ties either side.
+    // The `s` (0...1) whose spot comes nearest `p`, ignoring neighbors.
+    private func project(_ t: CableTie, _ p: Vec) -> Double {
+        guard let start = center(t, at: 0), let end = center(t, at: 1) else { return t.s }
+
+        let d = end - start
+        return min(max((p - start).dot(d) / max(d.dot(d), Self.epsilon), 0), 1)
+    }
+
+    // `s` held off the cable ends, and tieGap clear of the closest ties
+    // either side on each shared strand. Measured along that strand in
+    // points, so the gap is the one you see, whatever the tie sets.
+    //
+    //   port ──── o ──gap──▶ t ──gap──▶ o' ──── port
     private func clear(_ t: CableTie, at s: Double) -> Double? {
         let keys = Set(t.members.map(\.key))
-        let length = Double(Self.points - 1)
-        var lo = Double(Self.tieEnds) / length
+        var lo = Double(Self.tieEnds) / Double(Self.points - 1)
         var hi = 1 - lo
+        guard let start = center(t, at: 0), let end = center(t, at: 1) else { return min(max(s, lo), hi) }
 
-        for o in ties where o.id != t.id && o.members.contains(where: { keys.contains($0.key) }) {
-            let long = keys.compactMap { cables[$0]?.length }.max() ?? 1
-            let gap = Self.tieGap / long
-            if o.s <= t.s { lo = max(lo, o.s + gap) } else { hi = min(hi, o.s - gap) }
+        for o in ties where o.id != t.id {
+            guard let spot = center(o, at: o.s) else { continue }
+
+            for key in o.members.map(\.key) where keys.contains(key) {
+                guard let c = cables[key] else { continue }
+
+                // Along the strand: t sits at p0 + slope * s, o at `other`.
+                let dir = Self.unit(c.b.point - c.a.point)
+                let (p0, slope, other) = (start.dot(dir), (end - start).dot(dir), spot.dot(dir))
+                guard slope > Self.epsilon else { continue }
+
+                if other <= p0 + slope * t.s {
+                    lo = max(lo, (other + Self.tieGap - p0) / slope)
+                } else {
+                    hi = min(hi, (other - Self.tieGap - p0) / slope)
+                }
+            }
         }
         guard lo <= hi else { return nil }
         return min(max(s, lo), hi)
@@ -1266,19 +1313,5 @@ public final class CableSim {
 
     private static func length(_ pts: [Vec]) -> Double {
         zip(pts, pts.dropFirst()).reduce(0) { $0 + ($1.1 - $1.0).length }
-    }
-
-    // Fractional point index of the spot on the polyline nearest to `p`.
-    private static func along(_ pts: [Vec], _ p: Vec) -> Double {
-        var best = (d: Double.infinity, f: 0.0)
-
-        for i in 0..<(pts.count - 1) {
-            let a = pts[i], ab = pts[i + 1] - a
-            let len2 = max(ab.dot(ab), 1e-9)
-            let t = min(max((p - a).dot(ab) / len2, 0), 1)
-            let d = (a + ab * t - p).length
-            if d < best.d { best = (d, Double(i) + t) }
-        }
-        return best.f
     }
 }
