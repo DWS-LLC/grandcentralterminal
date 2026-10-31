@@ -45,7 +45,7 @@ the key, e.g. `new-pane = "cmd+shift+t"`. `⌘⇧R` reloads the config live.
 | `⌘⇧S` | toggle window snapping (session-only, never moves panes) | `toggle-snapping` |
 | `⌘⇧R` | reload `config.toml` | `reload-config` |
 | `⌘⇧M` | move the focused pane to its nearest snap target (works with snapping off) | `move-window-to-snap` |
-| `⌘⇧A` | relax layout: a left-to-right tree of the cables | `relax-layout` |
+| `⌘⇧A` | relax layout: the whole canvas as a left-to-right tree of the cables | `relax-layout` |
 | `⌘Q` | quit the canvas; panes keep running in `gctd` | |
 
 ## Mouse and trackpad

@@ -2456,7 +2456,8 @@ final class CanvasView: NSView {
         case .toggleSnapping: toggleSnapping()
         case .moveWindowToSnap: snapFocusedToNearest()
         case .reloadConfig: reloadConfig()
-        case .relaxLayout: relaxCanvas(scope: .auto)
+        // The whole canvas, whatever is focused: the menu narrows, the key doesn't.
+        case .relaxLayout: relaxCanvas(scope: .all)
         }
     }
 
