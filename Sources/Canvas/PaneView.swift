@@ -47,6 +47,12 @@ final class PaneView: NSView {
     // Renders the ⤢ marker + zoom chrome via applyChrome.
     var isZoomed = false { didSet { if isZoomed != oldValue { applyChrome() } } }
 
+    // Hovered link's URL, previewed bottom-left over the terminal like
+    // Ghostty's. nil hides it.
+    var linkPreview: String? { didSet { if linkPreview != oldValue { applyLink() } } }
+    private let linkLabel = CATextLayer()
+    private static let linkInset: CGFloat = 4
+
     init(meta: PaneMeta) {
         self.id = meta.id
         self.meta = meta
@@ -82,6 +88,14 @@ final class PaneView: NSView {
         dimLayer.opacity = 0
         dimLayer.zPosition = 1
         layer?.addSublayer(dimLayer)
+
+        // Above the dim veil: a dimmed pane still shows what you'd open.
+        linkLabel.contentsScale = NSScreen.main?.backingScaleFactor ?? 2
+        linkLabel.truncationMode = .middle
+        linkLabel.cornerRadius = 3
+        linkLabel.zPosition = 2
+        linkLabel.isHidden = true
+        layer?.addSublayer(linkLabel)
 
         applyChrome()
         layoutChrome()
@@ -181,7 +195,7 @@ final class PaneView: NSView {
     private static let maxTextPixels: CGFloat = 4_000_000
 
     func syncTitleZoom(camera: CGFloat) {
-        for label in [titleLabel, statusLabel] {
+        for label in [titleLabel, statusLabel, linkLabel] {
             Self.setTextScale(label, camera: camera, window: window)
         }
     }
@@ -248,6 +262,36 @@ final class PaneView: NSView {
                                       width: max(0, w - 16), height: textH)
             statusLabel.frame = .zero
         }
+        CATransaction.commit()
+        layoutLink()
+    }
+
+    private func applyLink() {
+        let t = GCTTheme.current
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        // Spaces pad the text inside its background.
+        linkLabel.string = linkPreview.map { " \($0) " }
+        linkLabel.isHidden = linkPreview == nil
+        linkLabel.font = t.titleFont
+        linkLabel.fontSize = t.titleFont.pointSize
+        linkLabel.foregroundColor = t.titlebarTextFocused.cgColor
+        linkLabel.backgroundColor = t.titlebarBackgroundFocused.cgColor
+        CATransaction.commit()
+        layoutLink()
+    }
+
+    // Bottom-left of the terminal, as wide as the URL, never past it.
+    private func layoutLink() {
+        guard linkPreview != nil else { return }
+        let surface = surfaceHostView.frame
+        let inset = Self.linkInset
+        let size = linkLabel.preferredFrameSize()
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        linkLabel.frame = CGRect(x: surface.minX + inset, y: surface.minY + inset,
+                                 width: min(size.width, max(0, surface.width - inset * 2)),
+                                 height: size.height)
         CATransaction.commit()
     }
 

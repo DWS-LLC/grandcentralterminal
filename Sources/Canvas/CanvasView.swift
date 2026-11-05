@@ -170,6 +170,13 @@ final class CanvasView: NSView {
 
     private var focusedHost: SurfaceHost? { focusedID.flatMap { panes[$0]?.host } }
 
+    // Pane under the cursor at the last mouseMoved.
+    private var hoverID: PaneID?
+    // Pane whose link set the hand cursor (see surfacePointer).
+    var linkPane: PaneID?
+    // ⌘ keys (left, right): their release disarms links too.
+    private static let cmdKeyCodes: Set<UInt16> = [0x37, 0x36]
+
     // Abandon any in-progress composition: clear marked text and the
     // preedit the surface is rendering. Focus is leaving the pane.
     private func dropComposition() {
@@ -1098,7 +1105,13 @@ final class CanvasView: NSView {
                 case 2: GHOSTTY_MOUSE_MIDDLE
                 default: GHOSTTY_MOUSE_LEFT
                 }
-            pane.host?.mousePos(x: local.x, y: local.y, mods: mods)
+            // ⌘-click: ghostty may have missed the ⌘ press (unfocused pane,
+            // inactive app), so re-arm the link before pressing.
+            if event.modifierFlags.contains(.command) {
+                relink(pane, at: world, event.modifierFlags)
+            } else {
+                pane.host?.mousePos(x: local.x, y: local.y, mods: mods)
+            }
             pane.host?.mouseButton(GHOSTTY_MOUSE_PRESS, button, mods)
             drag = .surfaceClick(id: pane.id, button: button)
             return
@@ -2219,6 +2232,37 @@ final class CanvasView: NSView {
            let pane = panes[id] {
             pane.host?.mousePos(x: -1, y: -1, mods: mods)
         }
+
+        // An unfocused pane the cursor left drops its link hover too
+        // (else its underline and the hand cursor linger).
+        if let id = hoverID, id != hovered?.id, id != focusedID, let pane = panes[id] {
+            pane.host?.mousePos(x: -1, y: -1, mods: mods)
+        }
+        hoverID = hovered?.id
+    }
+
+    // Re-run ghostty's link lookup under the cursor with fresh mods. It
+    // only looks when the cell changes, so leave the viewport first:
+    //   (-1,-1) -> (x,y)   forget the cell, then land on it again
+    private func relink(_ pane: PaneView, at world: CGPoint, _ flags: NSEvent.ModifierFlags) {
+        let local = pane.surfacePoint(at: world)
+        let mods = GhosttyMods(flags)
+        pane.host?.mousePos(x: -1, y: -1, mods: mods)
+        pane.host?.mousePos(x: local.x, y: local.y, mods: mods)
+    }
+
+    // ⌘ arms links. The focused pane hears it as a key event; a hovered
+    // unfocused pane (click-to-focus) needs it as a mouse position.
+    private func relinkHovered(_ event: NSEvent) {
+        let cmd = event.modifierFlags.contains(.command)
+            || Self.cmdKeyCodes.contains(event.keyCode)
+        guard cmd, let window else { return }
+
+        let view = convert(window.mouseLocationOutsideOfEventStream, from: nil)
+        let world = camera.screenToWorld(view)
+        guard let pane = topPane(at: world), pane.id != focusedID,
+              pane.surfaceContains(world) else { return }
+        relink(pane, at: world, event.modifierFlags)
     }
 
     // A resize/move drag owns the cursor: focus-follows-mouse must not
@@ -2556,6 +2600,7 @@ final class CanvasView: NSView {
     }
 
     override func flagsChanged(with event: NSEvent) {
+        relinkHovered(event)
         guard let id = focusedID, let pane = panes[id], let host = pane.host else {
             super.flagsChanged(with: event)
             return

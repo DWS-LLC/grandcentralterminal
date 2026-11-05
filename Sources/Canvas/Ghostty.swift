@@ -17,6 +17,15 @@ protocol GhosttyAppDelegate: AnyObject {
     func surfaceBell(_ host: SurfaceHost)
     // Desktop notification request (OSC 9 / OSC 777;notify).
     func surfaceNotify(_ host: SurfaceHost, title: String?, body: String)
+    // Cursor over a clickable link or not (hand cursor).
+    func surfacePointer(_ host: SurfaceHost, _ shape: PointerShape)
+    // Hovered link's URL, nil once the cursor leaves it.
+    func surfaceLink(_ host: SurfaceHost, _ url: String?)
+}
+
+// The only cursor distinction GCT makes over a terminal.
+enum PointerShape {
+    case arrow, link
 }
 
 // Which half of `theme = light:x,dark:y` ghostty resolves to.
@@ -247,6 +256,16 @@ final class GhosttyApp: @unchecked Sendable {
             let title = n.title.map { String(cString: $0) }
             let body = n.body.map { String(cString: $0) } ?? ""
             host.delegate?.surfaceNotify(host, title: title?.isEmpty == true ? nil : title, body: body)
+            return true
+        case GHOSTTY_ACTION_MOUSE_SHAPE:
+            let link = action.action.mouse_shape == GHOSTTY_MOUSE_SHAPE_POINTER
+            host.delegate?.surfacePointer(host, link ? .link : .arrow)
+            return true
+        case GHOSTTY_ACTION_MOUSE_OVER_LINK:
+            // Empty URL = left the link.
+            let v = action.action.mouse_over_link
+            let url = v.len > 0 ? v.url.map { String(decoding: Data(bytes: $0, count: v.len), as: UTF8.self) } : nil
+            host.delegate?.surfaceLink(host, url)
             return true
         default:
             return false

@@ -319,4 +319,22 @@ extension CanvasView: GhosttyAppDelegate {
     func surfaceNotify(_ host: SurfaceHost, title: String?, body: String) {
         postNotice(host.paneID, title: title, body: body)
     }
+
+    // Panes report hover out of order (the one entered, then the one left),
+    // so only the pane that raised the hand may drop it.
+    func surfacePointer(_ host: SurfaceHost, _ shape: PointerShape) {
+        switch shape {
+        case .link:
+            linkPane = host.paneID
+            NSCursor.pointingHand.set()
+        case .arrow:
+            guard linkPane == host.paneID else { return }
+            linkPane = nil
+            NSCursor.arrow.set()
+        }
+    }
+
+    func surfaceLink(_ host: SurfaceHost, _ url: String?) {
+        panes[host.paneID]?.linkPreview = url
+    }
 }
