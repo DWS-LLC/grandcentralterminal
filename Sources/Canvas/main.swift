@@ -178,6 +178,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // Cmd+Q quits the canvas UI normally; panes keep running in gctd
     // (relaunch reattaches). The Dock menu's Quit Daemon kills gctd.
     func applicationWillTerminate(_ notification: Notification) {
+        GCTUpdater.markHealthy()
         GCTUpdater.installPendingOnQuit()
     }
 

@@ -299,6 +299,9 @@ final class StatusBarPlugin {
         }
     }
 
+    private static let pluginTimeout: TimeInterval = 15
+    private static let maxOutput = 2_000_000
+
     static func execute(_ url: URL) -> String? {
         let p = Process()
         p.executableURL = url
@@ -310,11 +313,23 @@ final class StatusBarPlugin {
         p.standardOutput = out
         p.standardError = FileHandle.nullDevice
         do { try p.run() } catch { return nil }
-        let deadline = Date().addingTimeInterval(15)
-        while p.isRunning, Date() < deadline { Thread.sleep(forTimeInterval: 0.05) }
-        guard !p.isRunning else { p.terminate(); return nil }
+
+        // Drain while it runs: a pipe holds ~64KB, so waiting for exit
+        // first deadlocks any plugin that prints more. Overrunning the
+        // deadline gets SIGKILL, which also ends the read with EOF.
+        let killer = DispatchWorkItem {
+            if p.isRunning {
+                kill(p.processIdentifier, SIGKILL)
+            }
+        }
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + pluginTimeout,
+                                                       execute: killer)
         let data = out.fileHandleForReading.readDataToEndOfFile()
-        guard data.count < 2_000_000 else { return nil }
+        p.waitUntilExit()
+        killer.cancel()
+
+        guard p.terminationReason == .exit else { return nil }
+        guard data.count < maxOutput else { return nil }
         return String(data: data, encoding: .utf8)
     }
 

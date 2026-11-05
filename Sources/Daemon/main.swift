@@ -152,9 +152,16 @@ final class GCTClient {
     }
     func welcome() -> Welcome? {
         _ = conn.send(tag: .listPanes, json: Hello(version: ProtoVersion, token: cliAuthToken))
-        guard let f = nextReply(), f.tag == .welcome || f.tag == .paneList,
-              let w: Welcome = f.decode() else { return nil }
-        return w
+        // Other clients' creates may broadcast first: skip to the answer.
+        while let f = nextReply() {
+            if f.tag == .errorReply {
+                return nil
+            }
+            if f.tag == .welcome || f.tag == .paneList {
+                return f.decode()
+            }
+        }
+        return nil
     }
 }
 
@@ -180,35 +187,42 @@ let notifyUsage = "notify <pane> [title=..] <text>...  |  notify <pane> --hook"
 let bracketedPasteStart = "\u{1B}[200~"
 let bracketedPasteEnd = "\u{1B}[201~"
 
-// \xHH (any byte: \x03 is ^C), \e, \n, \t, \r, \\ -> the bytes they
-// name. Anything else keeps its backslash.
-func unescapeKeys(_ s: String) -> String {
+// \xHH (any byte: \x03 is ^C, \xff is 0xFF, not UTF-8), \e, \n, \t, \r,
+// \\ -> the bytes they name. Anything else keeps its backslash.
+func unescapeKeys(_ s: String) -> Data {
     let chars = Array(s.unicodeScalars)
-    var out = String.UnicodeScalarView()
+    var out = Data()
+    func put(_ c: Unicode.Scalar) { out.append(contentsOf: String(c).utf8) }
     var i = 0
 
     while i < chars.count {
         let c = chars[i]
-        guard c == "\\", i + 1 < chars.count else { out.append(c); i += 1; continue }
+        guard c == "\\", i + 1 < chars.count else { put(c); i += 1; continue }
 
         let e = chars[i + 1]
         if e == "x", i + 3 < chars.count, let byte = hexByte(chars[i + 2], chars[i + 3]) {
-            out.append(Unicode.Scalar(byte))
+            out.append(byte)
             i += 4
             continue
         }
 
         switch e {
-        case "n": out.append("\n")
-        case "t": out.append("\t")
-        case "r": out.append("\r")
-        case "e": out.append("\u{1B}")
-        case "\\": out.append("\\")
-        default: out.append(c); out.append(e)
+        case "n": put("\n")
+        case "t": put("\t")
+        case "r": put("\r")
+        case "e": put("\u{1B}")
+        case "\\": put("\\")
+        default: put(c); put(e)
         }
         i += 2
     }
-    return String(out)
+    return out
+}
+
+// A created broadcast answers us only if it echoes our reqID. Old
+// daemons echo nothing: take the first, as before.
+func ours(_ echoed: String?, _ sent: String, _ w: Welcome) -> Bool {
+    w.version < ReqIDProtoVersion || echoed == sent
 }
 
 func hexByte(_ hi: Unicode.Scalar, _ lo: Unicode.Scalar) -> UInt8? {
@@ -511,15 +525,17 @@ case "open":
     // No cwd= opens where the caller stands (agents expect `cd repo; gctd
     // open cmd=make` to build the repo, not $HOME).
     let cwd = f["cwd"] ?? FileManager.default.currentDirectoryPath
+    let reqID = UUID().uuidString
     _ = c.conn.send(tag: .createPane, json: CreatePane(
         rect: anchor, cwd: cwd, name: f["name"], command: f["cmd"],
         joinGroup: join, joinDirection: join == nil ? nil : "right",
-        orbitAround: f["rect"] == nil ? orbit : nil, parent: parent))
+        orbitAround: f["rect"] == nil ? orbit : nil, parent: parent, reqID: reqID))
     // Answer is a paneCreated broadcast; errorReply on spawn failure.
     // Tag-check first: a stray broadcast decodes as nothing, not as the
     // wrong reply (all reply shapes are [$id] flat strings otherwise).
+    // reqID: another client's concurrent create is not our answer.
     while let r = c.nextReply() {
-        if r.tag == .paneCreated, let m: PaneCreated = r.decode() { print(m.meta.id); exit(0) }
+        if r.tag == .paneCreated, let m: PaneCreated = r.decode(), ours(m.reqID, reqID, w) { print(m.meta.id); exit(0) }
         if r.tag == .errorReply, let e: ErrorReply = r.decode() { die(e.message) }
     }
     die("no reply from daemon")
@@ -578,22 +594,24 @@ case "send":
         return false
     }
 
-    var text: String
+    // Bytes, not String: \xHH may name bytes that aren't valid UTF-8.
+    let lf = UInt8(ascii: "\n")
+    var keys: Data
     if parts.isEmpty {
         guard isatty(STDIN_FILENO) == 0 else { die(sendUsage) }
-        text = String(decoding: FileHandle.standardInput.readDataToEndOfFile(), as: UTF8.self)
+        keys = FileHandle.standardInput.readDataToEndOfFile()
         // The piped payload is literal; its last newline is just EOF.
-        if text.hasSuffix("\n") { text.removeLast() }
+        if keys.last == lf { keys.removeLast() }
     } else {
-        text = unescapeKeys(parts.joined(separator: " "))
+        keys = unescapeKeys(parts.joined(separator: " "))
     }
-    guard !text.isEmpty else { die(sendUsage) }
+    guard !keys.isEmpty else { die(sendUsage) }
 
     // Bracketed paste: a multi-line payload lands as one paste instead of
     // running line by line. The app must have asked for it (DECSET 2004).
-    if paste { text = bracketedPasteStart + text + bracketedPasteEnd }
-    if newline { text += "\n" }
-    _ = c.conn.sendData(tag: .inputPane, paneID: pane.id, data: Data(text.utf8))
+    if paste { keys = Data(bracketedPasteStart.utf8) + keys + Data(bracketedPasteEnd.utf8) }
+    if newline { keys.append(lf) }
+    _ = c.conn.sendData(tag: .inputPane, paneID: pane.id, data: keys)
     exit(0)
 
 case "notify":
@@ -688,9 +706,10 @@ case "group":
         else { die("no such pane \(a)") }
     }
     guard panes.count >= 2 else { die("group needs 2+ panes") }
-    _ = c.conn.send(tag: .createGroup, json: CreateGroup(name: name, color: color, members: panes))
+    let reqID = UUID().uuidString
+    _ = c.conn.send(tag: .createGroup, json: CreateGroup(name: name, color: color, members: panes, reqID: reqID))
     while let r = c.nextReply() {
-        if r.tag == .groupCreated, let m: GroupCreated = r.decode() { print(m.meta.id); exit(0) }
+        if r.tag == .groupCreated, let m: GroupCreated = r.decode(), ours(m.reqID, reqID, w) { print(m.meta.id); exit(0) }
         if r.tag == .errorReply, let e: ErrorReply = r.decode() { die(e.message) }
     }
     die("no reply from daemon")

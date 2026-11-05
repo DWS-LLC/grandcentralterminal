@@ -8,10 +8,6 @@ import Common
 final class Remote: @unchecked Sendable {
     let conn: Conn
     var subs = Set<PaneID>()
-    // Set when a send fails (slow/dead client): skips future fan-out until
-    // the client drains or disconnects. Prevents one stalled subscriber
-    // from wedging every pane reader on the server lock.
-    var wedged = false
     // Unix peers start trusted; TCP peers become trusted only after the
     // token hello. Untrusted peers get one hello chance, then dropped.
     var trusted = true
@@ -29,6 +25,8 @@ final class Server {
     private let lock = NSLock()  // guards panes + groups + remotes
 
     private var panes = [PaneID: Pane]()
+    // Closed/exited panes whose child housekeep hasn't waitpid'd yet.
+    private var reaping = [Pane]()
     // Group ownership: sanitized once on write; member ids pruned to
     // live panes on load and on every pane exit/close.
     private var groups = [GroupID: GroupMeta]()
@@ -247,8 +245,11 @@ final class Server {
             remote.subs.remove(req.id)
 
         case .inputPane:
-            guard let id = frame.paneID, let pane = panes[id] else { return }
-            pane.writeStdin(frame.data)
+            guard let id = frame.paneID else { return }
+            lock.lock()
+            let pane = panes[id]
+            lock.unlock()
+            pane?.writeStdin(frame.data)
 
         case .resizePane:
             guard let req: ResizePane = frame.decode() else { return }
@@ -349,6 +350,7 @@ final class Server {
             lock.lock()
             guard let pane = panes[req.id] else { lock.unlock(); return }
             panes.removeValue(forKey: req.id)
+            reaping.append(pane)
             for r in remotes { r.subs.remove(req.id) }
             let pruned = prunePaneLocked(req.id)
             let saved = snapshotLocked()
@@ -393,7 +395,7 @@ final class Server {
                                        members: req.members)
             let afterCreate = snapshotLocked()
             lock.unlock()
-            broadcast(tag: .groupCreated, json: GroupCreated(meta: meta))
+            broadcast(tag: .groupCreated, json: GroupCreated(meta: meta, reqID: req.reqID))
             state.scheduleSave(afterCreate)
 
         case .updateGroup:
@@ -908,7 +910,7 @@ final class Server {
         lock.unlock()
         startPaneThreads(pane)
 
-        broadcast(tag: .paneCreated, json: PaneCreated(meta: pane.meta))
+        broadcast(tag: .paneCreated, json: PaneCreated(meta: pane.meta, reqID: req.reqID))
         for m in movedMetas {
             broadcast(tag: .paneMeta, json: m)
         }
@@ -961,18 +963,15 @@ final class Server {
     private func fanOut(pane: Pane, data: Data) {
         lock.lock()
         var targets = [Remote]()
-        for r in remotes where !r.wedged && r.subs.contains(pane.id) {
+        for r in remotes where r.subs.contains(pane.id) {
             targets.append(r)
         }
         lock.unlock()
         // Blocking socket writes OUTSIDE the server lock: a full client
         // buffer stalls only this pane's reader, never control traffic.
+        // A failed send hangs the client up (Conn); it reconnects + replays.
         for r in targets {
-            if !r.conn.sendData(tag: .outputPane, paneID: pane.id, data: data) {
-                lock.lock()
-                r.wedged = true
-                lock.unlock()
-            }
+            _ = r.conn.sendData(tag: .outputPane, paneID: pane.id, data: data)
         }
     }
 
@@ -990,6 +989,7 @@ final class Server {
 
         lock.lock()
         panes.removeValue(forKey: pane.id)
+        reaping.append(pane)
         let pruned = prunePaneLocked(pane.id)
         let saved = snapshotLocked()
         lock.unlock()
@@ -1034,6 +1034,9 @@ final class Server {
                 }
             }
         }
+        // Untracked panes still need waitpid, or they linger as zombies.
+        reaping.removeAll { $0.reaped || $0.pollExit() != nil }
+
         let saved = snapshotLocked()
         lock.unlock()
         if dirty { state.scheduleSave(saved) }

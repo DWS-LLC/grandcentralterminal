@@ -26,7 +26,8 @@ public struct Frame {
 public final class Conn: @unchecked Sendable {
     public let fd: Int32
     private let writeLock = NSLock()
-    private var closed = false
+    private var closed = false  // guarded by writeLock, like every write
+    private var hungUp = false  // a write failed; see writeFrame
 
     public init(fd: Int32) {
         self.fd = fd
@@ -40,12 +41,16 @@ public final class Conn: @unchecked Sendable {
         close()
     }
 
+    // Under writeLock: no in-flight write can land on a closed (and
+    // possibly reused) fd number.
     public func close() {
-        if !closed {
-            closed = true
-            FileHandle.standardError.write(Data("[conn] close fd=\(fd)\n".utf8))
-            _ = closeSocket(fd)
+        writeLock.lock(); defer { writeLock.unlock() }
+        guard !closed else {
+            return
         }
+        closed = true
+        FileHandle.standardError.write(Data("[conn] close fd=\(fd)\n".utf8))
+        _ = closeSocket(fd)
     }
 
     // Reader loop; calls handler synchronously until EOF/error.
@@ -115,12 +120,16 @@ public final class Conn: @unchecked Sendable {
     }
 
     // Blocking write with a short timeout: a wedged peer stalls the caller
-    // briefly, then fails so the server can mark it and move on — instead
-    // of wedging every pane reader on a full socket buffer forever.
+    // briefly, then fails — instead of wedging every pane reader on a full
+    // socket buffer forever. The timeout is per write() call, so a failure
+    // can leave half a frame on the wire: hang up rather than let the peer
+    // parse payload as headers. Both sides reconnect and replay.
     private func writeFrame(_ payload: Data) -> Bool {
-        if closed { return false }
         writeLock.lock(); defer { writeLock.unlock() }
-        var tv = timeval(tv_sec: 0, tv_usec: 200_000)  // 200ms per frame
+        if closed || hungUp {
+            return false
+        }
+        var tv = timeval(tv_sec: 0, tv_usec: 200_000)  // 200ms without progress
         setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv,
                    socklen_t(MemoryLayout<timeval>.size))
         var hdr = UInt32(payload.count).bigEndian
@@ -156,6 +165,9 @@ public final class Conn: @unchecked Sendable {
         }
         if !result {
             FileHandle.standardError.write(Data("[conn] write fd=\(fd) errno=\(errno)\n".utf8))
+            // Unlike close, shutdown unblocks our reader; the peer reads EOF.
+            hungUp = true
+            _ = shutdown(fd, Int32(SHUT_RDWR))
         }
         return result
     }

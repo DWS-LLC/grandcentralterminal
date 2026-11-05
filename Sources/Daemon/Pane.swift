@@ -22,6 +22,8 @@ final class Pane {
     private(set) var masterFD: Int32 = -1
     private(set) var pid: pid_t = 0
     private var exitedFlag = false
+    // waitpid collected the child: pid may now belong to someone else.
+    private var reapedFlag = false
     private let lock = NSLock()
 
     // args used to spawn (for respawn-on-daemon-restart)
@@ -38,10 +40,24 @@ final class Pane {
         return exitedFlag
     }
 
+    var reaped: Bool {
+        lock.lock(); defer { lock.unlock() }
+        return reapedFlag
+    }
+
+    // A hung-up session gets this long before SIGKILL.
+    private static let hangupGrace: TimeInterval = 2
+
     init(meta: PaneMeta, command: String?) {
         self.id = meta.id
         self.meta = meta
         self.spawnCommand = command
+    }
+
+    // Last ref gone, reader thread included: nobody can write or resize
+    // through the fd, so its number can't be reused under them.
+    deinit {
+        if masterFD >= 0 { _ = closeSocket(masterFD) }
     }
 
     var spawnArgs: [String] {
@@ -130,6 +146,10 @@ final class Pane {
             .sorted { $0.key < $1.key }
             .map { strdup("\($0.key)=\($0.value)")! }
         cenvp.append(nil)
+        defer {
+            cargs.forEach { free($0) }
+            cenvp.forEach { free($0) }
+        }
 
         var pidOut: pid_t = 0
         let rc = posix_spawn(&pidOut, args[0], nil, &attr, &cargs, &cenvp)
@@ -185,26 +205,27 @@ final class Pane {
         return daemonBaseDir() + "/daemon.sock"
     }
 
-    // Blocking reader: runs on its own thread per pane. Owns closing the
-    // master fd: close() on macOS does not unblock a blocked read, so the
-    // fd may only be closed here after read() returns.
+    // Blocking reader: runs on its own thread per pane. Holds the pane
+    // strongly: close() on macOS does not unblock a blocked read, so the
+    // fd closes in deinit, after the reader lets go.
     func startReading(_ onOutput: @escaping (Pane, Data) -> Void,
                       _ onEOF: @escaping (Pane) -> Void) {
         let fd = masterFD
-        Thread(block: { [weak self] in
+        Thread(block: { [self] in
             var buf = [UInt8](repeating: 0, count: 65_536)
-            while let p = self {
+            while true {
                 let n = read(fd, &buf, buf.count)
+                if n < 0 && errno == EINTR {
+                    continue
+                }
                 if n <= 0 {
-                    if errno == EINTR { continue }
                     break
                 }
                 let chunk = Data(buf[0..<n])
-                p.ring.append(chunk)
-                onOutput(p, chunk)
+                ring.append(chunk)
+                onOutput(self, chunk)
             }
-            if fd >= 0 { _ = closeSocket(fd) }
-            onEOF(self ?? Pane.placeholder)
+            onEOF(self)
         }).start()
     }
 
@@ -239,21 +260,43 @@ final class Pane {
         lock.unlock()
     }
 
+    // Hang up like a closed terminal: interactive shells ignore SIGTERM.
+    // Shell's group plus the foreground job's; survivors get SIGKILL.
     func terminate() {
-        guard pid > 0, !exited else { return }
-        _ = kill(pid, SIGTERM)
+        signalGroups(SIGHUP)
+        DispatchQueue.global().asyncAfter(deadline: .now() + Self.hangupGrace) { [self] in
+            signalGroups(SIGKILL)
+        }
     }
 
-    // Poll whether the child reaped; returns exit status if so.
+    // Under the lock so a concurrent reap can't hand us a recycled pid.
+    private func signalGroups(_ sig: Int32) {
+        lock.lock(); defer { lock.unlock() }
+        guard pid > 0, !reapedFlag else { return }
+
+        _ = kill(-pid, sig)
+        let fg = tcgetpgrp(masterFD)
+        if fg > 0 && fg != pid {
+            _ = kill(-fg, sig)
+        }
+    }
+
+    // Reap the child if it exited; returns its exit status once.
     func pollExit() -> Int32? {
-        guard pid > 0, !exited else { return nil }
+        lock.lock(); defer { lock.unlock() }
+        guard pid > 0, !reapedFlag else { return nil }
+
         var status: Int32 = 0
         let r = waitpid(pid, &status, WNOHANG)
-        if r == pid {
-            markExited()
-            return (status & 0o177) == 0 ? (status >> 8) & 0xff : 0
+        if r == 0 || (r < 0 && errno == EINTR) {
+            return nil
         }
-        return nil
+
+        // r < 0 (ECHILD): already gone, nothing left to collect.
+        reapedFlag = true
+        exitedFlag = true
+        guard r == pid else { return -1 }
+        return (status & 0o177) == 0 ? (status >> 8) & 0xff : 0
     }
 
     // Poll the child's cwd; returns it when changed.
@@ -310,16 +353,6 @@ final class Pane {
         meta.worktree = info?.worktree
         return true
     }
-}
-
-// Zero-sized dummy so the reader thread's onEOF can reference a pane
-// when self was deallocated mid-read; never fanned out (closed panes
-// have no subscribers).
-extension Pane {
-    static let placeholder = Pane(
-        meta: PaneMeta(id: PaneID(), rect: Rect(x: 0, y: 0, w: 0, h: 0),
-                       name: nil, cwd: "/", host: "local", title: nil, exited: true),
-        command: nil)
 }
 
 struct SpawnError: Error, CustomStringConvertible {

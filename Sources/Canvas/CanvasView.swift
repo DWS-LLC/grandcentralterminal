@@ -3057,6 +3057,14 @@ final class CanvasView: NSView {
         panes.removeValue(forKey: id)
         zOrder.removeAll { $0 == id }
         selectedIDs.remove(id)
+        // A dead pane never reports .arrow: drop its hover and hand here.
+        if hoverID == id {
+            hoverID = nil
+        }
+        if linkPane == id {
+            linkPane = nil
+            NSCursor.arrow.set()
+        }
         if zoomSavedPane == id { zoomSavedFrame = nil; zoomSavedCam = nil; zoomSavedPane = nil }
         if focusedID == id {
             focusedID = nil

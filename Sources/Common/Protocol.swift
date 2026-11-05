@@ -6,13 +6,15 @@
 
 import Foundation
 
-public let ProtoVersion: UInt16 = 4
+public let ProtoVersion: UInt16 = 5
 // First protocol revision whose daemon understands MsgTag.arrangePanes.
 public let ArrangeProtoVersion: UInt16 = 2
 // First protocol revision whose daemon understands MsgTag.layoutPolicy.
 public let LayoutProtoVersion: UInt16 = 3
 // First protocol revision whose daemon keeps cable ties (MsgTag.setTie).
 public let TieProtoVersion: UInt16 = 4
+// First protocol revision whose daemon echoes create reqIDs.
+public let ReqIDProtoVersion: UInt16 = 5
 
 public enum MsgTag: UInt8 {
     // client -> daemon
@@ -140,18 +142,21 @@ public struct CreatePane: Codable, Sendable {
     // The pane this one was spawned from (cables, spring links); a spawn
     // that orbits a caller has that caller as parent. Decodes missing as nil.
     public var parent: PaneID?
+    // Echoed in PaneCreated so the requester spots its own reply among
+    // concurrent creates. Decodes missing as nil.
+    public var reqID: String?
     public init(rect: Rect, cwd: String? = nil, name: String? = nil,
                 command: String? = nil, allowOverlap: Bool = false, gap: Double = 0,
                 joinGroup: GroupID? = nil, joinDirection: String? = nil,
-                orbitAround: PaneID? = nil, parent: PaneID? = nil) {
+                orbitAround: PaneID? = nil, parent: PaneID? = nil, reqID: String? = nil) {
         self.rect = rect; self.cwd = cwd; self.name = name
         self.command = command; self.allowOverlap = allowOverlap; self.gap = gap
         self.joinGroup = joinGroup; self.joinDirection = joinDirection
-        self.orbitAround = orbitAround; self.parent = parent
+        self.orbitAround = orbitAround; self.parent = parent; self.reqID = reqID
     }
     enum CodingKeys: String, CodingKey {
         case rect, cwd, name, command, allowOverlap, gap, joinGroup, joinDirection
-        case orbitAround, parent
+        case orbitAround, parent, reqID
     }
     public init(from decoder: any Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -165,6 +170,7 @@ public struct CreatePane: Codable, Sendable {
         joinDirection = try c.decodeIfPresent(String.self, forKey: .joinDirection)
         orbitAround = try c.decodeIfPresent(PaneID.self, forKey: .orbitAround)
         parent = try c.decodeIfPresent(PaneID.self, forKey: .parent)
+        reqID = try c.decodeIfPresent(String.self, forKey: .reqID)
     }
 }
 
@@ -344,7 +350,8 @@ public struct Welcome: Codable, Sendable {
 
 public struct PaneCreated: Codable, Sendable {
     public var meta: PaneMeta
-    public init(meta: PaneMeta) { self.meta = meta }
+    public var reqID: String?  // CreatePane.reqID, nil for other creators
+    public init(meta: PaneMeta, reqID: String? = nil) { self.meta = meta; self.reqID = reqID }
 }
 
 public struct PaneExit: Codable, Sendable {
@@ -410,9 +417,10 @@ public struct CreateGroup: Codable, Sendable {
     public var name: String?
     public var color: String?
     public var members: [PaneID]
+    public var reqID: String?  // echoed in GroupCreated; see CreatePane
     public init(name: String? = nil, color: String? = nil,
-                members: [PaneID] = []) {
-        self.name = name; self.color = color; self.members = members
+                members: [PaneID] = [], reqID: String? = nil) {
+        self.name = name; self.color = color; self.members = members; self.reqID = reqID
     }
 }
 
@@ -462,7 +470,8 @@ public struct GroupRef: Codable, Sendable {
 
 public struct GroupCreated: Codable, Sendable {
     public var meta: GroupMeta
-    public init(meta: GroupMeta) { self.meta = meta }
+    public var reqID: String?  // CreateGroup.reqID, nil for other creators
+    public init(meta: GroupMeta, reqID: String? = nil) { self.meta = meta; self.reqID = reqID }
 }
 
 public struct SetFloating: Codable, Sendable {

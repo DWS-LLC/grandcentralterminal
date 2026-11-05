@@ -62,6 +62,8 @@ enum GCTUpdater {
     private static let skippedKey = "gctUpdateSkipped"
     private static let healthyAfter: TimeInterval = 30
     private static let maxLaunchAttempts = 1
+    // Tags land in a shell script that may run as root: digits and dots only.
+    private static let tagPattern = #"^v?[0-9]+(\.[0-9]+)*$"#
     private static let brewUpgradeCmd = "brew upgrade --cask dws-llc/tap/gct"
     private static let caskroomDirs = ["/opt/homebrew/Caskroom/gct", "/usr/local/Caskroom/gct"]
 
@@ -78,6 +80,8 @@ enum GCTUpdater {
     private static var running = false
     private static var pendingApp: URL?
     private static var pendingTag = ""
+    // This launch holds the probation marker (see guardLaunch).
+    private static var onProbation = false
 
     private struct Probation: Codable {
         var version: String
@@ -135,6 +139,10 @@ enum GCTUpdater {
             running = false
             guard let release else {
                 if mode == .manual { info("Couldn't reach GitHub.", "Try again later.") }
+                return
+            }
+            guard release.tag_name.range(of: tagPattern, options: .regularExpression) != nil else {
+                if mode == .manual { info("Latest release has a malformed tag.", release.tag_name) }
                 return
             }
             guard isNewer(release.tag_name, than: currentVersion) else {
@@ -294,11 +302,11 @@ enum GCTUpdater {
 
         let script = """
             exec >> \(shq(logPath)) 2>&1
-            echo "== swap to \(tag) =="
+            echo \(shq("== swap to \(tag) =="))
             while kill -0 \(getpid()) 2>/dev/null; do sleep 0.2; done
             rm -rf \(shq(previousPath))
             if mv \(shq(dst)) \(shq(previousPath)) && mv \(shq(staged.path)) \(shq(dst)); then
-                printf '%s' '\(marker)' > \(shq(markerPath))
+                printf '%s' \(shq(marker)) > \(shq(markerPath))
             elif [ -d \(shq(previousPath)) ] && [ ! -e \(shq(dst)) ]; then
                 mv \(shq(previousPath)) \(shq(dst))
             fi
@@ -339,14 +347,25 @@ enum GCTUpdater {
 
         guard probation.attempts >= maxLaunchAttempts else {
             probation.attempts += 1
+            onProbation = true
             try? JSONEncoder().encode(probation).write(to: URL(fileURLWithPath: markerPath))
             DispatchQueue.main.asyncAfter(deadline: .now() + healthyAfter) {
-                try? FileManager.default.removeItem(atPath: markerPath)
+                markHealthy()
             }
             return
         }
 
         rollBack(failed: probation.version)
+    }
+
+    // AppDelegate.applicationWillTerminate: a clean quit proves the launch
+    // healthy, even before healthyAfter (else the next launch rolls back).
+    static func markHealthy() {
+        guard onProbation else {
+            return
+        }
+        onProbation = false
+        try? FileManager.default.removeItem(atPath: markerPath)
     }
 
     private static func rollBack(failed tag: String) {
