@@ -1,5 +1,25 @@
 # Changelog
 
+## v0.14.0
+
+### Added
+- Links: hovering one shows the hand cursor and its URL bottom-left of the pane; `⌘`-click opens it (URLs in the browser, bare paths in their default app). Works on unfocused panes too.
+
+### Changed
+- Protocol 5: `gctd open` and `gctd group` match replies by request id. Older daemons keep working.
+
+### Fixed
+- Closing a pane hangs up its shell (SIGHUP, then SIGKILL) instead of leaving it behind.
+- A wedged program can't stall the daemon: input drains on its own thread, attach replays outside the lock.
+- The canvas retries the local daemon until it answers; remote hosts dial off the main thread with a 10s handshake cap, so a dead host doesn't freeze the UI.
+- State is saved on quit, SIGTERM and SIGINT; saves are ordered and capped at one per second.
+- TCP clients get nothing until they've sent the token.
+- `gctd send '\xHH'` sends the raw byte; `gctd dump` trims cut UTF-8 instead of falling back to base64.
+- CLI rejects non-finite numbers, empty ids and ambiguous id prefixes.
+- Status bar plugins don't hang on full or grandchild-held pipes.
+- Notify hooks no longer duplicate or keep stale `gctd` paths.
+- Updater only accepts well-formed release tags.
+
 ## v0.13.0
 
 ### Added
