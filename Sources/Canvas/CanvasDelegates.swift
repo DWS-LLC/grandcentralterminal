@@ -356,4 +356,13 @@ extension CanvasView: GhosttyAppDelegate {
     func surfaceLink(_ host: SurfaceHost, _ url: String?) {
         panes[host.paneID]?.linkPreview = url
     }
+
+    // Schemeless = file path (`~/x`, `/tmp/y`), like Ghostty's own app.
+    func surfaceOpen(_ host: SurfaceHost, _ url: String) {
+        if let u = URL(string: url), u.scheme != nil {
+            NSWorkspace.shared.open(u)
+            return
+        }
+        NSWorkspace.shared.open(URL(fileURLWithPath: (url as NSString).expandingTildeInPath))
+    }
 }

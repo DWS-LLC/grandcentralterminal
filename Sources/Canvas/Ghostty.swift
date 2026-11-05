@@ -21,6 +21,8 @@ protocol GhosttyAppDelegate: AnyObject {
     func surfacePointer(_ host: SurfaceHost, _ shape: PointerShape)
     // Hovered link's URL, nil once the cursor leaves it.
     func surfaceLink(_ host: SurfaceHost, _ url: String?)
+    // ⌘-clicked link (URL or bare path) to open.
+    func surfaceOpen(_ host: SurfaceHost, _ url: String)
 }
 
 // The only cursor distinction GCT makes over a terminal.
@@ -266,6 +268,12 @@ final class GhosttyApp: @unchecked Sendable {
             let v = action.action.mouse_over_link
             let url = v.len > 0 ? v.url.map { String(decoding: Data(bytes: $0, count: v.len), as: UTF8.self) } : nil
             host.delegate?.surfaceLink(host, url)
+            return true
+        case GHOSTTY_ACTION_OPEN_URL:
+            // Unhandled, libghostty silently drops the click.
+            let v = action.action.open_url
+            guard v.len > 0, let p = v.url else { return true }
+            host.delegate?.surfaceOpen(host, String(decoding: Data(bytes: p, count: Int(v.len)), as: UTF8.self))
             return true
         default:
             return false
