@@ -323,6 +323,22 @@ final class Pane {
         }
     }
 
+    // Daemon exit: terminate()'s delayed SIGKILL would never fire, so
+    // hang up, wait out the grace (or every reap), then kill stragglers.
+    static func terminateAll(_ panes: [Pane]) {
+        for p in panes { p.signalGroups(SIGHUP) }
+
+        let deadline = Date().addingTimeInterval(hangupGrace)
+        var live = panes
+        while !live.isEmpty, Date() < deadline {
+            live.removeAll { $0.reaped || $0.pollExit() != nil }
+            usleep(reapPollMicros)
+        }
+
+        for p in live { p.signalGroups(SIGKILL) }
+    }
+    private static let reapPollMicros: useconds_t = 50_000
+
     // Under the lock so a concurrent reap can't hand us a recycled pid.
     private func signalGroups(_ sig: Int32) {
         lock.lock(); defer { lock.unlock() }

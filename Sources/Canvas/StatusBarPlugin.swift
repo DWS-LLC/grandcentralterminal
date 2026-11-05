@@ -301,6 +301,7 @@ final class StatusBarPlugin {
 
     private static let pluginTimeout: TimeInterval = 15
     private static let maxOutput = 2_000_000
+    private static let pluginDrain: TimeInterval = 0.5
 
     static func execute(_ url: URL) -> String? {
         let p = Process()
@@ -312,21 +313,37 @@ final class StatusBarPlugin {
         let out = Pipe()
         p.standardOutput = out
         p.standardError = FileHandle.nullDevice
-        do { try p.run() } catch { return nil }
+        let exited = DispatchSemaphore(value: 0)
+        p.terminationHandler = { _ in exited.signal() }
 
         // Drain while it runs: a pipe holds ~64KB, so waiting for exit
-        // first deadlocks any plugin that prints more. Overrunning the
-        // deadline gets SIGKILL, which also ends the read with EOF.
-        let killer = DispatchWorkItem {
-            if p.isRunning {
-                kill(p.processIdentifier, SIGKILL)
+        // first deadlocks any plugin that prints more. EOF can't end the
+        // wait: a backgrounded grandchild (`curl &`) holds the pipe forever.
+        let sink = PluginSink()
+        let reader = out.fileHandleForReading
+        reader.readabilityHandler = { h in
+            let chunk = h.availableData
+            guard !chunk.isEmpty else {
+                h.readabilityHandler = nil
+                sink.finish()
+                return
             }
+            sink.append(chunk, cap: maxOutput)
         }
-        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + pluginTimeout,
-                                                       execute: killer)
-        let data = out.fileHandleForReading.readDataToEndOfFile()
-        p.waitUntilExit()
-        killer.cancel()
+        do { try p.run() } catch {
+            reader.readabilityHandler = nil
+            return nil
+        }
+
+        // Overrunning the deadline gets SIGKILL; then give the pipe a beat
+        // to drain and stop listening, stragglers or not.
+        if exited.wait(timeout: .now() + pluginTimeout) == .timedOut {
+            kill(p.processIdentifier, SIGKILL)
+            exited.wait()
+        }
+        sink.waitEOF(pluginDrain)
+        reader.readabilityHandler = nil
+        let data = sink.data
 
         guard p.terminationReason == .exit else { return nil }
         guard data.count < maxOutput else { return nil }
@@ -368,5 +385,31 @@ final class StatusBarPlugin {
             }
         }
         if line.params.refresh { run() }
+    }
+}
+
+// Plugin stdout, filled from the readability handler's queue.
+// Caps at maxOutput: execute() rejects anything that reaches it.
+private final class PluginSink: @unchecked Sendable {
+    private let lock = NSLock()
+    private var buf = Data()
+    private let eof = DispatchSemaphore(value: 0)
+
+    var data: Data {
+        lock.lock(); defer { lock.unlock() }
+        return buf
+    }
+
+    func append(_ chunk: Data, cap: Int) {
+        lock.lock(); defer { lock.unlock() }
+        buf.append(chunk.prefix(max(cap - buf.count, 0)))
+    }
+
+    func finish() {
+        eof.signal()
+    }
+
+    func waitEOF(_ timeout: TimeInterval) {
+        _ = eof.wait(timeout: .now() + timeout)
     }
 }

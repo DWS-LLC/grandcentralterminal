@@ -7,7 +7,9 @@ final class StateStore {
     private let path: String
     private let lock = NSLock()
     private var pending: SavedState?
-    private var dirty = false
+    // A flush is queued; later calls only replace pending.
+    private var armed = false
+    private static let saveDelay: TimeInterval = 1
 
     init(path: String) {
         self.path = path
@@ -30,14 +32,17 @@ final class StateStore {
         return SavedState()
     }
 
+    // Callers hold the server lock, so pending always ends up newest.
+    // Coalesce: at most one write per saveDelay, carrying the latest state.
     func scheduleSave(_ state: SavedState) {
-        lock.lock()
+        lock.lock(); defer { lock.unlock() }
         pending = state
-        dirty = true
-        lock.unlock()
+        guard !armed else {
+            return
+        }
 
-        // Coalesce rapid mutations; save 1s after the last call.
-        DispatchQueue.global().asyncAfter(deadline: .now() + 1.0) { [weak self] in
+        armed = true
+        DispatchQueue.global().asyncAfter(deadline: .now() + Self.saveDelay) { [weak self] in
             self?.flush()
         }
     }
@@ -50,8 +55,8 @@ final class StateStore {
     private func flush() {
         lock.lock()
         defer { lock.unlock() }
-        guard dirty, let state = pending else { return }
-        dirty = false
+        armed = false
+        guard let state = pending else { return }
         pending = nil
         if let data = try? JSONEncoder().encode(state) {
             try? data.write(to: URL(fileURLWithPath: path), options: .atomic)

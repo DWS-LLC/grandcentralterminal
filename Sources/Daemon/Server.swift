@@ -135,10 +135,17 @@ final class Server {
     private func acceptConn(_ cfd: Int32, trusted: Bool) {
         let remote = Remote(conn: Conn(fd: cfd))
         remote.trusted = trusted
+        if trusted {
+            join(remote)
+        }
+        Thread(block: { [weak self] in self?.serve(remote) }).start()
+    }
+
+    // Broadcasts reach only peers in remotes: TCP joins after its token.
+    private func join(_ remote: Remote) {
         lock.lock()
         remotes.append(remote)
         lock.unlock()
-        Thread(block: { [weak self] in self?.serve(remote) }).start()
     }
 
     // Second listener for remote canvases (alongside the unix socket).
@@ -194,6 +201,7 @@ final class Server {
                 return
             }
             remote.trusted = true
+            join(remote)
         }
 
         // Don't bail if the client is already gone (e.g. `stop` sends
@@ -273,11 +281,13 @@ final class Server {
 
         case .renamePane:
             guard let req: RenamePane = frame.decode() else { return }
-            lock.lock(); defer { lock.unlock() }
-            guard let pane = panes[req.id] else { return }
+            lock.lock()
+            guard let pane = panes[req.id] else { lock.unlock(); return }
             pane.meta.name = req.name
-            for r in remotes { _ = r.conn.send(tag: .paneMeta, json: pane.meta) }
+            let meta = pane.meta
             scheduleSaveLocked()
+            lock.unlock()
+            broadcast(tag: .paneMeta, json: meta)
 
         case .movePane:
             guard let req: MovePane = frame.decode() else { return }
@@ -322,10 +332,9 @@ final class Server {
             var meta = pane.meta
             meta.rect = rect
             let targets = remotes
-            let saved = snapshotLocked()
+            scheduleSaveLocked()
             lock.unlock()
             for r in targets { _ = r.conn.send(tag: .paneMeta, json: meta) }
-            state.scheduleSave(saved)
 
         case .arrangePanes:
             guard let req: ArrangePanes = frame.decode() else { return }
@@ -337,12 +346,11 @@ final class Server {
                 updated.append(pane.meta)
             }
             let targets = remotes
-            let saved = snapshotLocked()
+            scheduleSaveLocked()
             lock.unlock()
             for meta in updated {
                 for r in targets { _ = r.conn.send(tag: .paneMeta, json: meta) }
             }
-            state.scheduleSave(saved)
 
         case .layoutPolicy:
             guard let req: LayoutPolicy = frame.decode() else { return }
@@ -371,7 +379,7 @@ final class Server {
                 r.backlog.removeValue(forKey: req.id)
             }
             let pruned = prunePaneLocked(req.id)
-            let saved = snapshotLocked()
+            scheduleSaveLocked()
             lock.unlock()
             // The reader thread unblocks with EIO once the shell dies; its
             // paneDied becomes a no-op (untracked), so broadcast here.
@@ -380,7 +388,6 @@ final class Server {
             for g in pruned.touched { broadcast(tag: .groupMeta, json: g) }
             for gid in pruned.emptied { broadcast(tag: .groupExit, json: GroupRef(id: gid)) }
             broadcastTies(pruned)
-            state.scheduleSave(saved)
 
         case .setTie:
             guard let req: TieMeta = frame.decode() else { return }
@@ -392,29 +399,30 @@ final class Server {
                 return
             }
             ties[tie.id] = tie
-            let saved = snapshotLocked()
+            scheduleSaveLocked()
             lock.unlock()
             broadcast(tag: .tieMeta, json: tie)
-            state.scheduleSave(saved)
 
         case .removeTie:
             guard let req: TieRef = frame.decode() else { return }
             lock.lock()
             guard ties.removeValue(forKey: req.id) != nil else { lock.unlock(); return }
-            let saved = snapshotLocked()
+            scheduleSaveLocked()
             lock.unlock()
             broadcast(tag: .tieExit, json: TieRef(id: req.id))
-            state.scheduleSave(saved)
 
         case .createGroup:
             guard let req: CreateGroup = frame.decode() else { return }
             lock.lock()
+            var side = Reshuffle()
             let meta = makeGroupLocked(name: req.name, color: req.color,
-                                       members: req.members)
-            let afterCreate = snapshotLocked()
+                                       members: req.members, side: &side)
+            scheduleSaveLocked()
             lock.unlock()
+            for g in side.touched { broadcast(tag: .groupMeta, json: g) }
+            for gid in side.emptied { broadcast(tag: .groupExit, json: GroupRef(id: gid)) }
+            for m in side.moved { broadcast(tag: .paneMeta, json: m) }
             broadcast(tag: .groupCreated, json: GroupCreated(meta: meta, reqID: req.reqID))
-            state.scheduleSave(afterCreate)
 
         case .updateGroup:
             guard let req: UpdateGroup = frame.decode() else { return }
@@ -478,22 +486,20 @@ final class Server {
                 groups[req.id] = g
                 updated = g
             }
-            let afterUpdate = snapshotLocked()
+            scheduleSaveLocked()
             lock.unlock()
             for e in evicted { broadcast(tag: .groupMeta, json: e) }
             if let updated { broadcast(tag: .groupMeta, json: updated) }
             for gid in emptied { broadcast(tag: .groupExit, json: GroupRef(id: gid)) }
-            state.scheduleSave(afterUpdate)
         case .deleteGroup:
             guard let req: GroupRef = frame.decode() else { return }
             lock.lock()
             guard groups.removeValue(forKey: req.id) != nil else {
                 lock.unlock(); return
             }
-            let afterDelete = snapshotLocked()
+            scheduleSaveLocked()
             lock.unlock()
             broadcast(tag: .groupExit, json: req)
-            state.scheduleSave(afterDelete)
 
         case .moveGroup:
             guard let req: MoveGroup = frame.decode() else { return }
@@ -537,10 +543,9 @@ final class Server {
                 pane.meta.rect = rect
             }
             let meta = pane.meta
-            let saved = snapshotLocked()
+            scheduleSaveLocked()
             lock.unlock()
             broadcast(tag: .paneMeta, json: meta)
-            state.scheduleSave(saved)
 
         case .dumpPane:
             // Read-only ring snapshot. Never subscribes, never resizes:
@@ -559,7 +564,8 @@ final class Server {
             let total = snap.count
             let want = req.limit <= 0 ? total : min(req.limit, total)
             let truncated = want < total
-            let tail = want == total ? snap : snap.subdata(in: (total - want)..<total)
+            let cut = want == total ? snap : snap.subdata(in: (total - want)..<total)
+            let tail = Self.trimUTF8(cut)
             let text = String(data: tail, encoding: .utf8)
             let reply: PaneDump
             if let text {
@@ -621,6 +627,37 @@ final class Server {
         }
     }
 
+    // Ring cuts (limit=, eviction) split codepoints at either end, which
+    // fails strict decoding. Drop the partial sequences.
+    // e.g. [A9 E2 94 80 E2 94] -> [E2 94 80]
+    private static func trimUTF8(_ d: Data) -> Data {
+        var lo = d.startIndex
+        var hi = d.endIndex
+
+        // Leading continuation bytes (10xxxxxx) belong to a cut codepoint.
+        while lo < hi, lo - d.startIndex < maxUTF8Len - 1, d[lo] & 0xC0 == 0x80 {
+            lo += 1
+        }
+
+        // Trailing: find the last lead byte; drop it if its sequence is short.
+        var i = hi
+        while i > lo, hi - i < maxUTF8Len {
+            i -= 1
+            if d[i] & 0xC0 != 0x80 {
+                break
+            }
+        }
+        if i < hi {
+            let b = d[i]
+            let need = b >= 0xF0 ? 4 : b >= 0xE0 ? 3 : b >= 0xC0 ? 2 : 1
+            if hi - i < need {
+                hi = i
+            }
+        }
+        return d.subdata(in: lo..<hi)
+    }
+    private static let maxUTF8Len = 4
+
     private func welcomePayload() -> Welcome {
         lock.lock(); defer { lock.unlock() }
         return Welcome(panes: panes.values
@@ -652,10 +689,18 @@ final class Server {
                    groups: Array(groups.values), ties: Array(ties.values))
     }
 
+    // makeGroupLocked's fallout, broadcast once the lock drops.
+    private struct Reshuffle {
+        var touched = [GroupMeta]()
+        var emptied = [GroupID]()
+        var moved = [PaneMeta]()
+    }
+
     // Create + sanitize: unknown ids dropped, members evicted from other
     // groups (single membership), color validated, empty name cleared.
     private func makeGroupLocked(name: String?, color: String?,
-                                 members: [PaneID]) -> GroupMeta {
+                                 members: [PaneID],
+                                 side: inout Reshuffle) -> GroupMeta {
         let live = Set(panes.keys)
         let wanted = members.filter { live.contains($0) }
         // Every live pane is admitted; blockers are shoved out of the new
@@ -669,11 +714,10 @@ final class Server {
             if other.members.count != before {
                 if other.members.isEmpty {
                     groups.removeValue(forKey: id)
-                    broadcastLocked(tag: .groupExit, json: GroupRef(id: id))
+                    side.emptied.append(id)
                 } else {
                     groups[id] = other
-                    let m = other
-                    broadcastLocked(tag: .groupMeta, json: m)
+                    side.touched.append(other)
                 }
             }
         }
@@ -691,7 +735,7 @@ final class Server {
         for (pid, r) in moves {
             guard let pane = panes[pid] else { continue }
             pane.meta.rect = r
-            broadcastLocked(tag: .paneMeta, json: pane.meta)
+            side.moved.append(pane.meta)
         }
         return g
     }
@@ -763,10 +807,6 @@ final class Server {
         return out
     }
 
-    private func broadcastLocked(tag: MsgTag, json: some Codable & Sendable) {
-        for r in remotes { _ = r.conn.send(tag: tag, json: json) }
-    }
-
     // Rigid group move: shift every member by the same delta; the block
     // SLIDES along foreign collisions (static world — shoving only ever
     // happens canvas-side under allow-mouse-drag-to-push, persisted per
@@ -797,13 +837,12 @@ final class Server {
             pane.meta.rect = r
             updated.append(pane.meta)
         }
-        let saved = snapshotLocked()
+        scheduleSaveLocked()
         let targetsRemotes = remotes
         lock.unlock()
         for m in updated {
             for r in targetsRemotes { _ = r.conn.send(tag: .paneMeta, json: m) }
         }
-        state.scheduleSave(saved)
     }
 
     private func createPane(_ requester: Conn, _ req: CreatePane) {
@@ -923,7 +962,7 @@ final class Server {
         for pid in shoved.keys {
             if let m = panes[pid]?.meta { movedMetas.append(m) }
         }
-        let saved = snapshotLocked()
+        scheduleSaveLocked()
         let targets = remotes
         lock.unlock()
         startPaneThreads(pane)
@@ -935,7 +974,6 @@ final class Server {
         if let joined {
             for r in targets { _ = r.conn.send(tag: .groupMeta, json: joined) }
         }
-        state.scheduleSave(saved)
     }
 
     // Split direction -> shove axis/sign (same convention as keyboard
@@ -1004,24 +1042,28 @@ final class Server {
     // The reader thread owns closing the master fd; close() on macOS does
     // not unblock a blocked read, so we must not close here.
     private func paneDied(_ pane: Pane) {
+        // Check and remove in one section: reader EOF and housekeep both
+        // land here, and only the first may broadcast.
         lock.lock()
-        let stillTracked = panes[pane.id] != nil
         pane.markExited()
+        guard panes.removeValue(forKey: pane.id) != nil else {
+            lock.unlock()
+            return
+        }
+        reaping.append(pane)
+        // Late reader output must not resurrect the id client-side.
+        for r in remotes {
+            r.subs.remove(pane.id)
+            r.backlog.removeValue(forKey: pane.id)
+        }
+        let pruned = prunePaneLocked(pane.id)
+        scheduleSaveLocked()
         lock.unlock()
-        guard stillTracked else { return }
 
         broadcast(tag: .paneExit, json: PaneExit(id: pane.id, code: 0))
-
-        lock.lock()
-        panes.removeValue(forKey: pane.id)
-        reaping.append(pane)
-        let pruned = prunePaneLocked(pane.id)
-        let saved = snapshotLocked()
-        lock.unlock()
         for g in pruned.touched { broadcast(tag: .groupMeta, json: g) }
         for gid in pruned.emptied { broadcast(tag: .groupExit, json: GroupRef(id: gid)) }
         broadcastTies(pruned)
-        state.scheduleSave(saved)
     }
 
     private func broadcastTies(_ pruned: Pruned) {
@@ -1029,9 +1071,12 @@ final class Server {
         for id in pruned.tiesGone { broadcast(tag: .tieExit, json: TieRef(id: id)) }
     }
 
+    // Blocking writes outside the lock: a slow peer stalls only us.
     private func broadcast(tag: MsgTag, json: some Codable & Sendable) {
-        lock.lock(); defer { lock.unlock() }
-        for r in remotes { _ = r.conn.send(tag: tag, json: json) }
+        lock.lock()
+        let targets = remotes
+        lock.unlock()
+        for r in targets { _ = r.conn.send(tag: tag, json: json) }
     }
 
     private func scheduleSaveLocked() {
@@ -1040,6 +1085,7 @@ final class Server {
 
     private func housekeep() {
         var dirty = false
+        var changedMetas = [PaneMeta]()
         lock.lock()
         for pane in panes.values {
             if pane.pollExit() != nil {
@@ -1055,16 +1101,22 @@ final class Server {
 
                 if changed {
                     dirty = true
-                    for r in remotes { _ = r.conn.send(tag: .paneMeta, json: pane.meta) }
+                    changedMetas.append(pane.meta)
                 }
             }
         }
         // Untracked panes still need waitpid, or they linger as zombies.
         reaping.removeAll { $0.reaped || $0.pollExit() != nil }
 
-        let saved = snapshotLocked()
+        if dirty {
+            scheduleSaveLocked()
+        }
+        let targets = remotes
         lock.unlock()
-        if dirty { state.scheduleSave(saved) }
+
+        for meta in changedMetas {
+            for r in targets { _ = r.conn.send(tag: .paneMeta, json: meta) }
+        }
     }
 
     func shutdown() {
@@ -1073,7 +1125,7 @@ final class Server {
         panes.removeAll()
         lock.unlock()
         state.saveNow()
-        for p in all { p.terminate() }
+        Pane.terminateAll(all)
         exit(0)
     }
 }

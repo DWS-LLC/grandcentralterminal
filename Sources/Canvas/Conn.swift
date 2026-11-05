@@ -52,7 +52,12 @@ final class CanvasConn: @unchecked Sendable {
         _ = conn.send(tag: .hello, json: Hello(token: token.isEmpty ? nil : token))
         // Gate early: a bad token gets errorReply, never a welcome.
         // Don't block long — the read thread reports connClosed on drop.
-        let first = conn.readFrame()
+        // Broadcasts can beat the welcome (the daemon joins us before
+        // building it); the welcome supersedes them, so skip ahead.
+        var first = conn.readFrame()
+        while let f = first, f.tag != .welcome, f.tag != .paneList, f.tag != .errorReply {
+            first = conn.readFrame()
+        }
         // A proxied ssh that failed (bad auth/route) just EOFs: reject it.
         if first == nil && !proxy.isEmpty { return nil }
         if let first {

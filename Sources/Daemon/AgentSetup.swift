@@ -236,17 +236,29 @@ func mergeNoticeHooks(_ hooks: inout [String: Any], bin: String) {
         var groups = (hooks[event] as? [[String: Any]]) ?? []
         // Any gctd notify entry is ours, whatever path wrote it: point it
         // at bin in place (like SessionStart) instead of adding a twin.
+        // Twins left by older versions collapse into the first one.
         var present = false
+        var emptied = Set<Int>()
         for g in groups.indices {
             guard var hs = groups[g]["hooks"] as? [[String: Any]] else { continue }
-            for j in hs.indices {
-                guard let c = hs[j]["command"] as? String,
-                      c.contains("gctd"), c.contains("notify self --hook") else { continue }
-                hs[j]["command"] = cmd
+            let before = hs.count
+            hs = hs.compactMap { h in
+                guard let c = h["command"] as? String,
+                      c.contains("gctd"), c.contains("notify self --hook") else { return h }
+                if present {
+                    return nil
+                }
                 present = true
+                var mine = h
+                mine["command"] = cmd
+                return mine
+            }
+            if hs.isEmpty && before > 0 {
+                emptied.insert(g)
             }
             groups[g]["hooks"] = hs
         }
+        groups = groups.indices.filter { !emptied.contains($0) }.map { groups[$0] }
         if present {
             hooks[event] = groups
             continue
