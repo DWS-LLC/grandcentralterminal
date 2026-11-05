@@ -234,10 +234,23 @@ func mergeNoticeHooks(_ hooks: inout [String: Any], bin: String) {
 
     for event in claudeNoticeEvents {
         var groups = (hooks[event] as? [[String: Any]]) ?? []
-        let present = groups.contains { group in
-            ((group["hooks"] as? [[String: Any]]) ?? []).contains { ($0["command"] as? String) == cmd }
+        // Any gctd notify entry is ours, whatever path wrote it: point it
+        // at bin in place (like SessionStart) instead of adding a twin.
+        var present = false
+        for g in groups.indices {
+            guard var hs = groups[g]["hooks"] as? [[String: Any]] else { continue }
+            for j in hs.indices {
+                guard let c = hs[j]["command"] as? String,
+                      c.contains("gctd"), c.contains("notify self --hook") else { continue }
+                hs[j]["command"] = cmd
+                present = true
+            }
+            groups[g]["hooks"] = hs
         }
-        if present { continue }
+        if present {
+            hooks[event] = groups
+            continue
+        }
 
         groups.append(["matcher": "", "hooks": [["type": "command", "command": cmd,
                                                   "timeout": claudeNoticeTimeout]]])

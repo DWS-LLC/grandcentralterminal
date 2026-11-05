@@ -433,11 +433,23 @@ guard let verb = args.first else {
                         tcpPort: servePort, token: serveToken)
 
     signal(SIGPIPE, SIG_IGN)
-    // On TERM/INT: children get EIO on their pty master once we die and exit.
-    signal(SIGTERM) { _ in exit(0) }
-    signal(SIGINT) { _ in exit(0) }
+    // On TERM/INT: save pending state, exit. Children get EIO on their pty
+    // master once we die and exit. A dispatch source, not a C handler:
+    // that can't capture the store.
+    let stopSignals = [SIGTERM, SIGINT].map { sig -> DispatchSourceSignal in
+        signal(sig, SIG_IGN)
+        let src = DispatchSource.makeSignalSource(signal: sig, queue: .global())
+        src.setEventHandler {
+            state.saveNow()
+            exit(0)
+        }
+        src.resume()
+        return src
+    }
 
-    server.run()
+    withExtendedLifetime(stopSignals) {
+        server.run()
+    }
     fatalError("unreachable")
 }
 

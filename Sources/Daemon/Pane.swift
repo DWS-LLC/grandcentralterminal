@@ -48,6 +48,15 @@ final class Pane {
     // A hung-up session gets this long before SIGKILL.
     private static let hangupGrace: TimeInterval = 2
 
+    // Keystrokes and pastes queue here; a writer thread drains them so a
+    // pty nobody reads (raw-mode app, busy) never blocks the client's
+    // request loop. Past the cap, input drops rather than eat memory.
+    private let inbox = NSCondition()
+    private var inboxChunks = [Data]()
+    private var inboxBytes = 0
+    private var inboxOpen = true
+    private static let inboxCap = 32 << 20
+
     init(meta: PaneMeta, command: String?) {
         self.id = meta.id
         self.meta = meta
@@ -205,11 +214,12 @@ final class Pane {
         return daemonBaseDir() + "/daemon.sock"
     }
 
-    // Blocking reader: runs on its own thread per pane. Holds the pane
+    // Reader + writer threads, one each per pane. Both hold the pane
     // strongly: close() on macOS does not unblock a blocked read, so the
-    // fd closes in deinit, after the reader lets go.
-    func startReading(_ onOutput: @escaping (Pane, Data) -> Void,
-                      _ onEOF: @escaping (Pane) -> Void) {
+    // fd closes in deinit, after both let go.
+    func startIO(_ onOutput: @escaping (Pane, Data) -> Void,
+                 _ onEOF: @escaping (Pane) -> Void) {
+        startWriting()
         let fd = masterFD
         Thread(block: { [self] in
             var buf = [UInt8](repeating: 0, count: 65_536)
@@ -221,27 +231,71 @@ final class Pane {
                 if n <= 0 {
                     break
                 }
-                let chunk = Data(buf[0..<n])
-                ring.append(chunk)
-                onOutput(self, chunk)
+                // onOutput appends to the ring (see Server.fanOut).
+                onOutput(self, Data(buf[0..<n]))
             }
+            closeInbox()
             onEOF(self)
         }).start()
     }
 
+    // Queue input for the writer thread; never blocks.
     func writeStdin(_ data: Data) {
+        guard !data.isEmpty else { return }
+        inbox.lock(); defer { inbox.unlock() }
+        guard inboxOpen, inboxBytes + data.count <= Self.inboxCap else { return }
+
+        inboxChunks.append(data)
+        inboxBytes += data.count
+        inbox.signal()
+    }
+
+    private func startWriting() {
         let fd = masterFD
-        guard fd >= 0, !data.isEmpty else { return }
+        Thread(block: { [self] in
+            while let chunk = nextInput() {
+                guard Self.writeAll(fd, chunk) else { break }
+            }
+            closeInbox()
+        }).start()
+    }
+
+    // Blocks until input arrives; nil once the pty is gone.
+    private func nextInput() -> Data? {
+        inbox.lock(); defer { inbox.unlock() }
+        while inboxOpen && inboxChunks.isEmpty {
+            inbox.wait()
+        }
+        guard inboxOpen else { return nil }
+
+        let chunk = inboxChunks.removeFirst()
+        inboxBytes -= chunk.count
+        return chunk
+    }
+
+    private func closeInbox() {
+        inbox.lock(); defer { inbox.unlock() }
+        inboxOpen = false
+        inboxChunks.removeAll()
+        inboxBytes = 0
+        inbox.broadcast()
+    }
+
+    // False on a dead pty (EIO once the slave side closes).
+    private static func writeAll(_ fd: Int32, _ data: Data) -> Bool {
         data.withUnsafeBytes { raw in
             var off = 0
             while off < raw.count {
                 let n = write(fd, raw.baseAddress! + off, raw.count - off)
+                if n < 0 && errno == EINTR {
+                    continue
+                }
                 if n < 0 {
-                    if errno == EINTR { continue }
-                    break
+                    return false
                 }
                 off += n
             }
+            return true
         }
     }
 
@@ -342,8 +396,9 @@ final class Pane {
         return true
     }
 
+    // Linked worktrees re-probe every poll: `git switch` moves HEAD, not cwd.
     private func pollRepo() -> Bool {
-        guard meta.cwd != probedCwd else { return false }
+        guard meta.cwd != probedCwd || meta.worktree != nil else { return false }
         probedCwd = meta.cwd
 
         let info = RepoProbe.probe(cwd: meta.cwd)

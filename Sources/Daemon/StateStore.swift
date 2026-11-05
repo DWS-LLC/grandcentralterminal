@@ -42,6 +42,11 @@ final class StateStore {
         }
     }
 
+    // Exit paths: the debounce would otherwise drop the last second.
+    func saveNow() {
+        flush()
+    }
+
     private func flush() {
         lock.lock()
         defer { lock.unlock() }

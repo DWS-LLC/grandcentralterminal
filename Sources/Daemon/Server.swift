@@ -8,6 +8,8 @@ import Common
 final class Remote: @unchecked Sendable {
     let conn: Conn
     var subs = Set<PaneID>()
+    // Attaching panes: live output parks here while the replay goes out.
+    var backlog = [PaneID: [Data]]()
     // Unix peers start trusted; TCP peers become trusted only after the
     // token hello. Untrusted peers get one hello chance, then dropped.
     var trusted = true
@@ -224,25 +226,38 @@ final class Server {
 
         case .attachPane:
             guard let req: AttachPane = frame.decode() else { return }
-            lock.lock(); defer { lock.unlock() }
+            lock.lock()
             guard let pane = panes[req.id] else {
+                lock.unlock()
                 _ = remote.conn.send(tag: .errorReply,
                                      json: ErrorReply(message: "no such pane"))
                 return
             }
             pane.resize(cols: req.cols, rows: req.rows)
-            remote.subs.insert(req.id)
-            // Ring first so replay lands before any live bytes; fanOut and
-            // this are serialized by the server lock.
+            // Replay goes out unlocked: MiBs to a slow link would stall
+            // every client. Live bytes park in the backlog meanwhile, then
+            // flush under the lock so order holds:
+            //   snapshot ─► replay (unlocked) ─► backlog ─► live
+            remote.backlog[req.id] = []
             let snap = pane.ring.snapshot()
+            lock.unlock()
             if !snap.isEmpty {
                 _ = remote.conn.sendData(tag: .replayPane, paneID: req.id, data: snap)
             }
+
+            lock.lock(); defer { lock.unlock() }
+            // Gone means detached or closed mid-replay: don't subscribe.
+            guard let parked = remote.backlog.removeValue(forKey: req.id) else { return }
+            for data in parked {
+                _ = remote.conn.sendData(tag: .outputPane, paneID: req.id, data: data)
+            }
+            remote.subs.insert(req.id)
 
         case .detachPane:
             guard let req: PaneRef = frame.decode() else { return }
             lock.lock(); defer { lock.unlock() }
             remote.subs.remove(req.id)
+            remote.backlog.removeValue(forKey: req.id)
 
         case .inputPane:
             guard let id = frame.paneID else { return }
@@ -351,7 +366,10 @@ final class Server {
             guard let pane = panes[req.id] else { lock.unlock(); return }
             panes.removeValue(forKey: req.id)
             reaping.append(pane)
-            for r in remotes { r.subs.remove(req.id) }
+            for r in remotes {
+                r.subs.remove(req.id)
+                r.backlog.removeValue(forKey: req.id)
+            }
             let pruned = prunePaneLocked(req.id)
             let saved = snapshotLocked()
             lock.unlock()
@@ -953,7 +971,7 @@ final class Server {
     }
 
     private func startPaneThreads(_ pane: Pane) {
-        pane.startReading({ [weak self] pane, data in
+        pane.startIO({ [weak self] pane, data in
             self?.fanOut(pane: pane, data: data)
         }, { [weak self] pane in
             self?.paneDied(pane)
@@ -961,10 +979,17 @@ final class Server {
     }
 
     private func fanOut(pane: Pane, data: Data) {
+        // Ring append and target pick share the lock with attach's
+        // snapshot: each chunk is either replayed or sent live, never both.
         lock.lock()
+        pane.ring.append(data)
         var targets = [Remote]()
-        for r in remotes where r.subs.contains(pane.id) {
-            targets.append(r)
+        for r in remotes {
+            if r.subs.contains(pane.id) {
+                targets.append(r)
+            } else if r.backlog[pane.id] != nil {
+                r.backlog[pane.id]?.append(data)
+            }
         }
         lock.unlock()
         // Blocking socket writes OUTSIDE the server lock: a full client
@@ -1047,6 +1072,7 @@ final class Server {
         let all = Array(panes.values)
         panes.removeAll()
         lock.unlock()
+        state.saveNow()
         for p in all { p.terminate() }
         exit(0)
     }
