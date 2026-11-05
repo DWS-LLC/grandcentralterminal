@@ -147,6 +147,9 @@ final class Pane {
         var attr: posix_spawnattr_t? = nil
         posix_spawnattr_init(&attr)
         defer { posix_spawnattr_destroy(&attr) }
+        // Close every fd in the child. Per-fd FD_CLOEXEC races a concurrent
+        // spawn (another pane's master leaks in); ptyexec opens its own stdio.
+        posix_spawnattr_setflags(&attr, Int16(POSIX_SPAWN_CLOEXEC_DEFAULT))
 #endif
 
         var cargs: [UnsafeMutablePointer<CChar>?] = args.map { strdup($0)! }

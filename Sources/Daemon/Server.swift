@@ -36,6 +36,8 @@ final class Server {
     // pruned on every pane exit/close, and dropped under two strands.
     private var ties = [String: TieMeta]()
     private var remotes = [Remote]()
+    // Set by shutdown(): no more saves, no second teardown.
+    private var stopping = false
     // Canvas window-gap (LayoutPolicy); floor for every placement.
     private var layoutGap: Double = 0
     private static let maxGap: Double = 256
@@ -1080,6 +1082,10 @@ final class Server {
     }
 
     private func scheduleSaveLocked() {
+        guard !stopping else {
+            return
+        }
+
         state.scheduleSave(snapshotLocked())
     }
 
@@ -1121,6 +1127,14 @@ final class Server {
 
     func shutdown() {
         lock.lock()
+        // Serve threads keep running through the hangup grace; without
+        // this a save there would persist the emptied pane list.
+        guard !stopping else {
+            lock.unlock()
+            return
+        }
+
+        stopping = true
         let all = Array(panes.values)
         panes.removeAll()
         lock.unlock()

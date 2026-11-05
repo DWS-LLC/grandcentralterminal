@@ -204,7 +204,9 @@ final class CanvasView: NSView {
         setupDim()
         setupCables()
 
-        _ = hub.connectLocal(sockPath: CanvasPaths.sockPath, delegate: self)
+        if !hub.connectLocal(sockPath: CanvasPaths.sockPath, delegate: self) {
+            reconnectLocal(after: 0)
+        }
         syncRemotes()
         // Window state drives occlusion: miniaturize / un-hide changes
         // which renderers need to run. Camera moves call refresh via
@@ -726,7 +728,8 @@ final class CanvasView: NSView {
             for h in GCTConfig.current.remotes {
                 let edited = oldRemotes.contains {
                     $0.name == h.name
-                        && ($0.host != h.host || $0.port != h.port || $0.token != h.token)
+                        && ($0.host != h.host || $0.port != h.port
+                            || $0.token != h.token || $0.proxy != h.proxy)
                 }
                 guard edited else { continue }
                 removeOwnerPanes(owner: h.name)

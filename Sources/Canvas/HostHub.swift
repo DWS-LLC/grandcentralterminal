@@ -44,12 +44,6 @@ final class HostHub {
 
     /// TCP remote. Nil/false when unreachable or the token is wrong
     /// (CanvasConn's init gates on the welcome).
-    func connectRemote(_ h: GCTRemoteHost, delegate: CanvasConnDelegate) -> Bool {
-        guard let c = Self.dial(h) else { return false }
-        adopt(c, as: h.name, delegate: delegate)
-        return true
-    }
-
     /// Blocks up to the connect timeout, so off-main callers only.
     static func dial(_ h: GCTRemoteHost) -> CanvasConn? {
         CanvasConn(tcpHost: h.host, port: h.port, token: h.token,

@@ -154,16 +154,7 @@ extension CanvasView: CanvasConnDelegate {
     func connClosed(owner: String) {
         if owner == "local" {
             // Daemon died: try to restart it and reconnect.
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
-                guard let self else { return }
-                CanvasView.ensureDaemon()
-                self.hub.disconnect(owner: "local")
-                if self.hub.connectLocal(sockPath: CanvasPaths.sockPath, delegate: self) {
-                    // Fresh welcome re-maps; drop stale local panes first
-                    // so dead ids don't linger as frozen frames.
-                    self.removeOwnerPanes(owner: "local")
-                }
-            }
+            reconnectLocal(after: Self.localReconnectDelay)
         } else {
             // Remote dropped: clear its panes now, redial on a slow timer
             // (RemoteRetry), never a tight loop hammering a dead host.
@@ -171,6 +162,31 @@ extension CanvasView: CanvasConnDelegate {
             hub.disconnect(owner: owner)
             NSLog("[gct] remote host \(owner) disconnected (retrying every \(Int(RemoteRetry.interval))s)")
             armRemoteRetry()
+        }
+    }
+
+    private static let localReconnectDelay: TimeInterval = 0.5
+    private static let localRetryInterval: TimeInterval = 5
+
+    // Restart gctd off-main (ensureDaemon blocks while it binds), then
+    // connect on main. Retries until it answers: a slow or failed restart
+    // must not strand the canvas on frozen panes.
+    func reconnectLocal(after delay: TimeInterval) {
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + delay) {
+            CanvasView.ensureDaemon()
+
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.hub.disconnect(owner: "local")
+                guard self.hub.connectLocal(sockPath: CanvasPaths.sockPath, delegate: self) else {
+                    self.reconnectLocal(after: Self.localRetryInterval)
+                    return
+                }
+
+                // Fresh welcome re-maps; drop stale local panes first
+                // so dead ids don't linger as frozen frames.
+                self.removeOwnerPanes(owner: "local")
+            }
         }
     }
 
@@ -200,14 +216,9 @@ extension CanvasView: CanvasConnDelegate {
             removeOwnerPanes(owner: owner)
             hub.disconnect(owner: owner)
         }
-        // New / reconnected hosts.
-        for h in GCTConfig.current.remotes where hub.conn(forOwner: h.name) == nil {
-            if hub.connectRemote(h, delegate: self) {
-                NSLog("[gct] remote host \(h.name) (\(h.host):\(h.port)) connected")
-            } else {
-                NSLog("[gct] remote host \(h.name) (\(h.host):\(h.port)) unreachable (retrying every \(Int(RemoteRetry.interval))s)")
-            }
-        }
+        // New / reconnected hosts: dialed off-main, a dead host can't
+        // freeze the UI.
+        missingRemotes().forEach(redial)
         armRemoteRetry()
     }
 
@@ -234,6 +245,10 @@ extension CanvasView: CanvasConnDelegate {
 
         DispatchQueue.global(qos: .utility).async { [weak self] in
             let conn = HostHub.dial(h)
+            if conn == nil {
+                NSLog("[gct] remote host \(h.name) (\(h.host):\(h.port)) unreachable (retrying every \(Int(RemoteRetry.interval))s)")
+            }
+
             DispatchQueue.main.async {
                 guard let self else { return }
                 self.remoteRetry.end(h.name)
@@ -276,7 +291,11 @@ extension CanvasView: CanvasConnDelegate {
         // Give it a moment to bind.
         for _ in 0..<50 {
             Thread.sleep(forTimeInterval: 0.05)
-            if connectUnixSocket(CanvasPaths.sockPath) >= 0 { return }
+            let fd = connectUnixSocket(CanvasPaths.sockPath)
+            guard fd >= 0 else { continue }
+
+            _ = Darwin.close(fd)  // probe only, like the one above
+            return
         }
     }
 }

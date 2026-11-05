@@ -252,24 +252,28 @@ func resolvePane(_ w: Welcome, _ raw: String) -> PaneMeta? {
     } else {
         q = raw
     }
+    guard !q.isEmpty else { die("empty pane id") }
     if let hit = w.panes.first(where: { $0.id.uuid.uuidString == q }) { return hit }
-    if let hit = w.panes.first(where: {
-        $0.id.uuid.uuidString.lowercased().hasPrefix(q.lowercased())
-    }) { return hit }
+    // Ambiguous prefix: a unique name may still settle it, else refuse.
+    let prefixed = w.panes.filter { $0.id.uuid.uuidString.lowercased().hasPrefix(q.lowercased()) }
+    if prefixed.count == 1 { return prefixed[0] }
     let named = w.panes.filter { ($0.name ?? "Terminal") == q }
     if named.count == 1 { return named[0] }
     if named.count > 1 { die("name \(q) matches \(named.count) panes; use an id prefix") }
+    if prefixed.count > 1 { die("id prefix \(q) matches \(prefixed.count) panes; use more of it") }
     return nil
 }
 
 func resolveGroup(_ w: Welcome, _ raw: String) -> GroupMeta? {
+    guard !raw.isEmpty else { die("empty group id") }
     if let hit = w.groups.first(where: { $0.id.uuid.uuidString == raw }) { return hit }
-    if let hit = w.groups.first(where: {
-        $0.id.uuid.uuidString.lowercased().hasPrefix(raw.lowercased())
-    }) { return hit }
+    // Same ambiguity rule as resolvePane.
+    let prefixed = w.groups.filter { $0.id.uuid.uuidString.lowercased().hasPrefix(raw.lowercased()) }
+    if prefixed.count == 1 { return prefixed[0] }
     let named = w.groups.filter { ($0.name ?? "") == raw }
     if named.count == 1 { return named[0] }
     if named.count > 1 { die("name \(raw) matches \(named.count) groups; use an id prefix") }
+    if prefixed.count > 1 { die("id prefix \(raw) matches \(prefixed.count) groups; use more of it") }
     return nil
 }
 
@@ -286,14 +290,16 @@ func flags(_ args: [String]) -> [String: String] {
 // "x,y,w,h" in world points, e.g. "0,0,900,560".
 func parseRect(_ raw: String) -> Rect {
     let n = raw.split(separator: ",").compactMap { Double($0) }
-    guard n.count == 4 else { die("rect must be x,y,w,h, got \(raw)") }
+    // nan/inf parse as Double but can't be JSON-encoded: send would fail
+    // silently and the CLI would wait on a reply forever.
+    guard n.count == 4, n.allSatisfy(\.isFinite) else { die("rect must be x,y,w,h, got \(raw)") }
     return Rect(x: n[0], y: n[1], w: n[2], h: n[3])
 }
 
 // Optional numeric flag; present-but-garbage dies instead of guessing.
 func number(_ f: [String: String], _ key: String) -> Double? {
     guard let raw = f[key] else { return nil }
-    guard let n = Double(raw) else { die("\(key) must be a number, got \(raw)") }
+    guard let n = Double(raw), n.isFinite else { die("\(key) must be a number, got \(raw)") }
     return n
 }
 
@@ -404,16 +410,13 @@ func usage() -> Never {
 
 guard let verb = args.first else {
     // No subcommand: serve the daemon (single instance via pid file).
-    if let data = FileManager.default.contents(atPath: pidPath),
-       let old = Int(String(decoding: data, as: UTF8.self)
-           .trimmingCharacters(in: .whitespacesAndNewlines)),
-       old != ProcessInfo.processInfo.processIdentifier,
-       kill(pid_t(old), 0) == 0 {
-        log("another daemon (pid \(old)) already running")
+    // flock, not kill(pid, 0): the kernel drops the lock when we die, so a
+    // stale file whose pid got recycled can't block startup.
+    guard let pidLock = PidLock(path: pidPath) else {
+        log("another daemon already running")
         exit(0)
     }
-    try? Data("\(ProcessInfo.processInfo.processIdentifier)\n".utf8)
-        .write(to: URL(fileURLWithPath: pidPath), options: .atomic)
+    pidLock.write(ProcessInfo.processInfo.processIdentifier)
 
     // One-time migration from the pre-rename support dir, so an existing pane
     // layout survives the move to Application Support/Grand Central Terminal.
@@ -528,7 +531,7 @@ case "open":
     // size=w,h keeps the beside-caller spot, resized to fit the job.
     if let s = f["size"] {
         let n = s.split(separator: ",").compactMap { Double($0) }
-        guard n.count == 2 else { die("size must be w,h, got \(s)") }
+        guard n.count == 2, n.allSatisfy(\.isFinite) else { die("size must be w,h, got \(s)") }
         anchor.w = n[0]
         anchor.h = n[1]
     }

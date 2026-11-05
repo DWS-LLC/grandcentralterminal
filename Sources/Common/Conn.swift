@@ -53,6 +53,13 @@ public final class Conn: @unchecked Sendable {
         _ = closeSocket(fd)
     }
 
+    // Bound every blocking read (handshakes); 0 restores blocking.
+    // A timed-out read returns nil, same as EOF.
+    public func setReadTimeout(_ seconds: Int) {
+        var tv = timeval(tv_sec: seconds, tv_usec: 0)
+        setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, socklen_t(MemoryLayout<timeval>.size))
+    }
+
     // Reader loop; calls handler synchronously until EOF/error.
     public func readLoop(_ handler: @escaping (Frame) -> Void) {
         while let frame = readFrame() {

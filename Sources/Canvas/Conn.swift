@@ -54,18 +54,23 @@ final class CanvasConn: @unchecked Sendable {
         // Don't block long — the read thread reports connClosed on drop.
         // Broadcasts can beat the welcome (the daemon joins us before
         // building it); the welcome supersedes them, so skip ahead.
+        // Bounded: a port that accepts but never answers (wrong service,
+        // wedged gctd) would otherwise park the dial thread forever.
+        conn.setReadTimeout(Self.handshakeTimeout)
         var first = conn.readFrame()
         while let f = first, f.tag != .welcome, f.tag != .paneList, f.tag != .errorReply {
             first = conn.readFrame()
         }
-        // A proxied ssh that failed (bad auth/route) just EOFs: reject it.
-        if first == nil && !proxy.isEmpty { return nil }
-        if let first {
-            guard first.tag == .welcome || first.tag == .paneList,
-                  let _: Welcome = first.decode() else { return nil }
-            pendingWelcome = first
-        }
+        conn.setReadTimeout(0)
+
+        // EOF or timeout (failed ssh hop, silent peer): reject it.
+        guard let first, first.tag == .welcome || first.tag == .paneList,
+              let _: Welcome = first.decode() else { return nil }
+        pendingWelcome = first
     }
+
+    // Covers an ssh proxy hop's auth, not just a direct round-trip.
+    private static let handshakeTimeout = 10
 
     // First frame already consumed by the TCP gate above; start() emits
     // it before entering the read loop.
