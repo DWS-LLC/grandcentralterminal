@@ -1,394 +1,596 @@
-// gctd agent-setup — how an agent finds out about GCT.
+// gctd agent — how a coding agent finds out about GCT.
 //
-// `agent-setup print`   show where the skill installs per harness.
-// `agent-setup install [--harness=...] [--hooks] [--yes]`
-//                       copy SKILL.md into harness skill dirs, optionally
-//                       merge a SessionStart hook (Claude) emitting live
-//                       pane state via `gctd agent-setup context`, plus
-//                       Notification/Stop hooks that call `gctd notify`.
-// `agent-setup uninstall [--harness=...]`
-//                       remove installed skill dirs (+ our hook entry).
-// `agent-setup context [--json]`
-//                       live pane/group state for hooks and prompts.
+//   gctd agent setup   [--agent NAME]... [--project] [--dry-run] [--force] [--json]
+//   gctd agent status  same flags; changes nothing, exits 1 unless all current
+//   gctd agent remove  same flags; takes the skill and hooks back out
+//   gctd agent show    print the guide the installed skill points at
+//   gctd agent context print where the caller is (what the SessionStart hook emits)
 //
-// Installs from disk: the skill ships beside the gctd binary
-// ($SUPPORT/skills/gct/SKILL.md, staged by scripts/build.sh); repo
-// checkout fallback is <repo>/SKILL.md next to the source tree.
-// No network, no GitHub fetch — the binary carries the skill.
+// Two things get installed per agent:
+//
+//   skill  a stub SKILL.md that says "run `gctd agent show`" (see AgentGuide)
+//   hook   SessionStart context, plus desktop pings on Notification/Stop
+//          where the agent has those events (hook merging: AgentHooks)
+//
+//   agent     skill dir                     hook file
+//   claude    ~/.claude/skills/gct          ~/.claude/settings.json
+//   codex     ~/.agents/skills/gct          ~/.codex/hooks.json
+//   opencode  ~/.agents/skills/gct          —
+//   pi        ~/.agents/skills/gct          —
+//
+// Setup is idempotent: current items are reported `unchanged` and not
+// rewritten. A file we can't parse is left alone and reported `failed`.
 
 import Foundation
+import Common
 
-// MARK: - Skill source
+// MARK: - Vocabulary
 
-enum AgentSkill {
-    // Skill dir beside the binary ($SUPPORT/skills/gct/SKILL.md once
-    // staged) or at the repo root when running from a checkout.
-    static func text() -> String? {
-        for p in candidatePaths() {
-            if let s = try? String(contentsOfFile: p, encoding: .utf8),
-               !s.isEmpty { return s }
-        }
-        return nil
-    }
-
-    // Exposed for `print` so agents can read/copy it without installing.
-    static func candidatePaths() -> [String] {
-        var out = [String]()
-        // argv[0] is a bare "gctd" when launched via PATH, so ask the OS
-        // for the real binary and follow the /usr/local/bin symlink.
-        var self0 = Bundle.main.executablePath ?? CommandLine.arguments.first ?? ""
-        if !self0.hasPrefix("/") {
-            self0 = FileManager.default.currentDirectoryPath + "/" + self0
-        }
-        self0 = URL(fileURLWithPath: self0).resolvingSymlinksInPath().path
-        let dir = (self0 as NSString).deletingLastPathComponent
-        out.append(dir + "/../skills/gct/SKILL.md")
-        out.append(dir + "/skills/gct/SKILL.md")
-        // Repo checkout: Sources/Daemon -> root.
-        let checkout = ((dir as NSString).deletingLastPathComponent as NSString)
-            .deletingLastPathComponent
-        out.append((checkout as NSString).appendingPathComponent("SKILL.md"))
-        return out
-    }
+enum Agent: String, CaseIterable {
+    case claude
+    case codex
+    case opencode
+    case pi
 }
 
-// MARK: - Harness targets
-
-// Every skill dir we install into. `hook` = whether this harness has a
-// per-session context hook we can merge (today: Claude SessionStart only);
-// the rest get the skill file alone. Paths verified against vendor docs;
-// Codex needs [features] skills=true (flagged in `print`).
-struct Harness: Sendable {
-    let name: String       // --harness= id
-    let skillDir: String   // <dir>/gct/SKILL.md parent
-    let hook: Bool
+enum AgentScope: String {
+    case user
+    case project
 }
+
+enum RunMode {
+    case apply
+    case dryRun
+}
+
+enum Overwrite {
+    case keep
+    case replace
+}
+
+enum OutputFormat {
+    case text
+    case json
+}
+
+// Which agents a command covers when none are named.
+enum Pool {
+    case found
+    case all
+}
+
+// What setup or remove did to an item (or would, in a dry run).
+enum AgentAction: String {
+    case installed
+    case updated
+    case replaced
+    case removed
+    case unchanged
+    case skipped
+    case failed
+}
+
+// What status found.
+enum ItemState: String {
+    case current
+    case outdated
+    case missing
+    case foreign
+    case unreadable
+    case unsupported
+}
+
+struct AgentOptions {
+    var named = [Agent]()
+    var scope = AgentScope.user
+    var mode = RunMode.apply
+    var overwrite = Overwrite.keep
+    var format = OutputFormat.text
+}
+
+private let agentUsage = "agent setup|status|remove|show|context [--agent NAME]... [--project] [--dry-run] [--force] [--json]"
+private let skillName = "gct"
+private let skillFile = "SKILL.md"
+private let startEvent = "SessionStart"
+private let noticeEvents = ["Notification", "Stop"]
+// SessionStart can't block: expiry discards the output and the session
+// proceeds, so the timeout only bounds a wedged daemon.
+private let contextTimeout = 15
+private let noticeTimeout = 10
+private let codexApproval = "Codex runs the hook once you approve it with /hooks"
+
+// MARK: - Where things live
 
 // $HOME first (agents/sandboxes override it; also makes isolated-HOME
 // testing possible), passwd fallback. NSHomeDirectory() ignores $HOME.
 func agentHome() -> String {
-    if let h = ProcessInfo.processInfo.environment["HOME"], !h.isEmpty { return h }
-    return NSHomeDirectory()
+    envVar("HOME") ?? NSHomeDirectory()
 }
 
-func agentHarnesses() -> [Harness] {
+private func envVar(_ key: String) -> String? {
+    guard let v = ProcessInfo.processInfo.environment[key], !v.isEmpty else { return nil }
+
+    return v
+}
+
+private func userConfigDir(_ a: Agent) -> String {
     let home = agentHome()
-    return [
-        Harness(name: "claude", skillDir: home + "/.claude/skills/gct", hook: true),
-        Harness(name: "codex", skillDir: home + "/.codex/skills/gct", hook: false),
-        Harness(name: "opencode", skillDir: home + "/.config/opencode/skills/gct", hook: false),
-        Harness(name: "cursor", skillDir: home + "/.cursor/skills/gct", hook: false),
-        Harness(name: "cursor-agents", skillDir: home + "/.agents/skills/gct", hook: false),
-    ]
+    switch a {
+    case .claude:
+        return envVar("CLAUDE_CONFIG_DIR") ?? home + "/.claude"
+    case .codex:
+        return envVar("CODEX_HOME") ?? home + "/.codex"
+    case .opencode:
+        return home + "/.config/opencode"
+    case .pi:
+        return home + "/.pi"
+    }
 }
 
-func harness(named: String) -> Harness? {
-    agentHarnesses().first { $0.name == named }
+// Found = has a config dir, or its program is on PATH.
+private func isFound(_ a: Agent) -> Bool {
+    if FileManager.default.fileExists(atPath: userConfigDir(a)) {
+        return true
+    }
+
+    let dirs = (envVar("PATH") ?? "").split(separator: ":")
+    return dirs.contains { FileManager.default.isExecutableFile(atPath: "\($0)/\(a.rawValue)") }
 }
 
-// MARK: - print
+// Nearest ancestor holding .git, else the current directory.
+private func projectRoot() -> String {
+    let fm = FileManager.default
+    let cwd = fm.currentDirectoryPath
+    var dir = cwd
+    while dir != "/" {
+        if fm.fileExists(atPath: dir + "/.git") {
+            return dir
+        }
+        dir = (dir as NSString).deletingLastPathComponent
+    }
 
-// Machine-readable target list + the skill text, so an agent can install
-// by hand (or into a harness we don't know) without running install.
-func agentSetupPrint() {
-    print("skill: gct")
-    for h in agentHarnesses() {
-        print("target \(h.name) \(h.skillDir)/SKILL.md hooks=\(h.hook ? "session-start" : "none")")
+    return cwd
+}
+
+struct AgentTarget {
+    let agent: Agent
+    let skillDir: String
+    let hookFile: String?
+    let hookEvents: [String]
+    let matcher: String?
+}
+
+private func target(_ a: Agent, _ scope: AgentScope) -> AgentTarget {
+    let base = scope == .user ? agentHome() : projectRoot()
+    let shared = "\(base)/.agents/skills/\(skillName)"
+
+    switch a {
+    case .claude:
+        let cfg = scope == .user ? userConfigDir(a) : base + "/.claude"
+        return AgentTarget(agent: a, skillDir: "\(cfg)/skills/\(skillName)",
+                           hookFile: cfg + "/settings.json",
+                           hookEvents: [startEvent] + noticeEvents, matcher: "")
+    case .codex:
+        let cfg = scope == .user ? userConfigDir(a) : base + "/.codex"
+        return AgentTarget(agent: a, skillDir: shared, hookFile: cfg + "/hooks.json",
+                           hookEvents: [startEvent], matcher: nil)
+    case .opencode, .pi:
+        return AgentTarget(agent: a, skillDir: shared, hookFile: nil, hookEvents: [], matcher: nil)
     }
-    print("codex-note: enable with [features] skills=true in ~/.codex/config.toml")
-    if let first = AgentSkill.candidatePaths().first {
-        print("source: \(first)")
+}
+
+private func selected(_ o: AgentOptions, from pool: Pool) -> [AgentTarget] {
+    var agents = o.named
+    if agents.isEmpty {
+        agents = Agent.allCases.filter { pool == .all || isFound($0) }
     }
-    guard let text = AgentSkill.text() else {
-        die("skill source not found (looked in \(AgentSkill.candidatePaths().joined(separator: ", ")))")
+
+    var seen = Set<Agent>()
+    return agents.filter { seen.insert($0).inserted }.map { target($0, o.scope) }
+}
+
+// Agents sharing a skill dir (codex, opencode, pi) are one install.
+private func bySkillDir(_ ts: [AgentTarget]) -> [(dir: String, agents: String)] {
+    var order = [String]()
+    var names = [String: [String]]()
+    for t in ts {
+        if names[t.skillDir] == nil {
+            order.append(t.skillDir)
+        }
+        names[t.skillDir, default: []].append(t.agent.rawValue)
     }
-    print("---")
-    fputs(text, stdout)
+
+    return order.map { ($0, (names[$0] ?? []).joined(separator: ",")) }
+}
+
+// MARK: - Hook commands
+
+// Prefers /usr/local/bin/gctd: no spaces, stable across rebuilds. Falls
+// back to the running binary, quoted when its path has spaces.
+private func hookBin() -> String {
+    let linked = "/usr/local/bin/gctd"
+    if FileManager.default.isExecutableFile(atPath: linked) {
+        return linked
+    }
+
+    var me = Bundle.main.executablePath ?? CommandLine.arguments.first ?? "gctd"
+    if !me.hasPrefix("/") {
+        me = FileManager.default.currentDirectoryPath + "/" + me
+    }
+
+    return me.contains(" ") ? "\"\(me)\"" : me
+}
+
+// `|| exit 0`: fail open. An unexecable binary (bad signature, missing
+// path) exits nonzero with empty stderr, which the agent would surface as
+// a hook error every session.
+private func hookSpecs(_ t: AgentTarget) -> [HookSpec] {
+    let bin = hookBin()
+
+    return t.hookEvents.map { event in
+        if event == startEvent {
+            return HookSpec(event: event, command: "\(bin) agent context || exit 0",
+                            timeout: contextTimeout, matcher: t.matcher)
+        }
+
+        return HookSpec(event: event, command: "\(bin) notify self --hook || exit 0",
+                        timeout: noticeTimeout, matcher: t.matcher)
+    }
+}
+
+// MARK: - State
+
+private func skillState(_ dir: String) -> ItemState {
+    let path = "\(dir)/\(skillFile)"
+    guard FileManager.default.fileExists(atPath: path) else { return .missing }
+    guard let text = try? String(contentsOfFile: path, encoding: .utf8) else { return .unreadable }
+    if text == AgentGuide.stub {
+        return .current
+    }
+
+    return AgentGuide.isOurs(text) ? .outdated : .foreign
+}
+
+private func hookState(_ t: AgentTarget, _ path: String) -> ItemState {
+    switch loadJSON(path) {
+    case .missing:
+        return .missing
+    case .unreadable:
+        return .unreadable
+    case .parsed(let root):
+        guard hasOurHooks(root) else { return .missing }
+
+        return sameJSON(addingHooks(root, hookSpecs(t)), root) ? .current : .outdated
+    }
+}
+
+// MARK: - Rows
+
+private struct AgentRow: Encodable {
+    let agent: String
+    let item: String
+    let result: String
+    let path: String
+    var note: String?
+}
+
+private struct AgentReport: Encodable {
+    let scope: String
+    let dryRun: Bool
+    let results: [AgentRow]
+}
+
+private func skillRow(_ agents: String, _ dir: String, _ result: String, _ note: String? = nil) -> AgentRow {
+    AgentRow(agent: agents, item: "skill", result: result, path: "\(dir)/\(skillFile)", note: note)
+}
+
+private func hookRow(_ t: AgentTarget, _ path: String, _ result: String, _ note: String? = nil) -> AgentRow {
+    AgentRow(agent: t.agent.rawValue, item: "hook", result: result, path: path, note: note)
+}
+
+// MARK: - setup
+
+private func setup(_ ts: [AgentTarget], _ o: AgentOptions) -> [AgentRow] {
+    var rows = [AgentRow]()
+
+    for (dir, agents) in bySkillDir(ts) {
+        let (action, note) = installSkill(dir, o)
+        rows.append(skillRow(agents, dir, action.rawValue, note))
+    }
+    for t in ts {
+        guard let path = t.hookFile else { continue }
+
+        rows.append(installHook(t, path, o))
+    }
+
+    return rows + sweepLegacy(o)
+}
+
+private func installSkill(_ dir: String, _ o: AgentOptions) -> (AgentAction, String?) {
+    let state = skillState(dir)
+    switch state {
+    case .current:
+        return (.unchanged, nil)
+    case .unreadable:
+        return (.failed, "cannot read it")
+    case .foreign where o.overwrite == .keep:
+        return (.skipped, "not installed by gctd; --force replaces it")
+    default:
+        break
+    }
+
+    let action: AgentAction = state == .missing ? .installed : (state == .outdated ? .updated : .replaced)
+    guard o.mode == .apply else { return (action, nil) }
+
+    do {
+        try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        try AgentGuide.stub.write(toFile: "\(dir)/\(skillFile)", atomically: true, encoding: .utf8)
+    } catch {
+        return (.failed, "\(error)")
+    }
+
+    return (action, nil)
+}
+
+private func installHook(_ t: AgentTarget, _ path: String, _ o: AgentOptions) -> AgentRow {
+    var root = JSONObject()
+    switch loadJSON(path) {
+    case .unreadable:
+        return hookRow(t, path, AgentAction.failed.rawValue, "not valid JSON, left alone; add the hook by hand")
+    case .parsed(let found):
+        root = found
+    case .missing:
+        break
+    }
+
+    let merged = addingHooks(root, hookSpecs(t))
+    guard !sameJSON(merged, root) else { return hookRow(t, path, AgentAction.unchanged.rawValue) }
+
+    let action: AgentAction = hasOurHooks(root) ? .updated : .installed
+    guard o.mode == .apply else { return hookRow(t, path, action.rawValue) }
+
+    do {
+        try saveJSON(merged, to: path)
+    } catch {
+        return hookRow(t, path, AgentAction.failed.rawValue, "\(error)")
+    }
+
+    return hookRow(t, path, action.rawValue, t.agent == .codex ? codexApproval : nil)
+}
+
+// MARK: - remove
+
+private func remove(_ ts: [AgentTarget], _ o: AgentOptions) -> [AgentRow] {
+    var rows = [AgentRow]()
+
+    for (dir, agents) in bySkillDir(ts) {
+        let (action, note) = dropSkill(dir, o)
+        rows.append(skillRow(agents, dir, action.rawValue, note))
+    }
+    for t in ts {
+        guard let path = t.hookFile else { continue }
+
+        rows.append(dropHook(t, path, o))
+    }
+
+    return rows + sweepLegacy(o)
+}
+
+private func dropSkill(_ dir: String, _ o: AgentOptions) -> (AgentAction, String?) {
+    switch skillState(dir) {
+    case .missing:
+        return (.unchanged, nil)
+    case .unreadable:
+        return (.failed, "cannot read it")
+    case .foreign:
+        return (.skipped, "not installed by gctd")
+    default:
+        break
+    }
+    guard o.mode == .apply else { return (.removed, nil) }
+
+    let fm = FileManager.default
+    do {
+        try fm.removeItem(atPath: "\(dir)/\(skillFile)")
+        // Drop the dir only when we emptied it; never touch siblings.
+        if (try? fm.contentsOfDirectory(atPath: dir))?.isEmpty == true {
+            try fm.removeItem(atPath: dir)
+        }
+    } catch {
+        return (.failed, "\(error)")
+    }
+
+    return (.removed, nil)
+}
+
+private func dropHook(_ t: AgentTarget, _ path: String, _ o: AgentOptions) -> AgentRow {
+    let root: JSONObject
+    switch loadJSON(path) {
+    case .missing:
+        return hookRow(t, path, AgentAction.unchanged.rawValue)
+    case .unreadable:
+        return hookRow(t, path, AgentAction.failed.rawValue, "not valid JSON, left alone")
+    case .parsed(let found):
+        root = found
+    }
+
+    let stripped = removingHooks(root)
+    guard !sameJSON(stripped, root) else { return hookRow(t, path, AgentAction.unchanged.rawValue) }
+    guard o.mode == .apply else { return hookRow(t, path, AgentAction.removed.rawValue) }
+
+    do {
+        try saveJSON(stripped, to: path)
+    } catch {
+        return hookRow(t, path, AgentAction.failed.rawValue, "\(error)")
+    }
+
+    return hookRow(t, path, AgentAction.removed.rawValue, t.agent == .codex ? "Codex asks you to re-approve its other hooks" : nil)
+}
+
+// Older installs copied the whole guide into per-agent dirs. Setup and
+// remove sweep ours (only ours) so no stale copy competes with the stub.
+private func sweepLegacy(_ o: AgentOptions) -> [AgentRow] {
+    guard o.scope == .user else { return [] }
+
+    let home = agentHome()
+    let dirs = [userConfigDir(.codex), home + "/.config/opencode", home + "/.cursor"]
+        .map { "\($0)/skills/\(skillName)" }
+
+    var rows = [AgentRow]()
+    for dir in dirs {
+        guard skillState(dir) == .outdated else { continue }
+
+        let (action, note) = dropSkill(dir, o)
+        rows.append(AgentRow(agent: "legacy", item: "skill", result: action.rawValue,
+                             path: "\(dir)/\(skillFile)", note: note))
+    }
+
+    return rows
+}
+
+// MARK: - status
+
+private func status(_ ts: [AgentTarget]) -> [AgentRow] {
+    var rows = [AgentRow]()
+
+    for (dir, agents) in bySkillDir(ts) {
+        rows.append(skillRow(agents, dir, skillState(dir).rawValue))
+    }
+    for t in ts {
+        guard let path = t.hookFile else {
+            rows.append(hookRow(t, "", ItemState.unsupported.rawValue))
+            continue
+        }
+
+        rows.append(hookRow(t, path, hookState(t, path).rawValue))
+    }
+
+    return rows
+}
+
+// MARK: - Output
+
+private func tilde(_ path: String) -> String {
+    let home = agentHome()
+    guard path.hasPrefix(home + "/") else { return path }
+
+    return "~" + path.dropFirst(home.count)
+}
+
+private func pad(_ s: String, _ n: Int) -> String {
+    s.padding(toLength: max(n, s.count), withPad: " ", startingAt: 0)
+}
+
+// Prints the rows and leaves: 1 when `failing` matches any row.
+private func emit(_ rows: [AgentRow], _ o: AgentOptions, failing: (AgentRow) -> Bool) -> Never {
+    let dry = o.mode == .dryRun
+    switch o.format {
+    case .json:
+        printJSON(AgentReport(scope: o.scope.rawValue, dryRun: dry, results: rows))
+    case .text:
+        if dry {
+            print("dry run: nothing changed")
+        }
+        for r in rows {
+            let note = r.note.map { "  (\($0))" } ?? ""
+            print("\(pad(r.agent, 18)) \(pad(r.item, 6)) \(pad(r.result, 11)) \(tilde(r.path))\(note)")
+        }
+    }
+
+    exit(rows.contains(where: failing) ? CLIExit.failed.rawValue : CLIExit.ok.rawValue)
 }
 
 // MARK: - context
 
-// Live pane/group summary for hooks and prompts. Human-readable default
-// (fits a SessionStart additionalContext budget); --json for tooling.
-func agentSetupContext(json: Bool) {
-    guard let c = GCTClient() else {
-        // Daemon down: hooks must fail open (empty context, rc 0), never
-        // wedge session start.
-        if json { print("{\"panes\":[],\"groups\":[],\"running\":false}") }
-        exit(0)
+// Where the caller is, for the SessionStart hook: one line, so an agent
+// knows it's in GCT and which pane without spending a call to find out.
+// Fails open: outside a pane, or with the daemon down, it prints nothing
+// and exits 0 rather than wedge session start.
+private func agentContext() -> Never {
+    guard envVar("GCT_PANE_ID") != nil,
+          let c = GCTClient(),
+          let w = c.welcome(),
+          let pane = resolvePane(w, "self") else { exit(0) }
+
+    let p = paneJSON(w, pane, names: displayNames(w))
+    var who = "GCT pane \(p.id.prefix(8)) \"\(p.name)\""
+    if let group = p.groupName {
+        who += " in group \"\(group)\""
     }
-    guard let w = c.welcome() else { exit(0) }
-    if json {
-        var panes = [[String: String]]()
-        for p in w.panes {
-            panes.append(["id": p.id.uuid.uuidString, "name": p.name ?? "Terminal",
-                          "cwd": p.cwd, "exited": p.exited ? "true" : "false"])
-        }
-        var groups = [[String: Any]]()
-        for g in w.groups {
-            groups.append(["id": g.id.uuid.uuidString, "name": g.name ?? "",
-                           "members": g.members.map(\.description)])
-        }
-        let obj: [String: Any] = ["running": true, "panes": panes, "groups": groups]
-        if let data = try? JSONSerialization.data(withJSONObject: obj),
-           let s = String(data: data, encoding: .utf8) { print(s) }
-        exit(0)
+    if p.host != LocalHost {
+        who += " on host \(p.host)"
     }
-    if w.panes.isEmpty { print("GCT: daemon running, no panes."); exit(0) }
-    print("GCT: \(w.panes.count) pane(s), \(w.groups.count) group(s). Run background tasks in GCT panes, not run_in_background: `gctd open name=<task> size=480,240 cmd=...`, inspect with `gctd dump <id> --strip-ansi`.")
-    for p in w.panes {
-        print("pane \(String(p.id.uuid.uuidString.prefix(8))) \(p.name ?? "Terminal") cwd=\(p.cwd)\(p.exited ? " exited" : "")")
-    }
-    for g in w.groups {
-        print("group \(String(g.id.uuid.uuidString.prefix(8))) \(g.name ?? "") members=\(g.members.count)")
-    }
+
+    print("\(who). Run background tasks in panes, not run_in_background: `gctd open name=<task> cmd=...`. Guide: `gctd agent show`")
     exit(0)
 }
 
-// MARK: - install / uninstall
+// MARK: - Entry
 
-// Minimal JSON merge for ~/.claude/settings.json: parse with
-// JSONSerialization, insert our SessionStart entry, write back. Never
-// touches other keys; refuses to write unparseable files (prints the
-// entry for manual install instead).
-// SessionStart budget for `context`: normally milliseconds; the timeout
-// bounds a wedged daemon. Expiry discards output, and SessionStart can't
-// block, so the session just proceeds without context.
-let claudeHookTimeout = 15
+private func parseOptions(_ args: [String]) -> AgentOptions {
+    var o = AgentOptions()
+    var it = args.makeIterator()
 
-func mergeClaudeHook(bin: String) -> Bool {
-    let path = agentHome() + "/.claude/settings.json"
-    let fm = FileManager.default
-    var root: [String: Any] = [:]
-    if fm.fileExists(atPath: path) {
-        guard let data = fm.contents(atPath: path),
-              let obj = try? JSONSerialization.jsonObject(with: data),
-              let dict = obj as? [String: Any] else {
-            fputs("settings.json unparseable; add the hook by hand:\n\(claudeHookEntry(bin: bin))\n", stderr)
-            return false
-        }
-        root = dict
-    }
-    var hooks = (root["hooks"] as? [String: Any]) ?? [:]
-    var starts = (hooks["SessionStart"] as? [[String: Any]]) ?? []
-    let entry = claudeHookEntryObject(bin: bin)
-    // Idempotent: skip when our command is already registered.
-    let ours = entry["hooks"] as? [[String: Any]]
-    let ourCmd = (ours?.first?["command"] as? String) ?? ""
-    var hasStart = false
-    for s in starts {
-        for h in (s["hooks"] as? [[String: Any]]) ?? [] {
-            if (h["command"] as? String) == ourCmd { hasStart = true }
+    while let a = it.next() {
+        switch a {
+        case "--agent":
+            guard let name = it.next() else { bad("--agent needs a name") }
+
+            o.named.append(agentNamed(name))
+        case _ where a.hasPrefix("--agent="):
+            o.named.append(agentNamed(String(a.dropFirst("--agent=".count))))
+        case "--dry-run":
+            o.mode = .dryRun
+        case "--project":
+            o.scope = .project
+        case "--force":
+            o.overwrite = .replace
+        case "--json":
+            o.format = .json
+        default:
+            bad(agentUsage)
         }
     }
-    // Migrate: older installs wrote the staged path (contains spaces —
-    // hook runners choke on it) or the bare command (an unexecable binary
-    // then fails SessionStart with a non-blocking error every session).
-    // Rewrite any gctd context entry in place instead of appending a duplicate.
-    var migrated = hasStart
-    starts = starts.map { group in
-        var group = group
-        if var hs = group["hooks"] as? [[String: Any]] {
-            for j in hs.indices {
-                if let cmd = hs[j]["command"] as? String,
-                   cmd.contains("agent-setup context"),
-                   cmd.contains("gctd"), cmd != ourCmd {
-                    hs[j]["command"] = ourCmd
-                    hs[j]["timeout"] = claudeHookTimeout
-                    migrated = true
-                }
-            }
-            group["hooks"] = hs
-        }
-        return group
-    }
-    if !migrated {
-        starts.append(entry)
-    }
-    hooks["SessionStart"] = starts
-    mergeNoticeHooks(&hooks, bin: bin)
-    root["hooks"] = hooks
-    guard let data = try? JSONSerialization.data(
-        withJSONObject: root, options: [.prettyPrinted, .sortedKeys]) else { return false }
-    do {
-        try data.write(to: URL(fileURLWithPath: path), options: .atomic)
-        return true
-    } catch {
-        fputs("write failed (\(error)); add the hook by hand:\n\(claudeHookEntry(bin: bin))\n", stderr)
-        return false
-    }
+
+    return o
 }
 
-// Claude events that should ping the desktop: it needs input, or it is done.
-let claudeNoticeEvents = ["Notification", "Stop"]
-let claudeNoticeTimeout = 10
+private func agentNamed(_ s: String) -> Agent {
+    guard let a = Agent(rawValue: s) else {
+        bad("unknown agent \(s) (one of: \(Agent.allCases.map(\.rawValue).joined(separator: ", ")))")
+    }
 
-func claudeNoticeCommand(bin: String) -> String {
-    "\(bin) notify self --hook || exit 0"
+    return a
 }
 
-// Same fail-open rules as SessionStart; `notify --hook` exits 0 itself
-// outside a GCT pane or without a message.
-func mergeNoticeHooks(_ hooks: inout [String: Any], bin: String) {
-    let cmd = claudeNoticeCommand(bin: bin)
+// `agent ...` — argv parsing lives here so main.swift's switch stays a flat
+// verb dispatch. Every path exits.
+func runAgent(_ rest: [String]) -> Never {
+    guard let sub = rest.first else { bad(agentUsage) }
 
-    for event in claudeNoticeEvents {
-        var groups = (hooks[event] as? [[String: Any]]) ?? []
-        // Any gctd notify entry is ours, whatever path wrote it: point it
-        // at bin in place (like SessionStart) instead of adding a twin.
-        // Twins left by older versions collapse into the first one.
-        var present = false
-        var emptied = Set<Int>()
-        for g in groups.indices {
-            guard var hs = groups[g]["hooks"] as? [[String: Any]] else { continue }
-            let before = hs.count
-            hs = hs.compactMap { h in
-                guard let c = h["command"] as? String,
-                      c.contains("gctd"), c.contains("notify self --hook") else { return h }
-                if present {
-                    return nil
-                }
-                present = true
-                var mine = h
-                mine["command"] = cmd
-                return mine
-            }
-            if hs.isEmpty && before > 0 {
-                emptied.insert(g)
-            }
-            groups[g]["hooks"] = hs
-        }
-        groups = groups.indices.filter { !emptied.contains($0) }.map { groups[$0] }
-        if present {
-            hooks[event] = groups
-            continue
-        }
-
-        groups.append(["matcher": "", "hooks": [["type": "command", "command": cmd,
-                                                  "timeout": claudeNoticeTimeout]]])
-        hooks[event] = groups
-    }
-}
-
-func claudeHookEntryObject(bin: String) -> [String: Any] {
-    // `|| exit 0`: fail open. An unexecable binary (bad signature, missing
-    // path) exits nonzero with empty stderr, which Claude surfaces as a
-    // SessionStart hook error every session — swallow it instead.
-    ["matcher": "", "hooks": [["type": "command",
-                               "command": "\(bin) agent-setup context || exit 0",
-                               "timeout": claudeHookTimeout]]]
-}
-
-func claudeHookEntry(bin: String) -> String {
-    "{\"hooks\":{\"SessionStart\":[{\"matcher\":\"\",\"hooks\":[{\"type\":\"command\",\"command\":\"\(bin) agent-setup context || exit 0\",\"timeout\":\(claudeHookTimeout)}]}]}}"
-}
-
-func agentSetupInstall(harnesses: [Harness], hooks: Bool, yes: Bool) {
-    guard let text = AgentSkill.text() else {
-        die("skill source not found (looked in \(AgentSkill.candidatePaths().joined(separator: ", ")))")
-    }
-    // Hook command prefers /usr/local/bin/gctd: no spaces (hook runners
-    // that split on whitespace choke on "Application Support"), stable
-    // across rebuilds. Falls back to the invoked binary when the symlink
-    // is absent (and migrateHookCommand rewrites stale entries on the
-    // next --hooks install).
-    var self0 = "/usr/local/bin/gctd"
-    if !FileManager.default.isExecutableFile(atPath: self0) {
-        self0 = CommandLine.arguments.first ?? "gctd"
-        if !self0.hasPrefix("/") {
-            self0 = FileManager.default.currentDirectoryPath + "/" + self0
-        }
-    }
-    if !yes {
-        print("will install GCT skill into:")
-        for h in harnesses { print("  \(h.skillDir)/SKILL.md") }
-        if hooks {
-            print("plus Claude SessionStart hook: \(self0) agent-setup context")
-            print("plus Claude Notification + Stop hooks: \(claudeNoticeCommand(bin: self0))")
-        }
-        fputs("re-run with --yes to apply\n", stderr)
-        exit(2)
-    }
-    let fm = FileManager.default
-    for h in harnesses {
-        do {
-            try fm.createDirectory(atPath: h.skillDir, withIntermediateDirectories: true)
-            try text.write(toFile: h.skillDir + "/SKILL.md", atomically: true, encoding: .utf8)
-            print("installed \(h.skillDir)/SKILL.md")
-        } catch {
-            die("install into \(h.skillDir) failed: \(error)")
-        }
-    }
-    if hooks {
-        guard harnesses.contains(where: { $0.name == "claude" }) else {
-            die("--hooks needs the claude harness selected")
-        }
-        if mergeClaudeHook(bin: self0) {
-            print("merged SessionStart, Notification, Stop hooks into \(agentHome())/.claude/settings.json")
-        } else {
-            die("hook merge failed (manual entry printed above)")
-        }
-    }
-    exit(0)
-}
-
-func agentSetupUninstall(harnesses: [Harness]) {
-    let fm = FileManager.default
-    for h in harnesses {
-        let dir = h.skillDir
-        if fm.fileExists(atPath: dir + "/SKILL.md") {
-            try? fm.removeItem(atPath: dir + "/SKILL.md")
-            // Drop the dir when we emptied it; never touch siblings.
-            if (try? fm.contentsOfDirectory(atPath: dir))?.isEmpty == true {
-                try? fm.removeItem(atPath: dir)
-            }
-            print("removed \(dir)/SKILL.md")
-        } else {
-            print("absent \(dir)/SKILL.md")
-        }
-    }
-    // Hook entries stay (cheap, fail-open, and shared files deserve a
-    // manual edit); say so explicitly.
-    if harnesses.contains(where: { $0.name == "claude" }) {
-        fputs("note: GCT hook entries left in \(agentHome())/.claude/settings.json (remove by hand)\n", stderr)
-    }
-    exit(0)
-}
-
-// `agent-setup ...` — argv parsing lives here so main.swift's switch stays
-// a flat verb dispatch. Every path exits (directly or via die()).
-func runAgentSetup(_ rest: [String]) {
-    var args = rest
-    var harnessNames = [String]()
-    var hooks = false
-    var yes = false
-    var json = false
-    var sub: String?
-    for a in args {
-        if a.hasPrefix("--harness=") {
-            harnessNames.append(contentsOf: a.dropFirst("--harness=".count).split(separator: ",").map(String.init))
-        } else if a == "--hooks" { hooks = true }
-        else if a == "--yes" { yes = true }
-        else if a == "--json" { json = true }
-        else if sub == nil { sub = a }
-        else { die("unexpected \(a)") }
-    }
-    let selected: [Harness]
-    if harnessNames.isEmpty {
-        selected = agentHarnesses()
-    } else {
-        selected = harnessNames.map {
-            guard let h = harness(named: $0) else {
-                die("unknown harness \($0) (one of: \(agentHarnesses().map(\.name).joined(separator: ", ")))")
-            }
-            return h
-        }
-    }
+    let args = Array(rest.dropFirst())
     switch sub {
-    case nil, "print": agentSetupPrint()
-    case "install": agentSetupInstall(harnesses: selected, hooks: hooks, yes: yes)
-    case "uninstall": agentSetupUninstall(harnesses: selected)
-    case "context": agentSetupContext(json: json)
-    default: die("agent-setup print|install|uninstall|context [--harness=..] [--hooks] [--yes] [--json]")
+    case "show":
+        print(AgentGuide.guide)
+        exit(CLIExit.ok.rawValue)
+    case "context":
+        agentContext()
+    case "setup", "status":
+        let o = parseOptions(args)
+        let ts = selected(o, from: .found)
+        guard !ts.isEmpty else {
+            let all = Agent.allCases.map(\.rawValue).joined(separator: ", ")
+            die("no agents found (looked for \(all)); name one with --agent", .notFound)
+        }
+
+        if sub == "status" {
+            emit(status(ts), o) { $0.result != ItemState.current.rawValue && $0.result != ItemState.unsupported.rawValue }
+        }
+        emit(setup(ts, o), o) { $0.result == AgentAction.failed.rawValue }
+    case "remove":
+        let o = parseOptions(args)
+        emit(remove(selected(o, from: .all), o), o) { $0.result == AgentAction.failed.rawValue }
+    default:
+        bad(agentUsage)
     }
 }

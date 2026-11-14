@@ -850,8 +850,6 @@ case "help", "--help", "-h":
     printHelp(rest.first)
 
 default:
-    // runAgentSetup exits on every path, but the compiler can't see
-    // that (it returns void); belt-and-braces so usage never follows.
-    if verb == "agent-setup" { runAgentSetup(rest); exit(0) }
+    if verb == "agent" { runAgent(rest) }
     usage()
 }

@@ -3,7 +3,7 @@
 `gctd` doubles as the CLI for agents and harnesses talking to the running
 daemon. The point: a background job in a GCT pane is on your canvas, grouped,
 with no time limit, and you can see what it's doing without asking. The agent
-can still read it back. The full agent prompt is [SKILL.md](../SKILL.md).
+can still read it back. The full agent guide is `gctd agent show`.
 
 ![An agent, its build, a monitor and a log tail grouped on one canvas](media/agents.jpg)
 
@@ -91,27 +91,49 @@ panes when the work lands.
 ## How an agent finds out
 
 ```sh
-gctd agent-setup install --hooks --yes   # skill into every harness dir + Claude hook
-gctd agent-setup print                   # targets + skill text (manual installs)
-gctd agent-setup context                 # live pane state (what the hook emits)
+gctd agent setup     # skill + hooks for every agent found; safe to rerun
+gctd agent status    # current / outdated / missing / foreign per item
+gctd agent remove    # take both back out
 ```
 
-`install --hooks` also merges Claude `Notification` and `Stop` hooks that call
-`gctd notify self --hook`, so a Claude Code session in a pane pings you when it
-needs input or finishes. The hook exits 0 outside a GCT pane and never blocks
-the agent.
+Two things get installed:
 
-`install` copies `SKILL.md` (staged beside the daemon by `make build`, no
-network) into the Claude, Codex, opencode, Cursor, and Cursor-agents skill
-dirs (`--harness=` narrows it; dry-run without `--yes`). `--hooks` merges a
-Claude `SessionStart` hook (via `/usr/local/bin/gctd`, no spaces) that injects
-live pane state every session. That's the discovery path: the agent learns GCT
-exists, and what's on the canvas, before the first prompt.
+- **The skill** is a stub. It tells the agent to run `gctd agent show`, which
+  prints the guide from the installed `gctd`. Upgrading gctd updates what
+  agents know; nothing to reinstall.
+- **The hooks.** `SessionStart` runs `gctd agent context`, one line saying
+  which pane the agent is in, so it doesn't spend a call finding out. Claude
+  Code also gets `Notification` and `Stop` hooks (`gctd notify self --hook`)
+  that ping you when a session needs input or finishes.
 
-The hook has a 15s timeout and `|| exit 0`. Daemon down, wedged, or an
-unexecable binary means empty context, never an error, never a blocked start.
-Re-running `install --hooks` migrates stale entries in place. Codex also needs
-`[features] skills=true` in its config.
+| Agent | `--agent` | Skill | Hooks |
+|---|---|---|---|
+| Claude Code | `claude` | `~/.claude/skills/gct` | `~/.claude/settings.json` |
+| Codex | `codex` | `~/.agents/skills/gct` | `~/.codex/hooks.json` (`SessionStart`) |
+| opencode | `opencode` | `~/.agents/skills/gct` | none |
+| pi | `pi` | `~/.agents/skills/gct` | none |
+
+Agents are found by config dir (`CLAUDE_CONFIG_DIR` and `CODEX_HOME` are
+honored) or by program on `PATH`. `--agent NAME` sets one up whether or not it
+was found. `--project` targets the current repository instead of your
+account, `--dry-run` reports without changing anything, `--force` replaces a
+`gct` skill gctd didn't install, `--json` prints the result.
+
+Setup merges into the settings file and keeps every other key and hook (the
+file is rewritten with sorted keys). A file that isn't valid JSON is left
+alone and reported `failed`. Rerunning reports current items as `unchanged`
+and migrates older entries in place. Every hook ends in `|| exit 0` and has a
+timeout: daemon down, wedged, or an unexecable binary means no context, never
+an error, never a blocked start. The hook prints nothing outside a GCT pane.
+
+Hooks only run in sessions that start after setup. Codex asks you to approve a
+new or changed hook with `/hooks`; Claude Code skips hooks until you trust the
+folder. Any other agent that can run commands in a pane can still run
+`gctd agent show` and follow the guide.
+
+The guide tells agents how to pick a target: "here" and "beside you" mean
+their own pane, a name beats everything, and "the focused pane" gets a
+question back, because the daemon can't see canvas focus.
 
 The app's "Install gctd Command…" menu item does the same thing plus the
 `/usr/local/bin/gctd` symlink.

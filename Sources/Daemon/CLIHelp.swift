@@ -73,8 +73,20 @@ let commandHelp: [CommandHelp] = [
                 summary: "glide the camera to a world point or pane"),
     CommandHelp(name: "do", synopsis: "do <action> [pane] [dur=..]",
                 summary: "run a keybind action (fit-all, zoom-pane..)"),
-    CommandHelp(name: "agent-setup", synopsis: "agent-setup print|install|uninstall|context",
-                summary: "skill install + live pane context for hooks (--harness=claude,codex,opencode,cursor,cursor-agents; install --hooks merges a Claude SessionStart hook)"),
+    CommandHelp(name: "agent", synopsis: "agent setup|status|remove|show|context [--agent NAME]... [--project] [--dry-run] [--force] [--json]",
+                summary: "teach coding agents about GCT: a skill and session hooks",
+                notes: """
+                setup    install both for each agent found (claude, codex, opencode, pi); safe to rerun
+                status   current, outdated, missing, foreign, unreadable or unsupported; exit 1 unless all current
+                remove   take both back out, for every known agent
+                show     print the guide the installed skill points at (upgrading gctd updates it)
+                context  where the caller is, one line (what the SessionStart hook prints)
+                --agent NAME  only that agent, found or not; repeat for several
+                --project     the current repository instead of your account
+                --dry-run     report what would change
+                --force       replace a `gct` skill gctd didn't install
+                --json        machine-readable result
+                """),
 ]
 
 private let helpFooter = """

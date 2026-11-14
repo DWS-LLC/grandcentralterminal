@@ -1,10 +1,10 @@
 # Grand Central Terminal — build, sign, install.
 #
 #   make build      libghostty (if stale) + swift release + app bundle +
-#                   staged support copy (daemon, helper, agent skill)
+#                   staged support copy (daemon, helper)
 #   make notarize   build + sign + submit + staple (needs Apple creds)
 #   make install    everything above + /Applications +
-#                   /usr/local/bin/gctd symlink + harness skill install
+#                   /usr/local/bin/gctd symlink + agent skill + hooks
 #   make uninstall  remove /Applications copy + symlink
 #                   (keeps pane state, skills, config)
 #   make clean      drop build artifacts (not vendor/, not user state)
@@ -51,13 +51,12 @@ build:
 	cp "$(SWIFT_BUILD)/gctd" "$(BUNDLE)/Contents/MacOS/"
 	cp "$(SWIFT_BUILD)/ptyexec" "$(BUNDLE)/Contents/MacOS/"
 	cp Resources/AppIcon.icns "$(BUNDLE)/Contents/Resources/"
-	cp SKILL.md "$(BUNDLE)/Contents/Resources/"
 	mkdir -p "$(DAEMON_APP)/Contents/MacOS"
 	cp Resources/DaemonInfo.plist "$(DAEMON_APP)/Contents/Info.plist"
 	VER=$$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$(BUNDLE)/Contents/Info.plist"); \
 		/usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $$VER" -c "Set :CFBundleVersion $$VER" "$(DAEMON_APP)/Contents/Info.plist"
 	cp "$(SWIFT_BUILD)/GCTDaemon" "$(SWIFT_BUILD)/gctd" "$(SWIFT_BUILD)/ptyexec" "$(DAEMON_APP)/Contents/MacOS/"
-	mkdir -p "$(SUPPORT)/bin" "$(SUPPORT)/skills/gct"
+	mkdir -p "$(SUPPORT)/bin"
 	# Rename-swap, never overwrite in place: the daemon executes from this
 	# path, and an in-place rewrite of a running image invalidates its code
 	# signature (macOS then SIGKILLs every new exec — including the Claude
@@ -66,7 +65,6 @@ build:
 	mv -f "$(SUPPORT)/bin/gctd.new" "$(SUPPORT)/bin/gctd"
 	cp "$(SWIFT_BUILD)/ptyexec" "$(SUPPORT)/bin/ptyexec.new"
 	mv -f "$(SUPPORT)/bin/ptyexec.new" "$(SUPPORT)/bin/ptyexec"
-	cp SKILL.md "$(SUPPORT)/skills/gct/SKILL.md"
 	@echo "built $(BUNDLE) (daemon staged in $(SUPPORT)/bin)"
 
 # Developer ID + hardened runtime. Inner binaries first, bundle last
@@ -108,14 +106,14 @@ install: notarize
 	sudo rm -rf "$(DESTDIR)/Applications/$(APP_NAME).app"
 	sudo cp -R "$(BUNDLE)" "$(DESTDIR)/Applications/$(APP_NAME).app"
 	sudo ln -sf "$(SUPPORT)/bin/gctd" "$(DESTDIR)/usr/local/bin/gctd"
-	"$(SUPPORT)/bin/gctd" agent-setup install --hooks --yes
+	"$(SUPPORT)/bin/gctd" agent setup
 	@echo "installed /Applications/$(APP_NAME).app + /usr/local/bin/gctd"
 
 uninstall:
 	sudo rm -rf "$(DESTDIR)/Applications/$(APP_NAME).app"
 	sudo rm -f "$(DESTDIR)/usr/local/bin/gctd"
 	@echo "removed. Pane state/config/skills kept;"
-	@echo "  skills: gctd agent-setup uninstall"
+	@echo "  skills + hooks: gctd agent remove"
 
 clean:
 	rm -rf "$(BUILD_DIR)" .build

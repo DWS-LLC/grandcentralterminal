@@ -53,8 +53,8 @@ gctd dump build --strip-ansi             # the agent reads it back
 
 ![An agent, its build, a monitor and a log tail, grouped](docs/media/agents.jpg)
 
-`gctd agent-setup install` teaches Claude, Codex, opencode and Cursor that
-this exists. See [docs/agents.md](docs/agents.md).
+`gctd agent setup` teaches Claude Code, Codex, opencode and pi that this
+exists. See [docs/agents.md](docs/agents.md).
 
 ## Why that name?
 

@@ -110,7 +110,6 @@ if [ -z "$GCTD_BIN" ]; then
 fi
 BIN_DIR=$(dirname "$GCTD_BIN")
 tar -czf "$OUT" -C "$BIN_DIR" gctd ptyexec
-cp SKILL.md "build/gctd-${VERSION}-SKILL.md"
 echo "release: $OUT"
 echo "linked libs (want: not a dynamic executable):"
 file "$BIN_DIR/gctd"

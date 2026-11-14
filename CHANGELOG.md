@@ -13,6 +13,9 @@
 - Panes get `GCT_BIN_DIR`, the `gctd` matching their daemon, first on `PATH`. Startup files that rewrite `PATH` can bury it; see docs/agents.md.
 
 ### Changed
+- `gctd agent-setup` is now `gctd agent`: `setup`, `status`, `remove`, `show`, `context`. Setup finds agents (Claude Code, Codex, opencode, pi), is safe to rerun, and takes `--agent`, `--project`, `--dry-run`, `--force` and `--json`. It always installs every hook the agent supports, including Claude's `Notification` and `Stop`, and `remove` takes them back out.
+- The installed skill is a stub that runs `gctd agent show`, so upgrading gctd updates what agents know. Setup moves Codex to `~/.agents/skills` and sweeps the old per-agent copies (Codex, opencode, Cursor); Cursor is no longer targeted.
+- The SessionStart hook prints one line, which pane the agent is in, and nothing outside a GCT pane. It used to list every pane and group.
 - Protocol 7: `paneExit` carries the real exit status (it was always 0).
 - Protocol 6. The daemon, not the canvas, dials `[host.*]` (it re-reads `config.toml` when it changes). The canvas connects to one daemon at a time. Groups and ties may now mix hosts.
 - On macOS the canvas starts the daemon as its own background app (`GCT Daemon.app`) instead of as its child, so the daemon's LAN links to peers survive the canvas quitting. Its stderr goes to `daemon.log` beside `state.json`.
