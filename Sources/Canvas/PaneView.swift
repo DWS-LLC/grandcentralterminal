@@ -25,6 +25,10 @@ final class PaneView: NSView {
     private let statusLabel = CATextLayer()
     // Veil over the whole pane: dims quiet unfocused panes (see CanvasDim).
     private let dimLayer = CALayer()
+    // keep-open pane whose program ended: a veil, not alpha. The pane stays
+    // opaque, or the cables drawn under it show through.
+    private let endedLayer = CALayer()
+    private static let endedVeil: Float = 0.45
     // OSC 7501 program status, right-aligned in the titlebar (nil = none).
     var programStatus: ProgramStatusStore.Summary? { didSet { applyChrome() } }
 
@@ -88,6 +92,12 @@ final class PaneView: NSView {
         dimLayer.opacity = 0
         dimLayer.zPosition = 1
         layer?.addSublayer(dimLayer)
+
+        endedLayer.cornerRadius = 6
+        endedLayer.opacity = 0
+        endedLayer.zPosition = 1
+        endedLayer.backgroundColor = NSColor.black.cgColor
+        layer?.addSublayer(endedLayer)
 
         // Above the dim veil: a dimmed pane still shows what you'd open.
         linkLabel.contentsScale = NSScreen.main?.backingScaleFactor ?? 2
@@ -248,6 +258,7 @@ final class PaneView: NSView {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         dimLayer.frame = bounds
+        endedLayer.frame = bounds
         CATransaction.commit()
 
         // Title text vertically centered, 8pt inset. Sublayer frames are
@@ -319,7 +330,8 @@ final class PaneView: NSView {
     // fill — local panes keep the theme chrome exactly).
     func applyChrome() {
         let t = GCTTheme.current
-        alphaValue = meta.offline || meta.exited ? Self.offlineAlpha : 1
+        alphaValue = meta.offline ? Self.offlineAlpha : 1
+        endedLayer.opacity = meta.exited ? Self.endedVeil : 0
         layer?.borderWidth = 0
         layer?.borderColor = nil
         // Multi-select beats focus: selected panes wear accent chrome so a

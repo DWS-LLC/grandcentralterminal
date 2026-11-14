@@ -85,7 +85,12 @@ let commandHelp: [CommandHelp] = [
     CommandHelp(name: "font", synopsis: "font <+N|-N|reset> [pane]",
                 summary: "grow or shrink terminal text (points) on every pane, or one; lasts until relaunch"),
     CommandHelp(name: "session", synopsis: "session <name>",
-                summary: "show a machine's canvas: local or a [host.<name>] (`gctd hosts`)"),
+                summary: "show a machine's canvas: local or a [host.<name>] (`gctd hosts`)",
+                notes: """
+                The canvas talks to one daemon at a time, and only that daemon's gctd
+                reaches it. After `session enterprise` it hears enterprise's gctd, not
+                this machine's: to come back, run `gctd session local` on enterprise.
+                """),
     CommandHelp(name: "agent", synopsis: "agent setup|status|remove|show|context [--agent NAME]... [--project] [--dry-run] [--force] [--json]",
                 summary: "teach coding agents about GCT: a skill and session hooks",
                 notes: """

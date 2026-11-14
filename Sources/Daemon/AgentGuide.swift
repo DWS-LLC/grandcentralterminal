@@ -74,7 +74,7 @@ pick the pane, and ask if it isn't obvious.
 | "top in a narrow pane on the right" | `gctd open name=top side=right size=33%,100% cmd=top` |
 | "put it below / to the left" | `side=below size=100%,30%`, `side=left size=40%,100%` |
 | make the text bigger or smaller | `gctd font +2`, `gctd font -2`, `gctd font reset` (add a pane to change only it) |
-| switch to session "X" | `gctd session X` (`local` or a name from `gctd hosts`) |
+| switch to session "X" | `gctd session X` (`local` or a name from `gctd hosts`). The canvas then hears only X's daemon, so to switch back run `gctd session local` from a pane on X |
 
 `size=w,h` is in world points: `480,240` for a task, `900,640` for a log.
 `size=33%,100%` is a share of your own pane's width and height. `side=` picks

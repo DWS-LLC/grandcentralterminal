@@ -115,7 +115,9 @@ final class SurfaceHost: @unchecked Sendable {
         if let points {
             action = points > 0 ? "increase_font_size:\(points)" : "decrease_font_size:\(-points)"
         }
-        _ = ghostty_surface_binding_action(s, action, UInt(action.utf8.count))
+        if !ghostty_surface_binding_action(s, action, UInt(action.utf8.count)) {
+            NSLog("[gct] font action refused: \(action)")
+        }
     }
 
     // Tell the daemon only when the grid really moved.
