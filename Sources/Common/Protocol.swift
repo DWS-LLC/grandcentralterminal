@@ -6,7 +6,7 @@
 
 import Foundation
 
-public let ProtoVersion: UInt16 = 8
+public let ProtoVersion: UInt16 = 9
 // First protocol revision whose daemon understands MsgTag.arrangePanes.
 public let ArrangeProtoVersion: UInt16 = 2
 // First protocol revision whose daemon understands MsgTag.layoutPolicy.
@@ -22,6 +22,8 @@ public let PeerProtoVersion: UInt16 = 6
 public let WaitProtoVersion: UInt16 = 7
 // First protocol revision whose daemon relays the font and session canvas verbs.
 public let CanvasVerbProtoVersion: UInt16 = 8
+// First protocol revision whose daemon keeps an ended pane open (CreatePane.keepOpen).
+public let KeepOpenProtoVersion: UInt16 = 9
 
 // PaneExit.code of a pane whose status nobody collected.
 public let ExitUnknown: Int32 = -1
@@ -156,6 +158,9 @@ public struct CreatePane: Codable, Sendable {
     // "above"/"below" vertically. Nil = no shove (plain admit trial).
     // Decodes missing as nil.
     public var joinDirection: String?
+    // Leave the pane in the layout, scrollback and all, once its program
+    // ends: until closed, or keep-open-ttl. Decodes missing as false.
+    public var keepOpen: Bool
     // The pane this one was spawned from (cables, spring links); a spawn
     // from a caller pane has that caller as parent. Decodes missing as nil.
     public var parent: PaneID?
@@ -168,17 +173,19 @@ public struct CreatePane: Codable, Sendable {
     public init(rect: Rect, cwd: String? = nil, name: String? = nil,
                 command: String? = nil, allowOverlap: Bool = false, gap: Double = 0,
                 joinGroup: GroupID? = nil, joinDirection: String? = nil,
+                keepOpen: Bool = false,
                 parent: PaneID? = nil, reqID: String? = nil,
                 host: String? = nil) {
         self.rect = rect; self.cwd = cwd; self.name = name
         self.command = command; self.allowOverlap = allowOverlap; self.gap = gap
         self.joinGroup = joinGroup; self.joinDirection = joinDirection
+        self.keepOpen = keepOpen
         self.parent = parent; self.reqID = reqID
         self.host = host
     }
     enum CodingKeys: String, CodingKey {
         case rect, cwd, name, command, allowOverlap, gap, joinGroup, joinDirection
-        case parent, reqID, host
+        case keepOpen, parent, reqID, host
     }
     public init(from decoder: any Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -190,6 +197,7 @@ public struct CreatePane: Codable, Sendable {
         gap = try c.decodeIfPresent(Double.self, forKey: .gap) ?? 0
         joinGroup = try c.decodeIfPresent(GroupID.self, forKey: .joinGroup)
         joinDirection = try c.decodeIfPresent(String.self, forKey: .joinDirection)
+        keepOpen = try c.decodeIfPresent(Bool.self, forKey: .keepOpen) ?? false
         parent = try c.decodeIfPresent(PaneID.self, forKey: .parent)
         reqID = try c.decodeIfPresent(String.self, forKey: .reqID)
         host = try c.decodeIfPresent(String.self, forKey: .host)
@@ -418,7 +426,19 @@ public struct PaneExit: Codable, Sendable {
     // Shell-style status (128+signal when killed); ExitUnknown when the
     // daemon never saw one (closed by a client, or no waitpid result).
     public var code: Int32
-    public init(id: PaneID, code: Int32) { self.id = id; self.code = code }
+    // The program ended but the pane stays (CreatePane.keepOpen): canvases
+    // dim it instead of removing it. Decodes missing as false.
+    public var kept: Bool
+    public init(id: PaneID, code: Int32, kept: Bool = false) {
+        self.id = id; self.code = code; self.kept = kept
+    }
+    enum CodingKeys: String, CodingKey { case id, code, kept }
+    public init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(PaneID.self, forKey: .id)
+        code = try c.decode(Int32.self, forKey: .code)
+        kept = try c.decodeIfPresent(Bool.self, forKey: .kept) ?? false
+    }
 }
 
 public struct ErrorReply: Codable, Sendable {

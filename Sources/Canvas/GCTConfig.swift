@@ -803,6 +803,9 @@ struct GCTConfig {
     # Raising it re-spreads existing panes on reload-config (and next
     # launch); lowering it only affects future moves.
     window-gap = 0
+    # How long a `gctd open --keep-open` pane lingers after its program
+    # ends (s, m, h, d; 0 = until closed). gctd reads this one, not the app.
+    keep-open-ttl = "7d"
     # Magnetic window snapping (on by default): dragging or resizing a
     # pane within snap-radius pulls it flush with nearby panes and
     # lights full-canvas guide lines (fast fade in/out). Toggling only

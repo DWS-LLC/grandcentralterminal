@@ -436,24 +436,8 @@ final class Server {
                 closeGuest(guest)
                 return
             }
-            guard let pane = panes[req.id] else { lock.unlock(); return }
-            panes.removeValue(forKey: req.id)
-            forgetProxyLocked(pane)
-            reaping.append(pane)
-            for r in remotes {
-                r.subs.remove(req.id)
-                r.backlog.removeValue(forKey: req.id)
-            }
-            let pruned = prunePaneLocked(req.id)
-            scheduleSaveLocked()
             lock.unlock()
-            // The reader thread unblocks with EIO once the shell dies; its
-            // paneDied becomes a no-op (untracked), so broadcast here.
-            pane.terminate()
-            announceExit(req.id, ExitUnknown)
-            for g in pruned.touched { broadcast(tag: .groupMeta, json: g) }
-            for gid in pruned.emptied { broadcast(tag: .groupExit, json: GroupRef(id: gid)) }
-            broadcastTies(pruned)
+            closeLocalPane(req.id)
 
         case .setTie:
             guard let req: TieMeta = frame.decode() else { return }
@@ -786,7 +770,8 @@ final class Server {
     }
 
     private func snapshotLocked() -> SavedState {
-        SavedState(panes: panes.values.map(\.meta),
+        // An ended keep-open pane has no program to respawn.
+        SavedState(panes: panes.values.filter { $0.keptSince == nil }.map(\.meta),
                    groups: Array(groups.values), ties: Array(ties.values),
                    proxies: panes.values.compactMap { pane in
                        guard let proxy = pane as? RemotePane, let remote = proxy.remoteID else { return nil }
@@ -995,6 +980,7 @@ final class Server {
             return
         }
         let pane = Pane(meta: meta, command: req.command)
+        pane.keepOpen = req.keepOpen
         do {
             try pane.spawn(cols: 80, rows: 24)
         } catch {
@@ -1146,6 +1132,30 @@ final class Server {
         }
     }
 
+    // Drop a pane from the layout, hang it up and tell every client. One
+    // that already ended (keep-open) hands late waiters its real status.
+    private func closeLocalPane(_ id: PaneID) {
+        lock.lock()
+        guard let pane = panes.removeValue(forKey: id) else { lock.unlock(); return }
+        let status = pane.keptSince == nil ? ExitUnknown : pane.exitCode ?? ExitUnknown
+        forgetProxyLocked(pane)
+        reaping.append(pane)
+        for r in remotes {
+            r.subs.remove(id)
+            r.backlog.removeValue(forKey: id)
+        }
+        let pruned = prunePaneLocked(id)
+        scheduleSaveLocked()
+        lock.unlock()
+        // The reader thread unblocks with EIO once the shell dies; its
+        // paneDied becomes a no-op (untracked), so broadcast here.
+        pane.terminate()
+        announceExit(id, status)
+        for g in pruned.touched { broadcast(tag: .groupMeta, json: g) }
+        for gid in pruned.emptied { broadcast(tag: .groupExit, json: GroupRef(id: gid)) }
+        broadcastTies(pruned)
+    }
+
     // Called from the pane's reader thread (EOF/EIO) and from housekeep.
     // The reader thread owns closing the master fd; close() on macOS does
     // not unblock a blocked read, so we must not close here.
@@ -1160,6 +1170,19 @@ final class Server {
         // land here, and only the first may broadcast.
         lock.lock()
         pane.markExited()
+        if pane.keepOpen {
+            // Stays in the layout (and in groups and ties) with its
+            // scrollback; EOF and housekeep both land here, first one wins.
+            let first = panes[pane.id] != nil && pane.keptSince == nil
+            if first {
+                pane.keptSince = Date()
+                pane.meta.exited = true
+                scheduleSaveLocked()
+            }
+            lock.unlock()
+            if first { announceExit(pane.id, status, kept: true) }
+            return
+        }
         guard panes.removeValue(forKey: pane.id) != nil else {
             lock.unlock()
             return
@@ -1187,12 +1210,12 @@ final class Server {
     }
 
     // Remember the status for late waiters, then tell every client.
-    private func announceExit(_ id: PaneID, _ code: Int32) {
+    private func announceExit(_ id: PaneID, _ code: Int32, kept: Bool = false) {
         lock.lock()
         if exits.updateValue(code, forKey: id) == nil { exitOrder.append(id) }
         if exitOrder.count > Self.exitsCap { exits.removeValue(forKey: exitOrder.removeFirst()) }
         lock.unlock()
-        broadcast(tag: .paneExit, json: PaneExit(id: id, code: code))
+        broadcast(tag: .paneExit, json: PaneExit(id: id, code: code, kept: kept))
     }
 
     // Blocking writes outside the lock: a slow peer stalls only us.
@@ -1269,6 +1292,36 @@ final class Server {
             closeGuest(guest)
         }
         peers.pollConfig()
+        sweepKept()
+    }
+
+    // Ended keep-open panes older than keep-open-ttl get closed. The
+    // config is re-read once a minute, not every tick.
+    private static let keepSweepSecs: TimeInterval = 60
+    private var lastKeepSweep = Date.distantPast
+
+    private func sweepKept() {
+        let now = Date()
+        lock.lock()
+        guard now.timeIntervalSince(lastKeepSweep) >= Self.keepSweepSecs else {
+            lock.unlock()
+            return
+        }
+        lastKeepSweep = now
+        let kept = panes.values.filter { $0.keptSince != nil }
+        lock.unlock()
+        guard !kept.isEmpty else { return }
+
+        // 0 = never expires.
+        let ttl = PeerConfig.keepOpenTTL()
+        guard ttl > 0 else { return }
+
+        for pane in kept {
+            guard let since = pane.keptSince, now.timeIntervalSince(since) > ttl else { continue }
+
+            log("kept pane \(pane.id) expired")
+            closeLocalPane(pane.id)
+        }
     }
 
     func shutdown() {

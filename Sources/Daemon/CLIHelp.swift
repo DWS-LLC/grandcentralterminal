@@ -21,7 +21,7 @@ let commandHelp: [CommandHelp] = [
                 summary: "all commands, or the details of one"),
 
     CommandHelp(name: "open",
-                synopsis: "open [cwd=..] [name=..] [cmd=..] [group=..] [parent=<pane>] [side=right|left|above|below] [size=w,h|w%,h%] [rect=x,y,w,h] [host=<peer>] [--wait]",
+                synopsis: "open [cwd=..] [name=..] [cmd=..] [group=..] [parent=<pane>] [side=right|left|above|below] [size=w,h|w%,h%] [rect=x,y,w,h] [host=<peer>] [--keep-open] [--wait [for=<span>]]",
                 summary: "open a pane beside focused/origin, print its id",
                 notes: """
                 side= the caller's edge it lands on (default right).
@@ -31,7 +31,11 @@ let commandHelp: [CommandHelp] = [
                 parent= wires it to that pane, whoever calls.
                 host= runs it on a [host.<peer>] machine.
                 --wait blocks until the pane's program ends and exits with its status
-                (id is printed first), like `rex run --wait`.
+                (id is printed first), like `rex run --wait`. for=10m gives up after
+                that long and exits 124.
+                --keep-open leaves the pane (dimmed, ✕) with its scrollback once the
+                program ends, so you can dump it. It goes on `gctd close`, or after
+                keep-open-ttl in config.toml (default 7d, 0 = until closed).
                 """),
     CommandHelp(name: "tie", synopsis: "tie <parent> <child>... [at=0.4]",
                 summary: "tie the cables from <parent> to each <child> into one bundle; prints the tie id"),
@@ -50,12 +54,13 @@ let commandHelp: [CommandHelp] = [
                 notes: "name, state, host, cwd, foreground process, repo, group, parent, placement."),
     CommandHelp(name: "hosts", synopsis: "hosts [--json]",
                 summary: "peer machines this daemon dials, and whether each link is up"),
-    CommandHelp(name: "wait", synopsis: "wait <pane>",
+    CommandHelp(name: "wait", synopsis: "wait <pane> [for=<span>]",
                 summary: "block until a pane's program ends; exit with its status",
                 notes: """
                 Exit(n) is n, death by signal is 128+signal. A pane closed by a
                 client has no status: exit 1. Panes that ended recently (last 256)
                 still answer; older or unknown ones exit 3.
+                for=90s, 10m, 2h gives up after that long and exits 124; the pane keeps running.
                 """),
     CommandHelp(name: "dump", synopsis: "dump <pane> [limit=N] [--strip-ansi]",
                 summary: "scrollback snapshot (id prefix, name, or self)"),
@@ -103,7 +108,8 @@ private let helpFooter = """
       Env:      GCT_PANE_ID (this pane), GCT_SOCK (this daemon), GCT_BIN_DIR (the gctd
                 matching this daemon, first on PATH inside panes)
       Exit:     0 ok, 1 failed, 2 bad command line, 3 target missing or ambiguous,
-                4 daemon unreachable; wait/open --wait return the program's status
+                4 daemon unreachable, 124 wait for= timed out; wait/open --wait
+                return the program's status
     """
 
 private func indented(_ text: String, by pad: String) -> String {

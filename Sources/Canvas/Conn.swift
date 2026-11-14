@@ -13,7 +13,7 @@ protocol CanvasConnDelegate: AnyObject {
     func connPaneCreated(_ meta: PaneMeta, owner: String)
     func connPaneMeta(_ meta: PaneMeta, owner: String)
     func connOutput(_ id: PaneID, _ data: Data, source: OutputSource, owner: String)
-    func connPaneExit(_ id: PaneID, _ code: Int32, owner: String)
+    func connPaneExit(_ id: PaneID, _ code: Int32, kept: Bool, owner: String)
     func connGroupCreated(_ meta: GroupMeta, owner: String)
     func connGroupMeta(_ meta: GroupMeta, owner: String)
     func connGroupExit(_ id: GroupID, owner: String)
@@ -121,7 +121,7 @@ final class CanvasConn: @unchecked Sendable {
         case .replayPane:
             if let id = frame.paneID { delegate?.connOutput(id, frame.data, source: .replay, owner: owner) }
         case .paneExit:
-            if let e: PaneExit = frame.decode() { delegate?.connPaneExit(e.id, e.code, owner: owner) }
+            if let e: PaneExit = frame.decode() { delegate?.connPaneExit(e.id, e.code, kept: e.kept, owner: owner) }
         case .groupCreated:
             if let m: GroupCreated = frame.decode() { delegate?.connGroupCreated(m.meta, owner: owner) }
         case .groupMeta:

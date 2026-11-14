@@ -15,6 +15,7 @@ enum CLIExit: Int32 {
     case usage = 2        // invalid command line
     case notFound = 3     // target missing or ambiguous
     case unreachable = 4  // daemon not running / link gone
+    case timedOut = 124   // wait for= ran out, like timeout(1)
 }
 
 let PaneKind = "pane"
@@ -58,14 +59,22 @@ func ambiguous(_ query: String, _ rows: [String]) -> Never {
 
 let staleDaemon = "daemon predates wait (proto < \(WaitProtoVersion)); relaunch the app to refresh it"
 let staleVerbs = "daemon predates font and session (proto < \(CanvasVerbProtoVersion)); relaunch the app to refresh it"
+let staleKeepOpen = "daemon predates keep-open (proto < \(KeepOpenProtoVersion)); relaunch the app to refresh it"
 let stalePeers = "daemon predates hosts (proto < \(PeerProtoVersion)); relaunch the app to refresh it"
 
 // Block on the pane's paneExit and leave with the program's status. The
 // connection is already a subscriber, so an exit between the lookup and
 // here still arrives; one that happened earlier is answered from the
 // daemon's recent-exit table (waitPane).
-func awaitExit(_ c: GCTClient, _ id: PaneID) -> Never {
+func awaitExit(_ c: GCTClient, _ id: PaneID, limit: TimeInterval? = nil) -> Never {
     fflush(stdout)
+    if let limit {
+        // The main thread sits in a blocking read; a timer ends the process.
+        DispatchQueue.global().asyncAfter(deadline: .now() + limit) {
+            fputs("gctd: pane still running after \(Int(limit))s\n", stderr)
+            exit(CLIExit.timedOut.rawValue)
+        }
+    }
     while let f = c.conn.readFrame() {
         if f.tag == .errorReply { missing("pane \(id)") }
         guard f.tag == .paneExit, let e: PaneExit = f.decode(), e.id == id else { continue }

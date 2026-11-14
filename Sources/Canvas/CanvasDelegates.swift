@@ -89,8 +89,13 @@ extension CanvasView: CanvasConnDelegate {
         postNotice(local, title: notice.title, body: notice.body)
     }
 
-    func connPaneExit(_ id: PaneID, _ code: Int32, owner: String) {
+    func connPaneExit(_ id: PaneID, _ code: Int32, kept: Bool, owner: String) {
         let local = hub.localPane(remote: id, owner: owner)
+        // keep-open: the program ended, the pane and its scrollback stay.
+        if kept {
+            panes[local]?.markEnded()
+            return
+        }
         removePane(local)
         hub.forgetPane(local)
         refreshGroupViews()

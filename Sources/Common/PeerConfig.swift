@@ -54,6 +54,19 @@ public enum PeerConfig {
         return out.sorted { $0.name < $1.name }
     }
 
+    /// How long an ended keep-open pane lingers before gctd closes it.
+    /// `keep-open-ttl` in config.toml ("7d", "12h", "0" = until closed).
+    public static let defaultKeepOpenTTL: TimeInterval = 7 * 24 * 3600
+
+    public static func keepOpenTTL() -> TimeInterval {
+        guard let text = try? String(contentsOfFile: path(), encoding: .utf8),
+              let raw = TOML.parse(text)[""]?["keep-open-ttl"],
+              let ttl = Span.parse(raw) else {
+            return defaultKeepOpenTTL
+        }
+        return ttl
+    }
+
     /// Empty when the file is missing or unreadable.
     public static func load() -> [PeerHost] {
         guard let text = try? String(contentsOfFile: path(), encoding: .utf8) else {

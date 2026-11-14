@@ -3,6 +3,8 @@
 ## Unreleased
 
 ### Added
+- `gctd open --keep-open` leaves a pane (dimmed, ✕) with its scrollback after its program ends, so `gctd dump` can still read it. It goes on `gctd close`, or after `keep-open-ttl` in `config.toml` (default `7d`, `0` = until closed). Kept panes don't survive a daemon restart. Protocol 9.
+- `gctd wait <pane> for=10m` (and `open --wait for=10m`) gives up after that long and exits 124.
 - `gctd open side=right|left|above|below` picks the edge of the calling pane the new pane lands on, and `size=33%,100%` takes a share of the caller's width and height.
 - `gctd font +N|-N|reset [pane]` resizes terminal text on every pane, or one, like `⌘+` / `⌘-`. `gctd session <name>` switches the canvas to `local` or a host. Protocol 8.
 - Sessions: one canvas per machine. `local` is this machine's gctd, each `[host.<name>]` is another machine's. Right-click → Session (or `⌘⇧E`) swaps the whole canvas; each session keeps its own panes and camera.

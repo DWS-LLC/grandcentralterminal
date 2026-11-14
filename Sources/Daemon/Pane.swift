@@ -31,6 +31,11 @@ class Pane {
     // args used to spawn (for respawn-on-daemon-restart)
     let spawnCommand: String?
 
+    // keep-open: stay in the layout after the program ends. keptSince is
+    // when it ended; both are only touched under the server lock.
+    var keepOpen = false
+    var keptSince: Date?
+
     // A foreground command is reported once two polls in a row agree: a
     // one-second `ls` must not rename the pane.
     private struct ProcSample { var line: String? }

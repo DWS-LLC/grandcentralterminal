@@ -124,6 +124,13 @@ final class PaneView: NSView {
         layoutChrome()
         applyChrome()
     }
+    // keep-open pane whose program ended: dimmed, input goes nowhere.
+    func markEnded() {
+        meta.exited = true
+        applyChrome()
+        titleLabel.string = titleText
+    }
+
     // Daemon truth (name/color/group) without touching the frame: the
     // zoomed pane's fullscreen rect is local-only until unzoom.
     func syncMetaOnly(_ meta: PaneMeta) {
@@ -312,7 +319,7 @@ final class PaneView: NSView {
     // fill — local panes keep the theme chrome exactly).
     func applyChrome() {
         let t = GCTTheme.current
-        alphaValue = meta.offline ? Self.offlineAlpha : 1
+        alphaValue = meta.offline || meta.exited ? Self.offlineAlpha : 1
         layer?.borderWidth = 0
         layer?.borderColor = nil
         // Multi-select beats focus: selected panes wear accent chrome so a
@@ -388,11 +395,12 @@ final class PaneView: NSView {
         let notice = hasNotice ? "● " : ""
         // Its host's link is down: kept in the layout, input goes nowhere.
         let offline = meta.offline ? "○ " : ""
+        let ended = meta.exited ? "✕ " : ""
         let cwd = Self.tilde(meta.cwd, local: meta.host == "local" || meta.host.isEmpty)
         if meta.host == "local" || meta.host.isEmpty {
-            return "\(notice)\(zoom)\(pin)\(kind) – \(cwd)"
+            return "\(notice)\(ended)\(zoom)\(pin)\(kind) – \(cwd)"
         }
-        return "\(notice)\(offline)\(zoom)\(pin)[\(meta.host)] \(kind) – \(cwd)"
+        return "\(notice)\(offline)\(ended)\(zoom)\(pin)[\(meta.host)] \(kind) – \(cwd)"
     }
 
     // The cwd tail is what truncation eats first; "~" buys it back.

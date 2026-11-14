@@ -325,6 +325,13 @@ func number(_ f: [String: String], _ key: String) -> Double? {
     return n
 }
 
+// `for=10m`: how long wait gives up after. Absent = forever.
+func waitLimit(_ f: [String: String]) -> TimeInterval? {
+    guard let raw = f["for"] else { return nil }
+    guard let secs = Span.parse(raw), secs > 0 else { bad("for= takes a span like 90s, 10m, 2h, got \(raw)") }
+    return secs
+}
+
 // Relay a scripted canvas command; like focus, the broadcast IS the
 // delivery, so only an errorReply (bad pane) is surfaced.
 func sendCanvas(_ c: GCTClient, _ cmd: CanvasCommand) -> Never {
@@ -503,7 +510,12 @@ case "open":
     guard let w = c.welcome() else { die("no reply from daemon") }
     let waiting = rest.contains("--wait")
     if waiting, w.version < WaitProtoVersion { die(staleDaemon) }
-    let f = flags(rest.filter { $0 != "--wait" })
+    let keepOpen = rest.contains("--keep-open")
+    if keepOpen, w.version < KeepOpenProtoVersion { die(staleKeepOpen) }
+    let f = flags(rest.filter { $0 != "--wait" && $0 != "--keep-open" })
+    if keepOpen, f["host"] != nil { bad("--keep-open runs the pane here; drop host=") }
+    let limit = waitLimit(f)
+    if limit != nil, !waiting { bad("for= needs --wait") }
     var anchor = Rect(x: 0, y: 0, w: 900, h: 560)
     var join: GroupID?
     var callerLink: PaneID?
@@ -563,6 +575,7 @@ case "open":
     _ = c.conn.send(tag: .createPane, json: CreatePane(
         rect: anchor, cwd: cwd, name: f["name"], command: f["cmd"],
         joinGroup: join, joinDirection: join == nil ? nil : (side ?? .right).rawValue,
+        keepOpen: keepOpen,
         parent: parent ?? (f["rect"] == nil ? callerLink : nil), reqID: reqID,
         host: peerHost))
     // Answer is a paneCreated broadcast; errorReply on spawn failure.
@@ -572,7 +585,7 @@ case "open":
     while let r = c.nextReply() {
         if r.tag == .paneCreated, let m: PaneCreated = r.decode(), ours(m.reqID, reqID, w) {
             print(m.meta.id)
-            if waiting { awaitExit(c, m.meta.id) }
+            if waiting { awaitExit(c, m.meta.id, limit: limit) }
             exit(0)
         }
         if r.tag == .errorReply, let e: ErrorReply = r.decode() { die(e.message) }
@@ -884,17 +897,19 @@ case "hosts":
     exit(0)
 
 case "wait":
-    // wait <pane>: leave with the pane program's exit status.
-    guard rest.count == 1 else { bad("wait <pane>") }
+    // wait <pane> [for=<span>]: leave with the pane program's exit status.
+    let positional = rest.filter { !$0.contains("=") }
+    guard positional.count == 1 else { bad("wait <pane> [for=10m]") }
+    let limit = waitLimit(flags(rest.filter { $0.contains("=") }))
     let c = needClient()
     guard let w = c.welcome() else { die("no reply from daemon") }
     guard w.version >= WaitProtoVersion else { die(staleDaemon) }
     // Not in the layout any more? A full uuid may still be in the daemon's
     // recent-exit table; anything else is simply gone.
-    let known = resolvePane(w, rest[0])?.id ?? PaneID(string: untyped(rest[0], kind: PaneKind))
-    guard let id = known else { missing("pane \(rest[0])") }
+    let known = resolvePane(w, positional[0])?.id ?? PaneID(string: untyped(positional[0], kind: PaneKind))
+    guard let id = known else { missing("pane \(positional[0])") }
     _ = c.conn.send(tag: .waitPane, json: PaneRef(id: id))
-    awaitExit(c, id)
+    awaitExit(c, id, limit: limit)
 
 case "help", "--help", "-h":
     printHelp(rest.first)

@@ -64,7 +64,7 @@ pick the pane, and ask if it isn't obvious.
 | The user asks | You run |
 |---|---|
 | start the dev server, tell me when it's up | `ID=$(gctd open name=dev size=480,240 cmd="npm run dev")`, then `gctd dump $ID --strip-ansi limit=2000` until it says ready |
-| run the tests, fix what fails | `ID=$(gctd open name=tests size=480,240 cmd="pytest -q; echo EXIT=\$?; exec zsh")`, poll `gctd dump` for `EXIT=`, read the failures, fix, close it |
+| run the tests, fix what fails | `ID=$(gctd open --keep-open name=tests side=right size=50%,100% cmd="pytest -q")`, `gctd wait $ID for=10m`, then `gctd dump $ID --strip-ansi limit=2000` for the failures, fix, `gctd close $ID` |
 | only need pass or fail | `gctd open --wait name=build cmd="make"`. Exit status is the command's |
 | type into a REPL (psql) | `gctd send psql "select count(*) from users;"`, then `gctd dump psql --strip-ansi limit=2000` |
 | tail a log | `gctd open name=api-log size=900,640 cmd="tail -f api.log"` |
@@ -86,9 +86,35 @@ your pane).
 work. `gctd focus <id>` brings one forward when they ask.
 
 `cmd=` runs through the
-login shell, so `&&`, pipes and quotes work. The pane closes when its command
-exits and takes the scrollback with it: end with `; exec zsh` when you need to
-read the output afterward. Omit `cmd=` for a plain shell.
+login shell, so `&&`, pipes and quotes work. Omit `cmd=` for a plain shell.
+
+A pane closes when its command exits and takes the scrollback with it. Add
+`--keep-open` when you need to read the output afterward: the pane stays,
+dimmed with a ✕, and `gctd dump` still works. It goes when you `gctd close` it,
+or after `keep-open-ttl` in config.toml (default 7d, `0` = until closed).
+Don't leave them lying around.
+
+`gctd wait <pane> for=10m` blocks until the program ends and exits with its
+status, or exits 124 when the time is up (the pane keeps running). `for=` also
+works on `open --wait`.
+
+## Example: tests in a split
+
+Runs beside you, closes itself on green, zooms and stays open on red or on
+timeout.
+
+```sh
+#!/bin/sh
+cmd="${1:-make test}"
+
+id=$(gctd open --keep-open name=tests side=right size=50%,100% cmd="$cmd")
+
+if ! gctd wait "$id" for=10m; then
+  gctd do zoom-pane "$id"
+  exit 1
+fi
+gctd close "$id"
+```
 
 ## Rules
 
@@ -100,8 +126,8 @@ read the output afterward. Omit `cmd=` for a plain shell.
 5. `send` is keystrokes. One-shot commands go through `open cmd=`; `send` drives
    programs already running. `--no-newline` skips Enter; `\xHH` sends any byte
    (`\x03` is ^C).
-6. Keep every id you open. Close your panes (and empty groups) when the work
-   lands; a server the user still needs stays, named and grouped.
+6. Keep every id you open. Close your panes (and empty groups, and
+   `--keep-open` ones) when the work lands; a server the user still needs stays, named and grouped.
    `gctd list` before you finish.
 7. Never `gctd stop`: it kills the daemon and every pane.
 8. Never `rect=` a pane across the canvas. Place with `side=` and `size=`.
