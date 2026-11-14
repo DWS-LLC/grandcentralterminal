@@ -154,12 +154,8 @@ public struct CreatePane: Codable, Sendable {
     // "above"/"below" vertically. Nil = no shove (plain admit trial).
     // Decodes missing as nil.
     public var joinDirection: String?
-    // Agent spawn: land in the free air around this pane (Orbit),
-    // pushed away from the rest. rect only supplies the size. Ignored
-    // with joinGroup. Decodes missing (old clients) as nil.
-    public var orbitAround: PaneID?
     // The pane this one was spawned from (cables, spring links); a spawn
-    // that orbits a caller has that caller as parent. Decodes missing as nil.
+    // from a caller pane has that caller as parent. Decodes missing as nil.
     public var parent: PaneID?
     // Echoed in PaneCreated so the requester spots its own reply among
     // concurrent creates. Decodes missing as nil.
@@ -170,17 +166,17 @@ public struct CreatePane: Codable, Sendable {
     public init(rect: Rect, cwd: String? = nil, name: String? = nil,
                 command: String? = nil, allowOverlap: Bool = false, gap: Double = 0,
                 joinGroup: GroupID? = nil, joinDirection: String? = nil,
-                orbitAround: PaneID? = nil, parent: PaneID? = nil, reqID: String? = nil,
+                parent: PaneID? = nil, reqID: String? = nil,
                 host: String? = nil) {
         self.rect = rect; self.cwd = cwd; self.name = name
         self.command = command; self.allowOverlap = allowOverlap; self.gap = gap
         self.joinGroup = joinGroup; self.joinDirection = joinDirection
-        self.orbitAround = orbitAround; self.parent = parent; self.reqID = reqID
+        self.parent = parent; self.reqID = reqID
         self.host = host
     }
     enum CodingKeys: String, CodingKey {
         case rect, cwd, name, command, allowOverlap, gap, joinGroup, joinDirection
-        case orbitAround, parent, reqID, host
+        case parent, reqID, host
     }
     public init(from decoder: any Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -192,7 +188,6 @@ public struct CreatePane: Codable, Sendable {
         gap = try c.decodeIfPresent(Double.self, forKey: .gap) ?? 0
         joinGroup = try c.decodeIfPresent(GroupID.self, forKey: .joinGroup)
         joinDirection = try c.decodeIfPresent(String.self, forKey: .joinDirection)
-        orbitAround = try c.decodeIfPresent(PaneID.self, forKey: .orbitAround)
         parent = try c.decodeIfPresent(PaneID.self, forKey: .parent)
         reqID = try c.decodeIfPresent(String.self, forKey: .reqID)
         host = try c.decodeIfPresent(String.self, forKey: .host)

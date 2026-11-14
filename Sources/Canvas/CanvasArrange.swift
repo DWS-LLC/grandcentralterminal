@@ -442,17 +442,13 @@ extension CanvasView {
         return (a.panes.first?.description ?? "") < (b.panes.first?.description ?? "")
     }
 
-    // Spacing between tree columns and rows is never tighter than this,
-    // however small `window-gap` is: cables need room to bundle.
-    private static let minTreeGap = 48.0
-
     private func solveRelax(_ units: [ArrangeUnit], scope: ArrangeScope,
                             rects: [PaneID: Rect]) -> [PaneRect] {
         let parents = unitParents(units)
         let moving = Set(units.flatMap(\.panes))
         let gap = Double(GCTConfig.current.windowGap)
         let solved = TreeLayout.place(units.map(\.frame), parents: parents,
-                                      gap: max(gap, Self.minTreeGap))
+                                      gap: gap)
         let anchored = anchorFocused(solved, units: units)
         let placed = clearance(of: anchored, scope: scope, moving: moving, rects: rects, gap: gap)
         return fanOut(units, placed, rects: rects)

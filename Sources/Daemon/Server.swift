@@ -964,37 +964,22 @@ final class Server {
         let id = PaneID()
         let rect: Rect
         let gap = gapLocked(req.gap)
-        // Agent spawn: orbit the caller, away from everyone else.
-        // Nil when no caller or no free spot (callers fall back).
-        func orbited(_ obstacles: [Rect]) -> Rect? {
-            guard let main = req.orbitAround, let mainRect = rects[main] else {
-                return nil
-            }
-            return Orbit.place(size: req.rect, around: mainRect, obstacles: obstacles,
-                               others: rects.filter { $0.key != main }.map(\.value),
-                               gap: gap)
-        }
         if req.joinGroup != nil {
             var obstacles = [Rect]()
             for (gid, b) in GroupLayout.bounds(groups: metas, panes: rects)
                 where gid != req.joinGroup {
                 obstacles.append(b)
             }
-            // Orbit also dodges the group's own members (the flush
-            // rect lands on a sibling when the caller's right is taken).
-            let members = rects.filter { !floating.contains($0.key) }.map(\.value)
-            rect = orbited(obstacles + members)
-                ?? (obstacles.isEmpty ? req.rect
-                    : Overlap.resolve(req.rect, obstacles: obstacles, gap: gap))
+            rect = obstacles.isEmpty ? req.rect
+                : Overlap.resolve(req.rect, obstacles: obstacles, gap: gap)
         } else {
             let obstacles = GroupLayout.creationObstacles(
                 paneRects: rects,
                 groups: metas,
                 allowOverlap: req.allowOverlap,
                 floating: floating)
-            rect = orbited(obstacles)
-                ?? (obstacles.isEmpty ? req.rect
-                    : Overlap.resolve(req.rect, obstacles: obstacles, gap: gap))
+            rect = obstacles.isEmpty ? req.rect
+                : Overlap.resolve(req.rect, obstacles: obstacles, gap: gap)
         }
         if req.host != nil {
             reserved[id] = rect
@@ -1003,7 +988,7 @@ final class Server {
         let cwd = req.cwd ?? NSHomeDirectory()
         var meta = PaneMeta(id: id, rect: rect, name: req.name,
                             cwd: cwd, host: LocalHost, title: nil, exited: false)
-        meta.parent = req.parent ?? req.orbitAround
+        meta.parent = req.parent
         if let hostName = req.host {
             meta.host = hostName
             createProxy(requester, req, meta: meta)

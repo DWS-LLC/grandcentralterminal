@@ -13,7 +13,7 @@
 // time (a `ls` blip must not rename anything) is the caller's job; the
 // daemon only reports a foreground command once it holds for two polls.
 //
-// Pure string math, same as Orbit: no AppKit, runs in the CLI.
+// Pure string math, same as Overlap: no AppKit, runs in the CLI.
 
 import Foundation
 

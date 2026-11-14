@@ -13,6 +13,8 @@
 - Panes get `GCT_BIN_DIR`, the `gctd` matching their daemon, first on `PATH`. Startup files that rewrite `PATH` can bury it; see docs/agents.md.
 
 ### Changed
+- `gctd open` no longer orbits the calling pane: spawns land flush beside it and keep `window-gap` air, like any other placement. The cable to the caller stays.
+- `⌘⇧A` spaces panes by exactly `window-gap`. The tree used to keep at least 48 points and stretch parent-to-children gaps up to 640.
 - `gctd agent-setup` is now `gctd agent`: `setup`, `status`, `remove`, `show`, `context`. Setup finds agents (Claude Code, Codex, opencode, pi), is safe to rerun, and takes `--agent`, `--project`, `--dry-run`, `--force` and `--json`. It always installs every hook the agent supports, including Claude's `Notification` and `Stop`, and `remove` takes them back out.
 - The installed skill is a stub that runs `gctd agent show`, so upgrading gctd updates what agents know. Setup moves Codex to `~/.agents/skills` and sweeps the old per-agent copies (Codex, opencode, Cursor); Cursor is no longer targeted.
 - The SessionStart hook prints one line, which pane the agent is in, and nothing outside a GCT pane. It used to list every pane and group.

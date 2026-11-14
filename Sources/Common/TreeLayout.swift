@@ -21,11 +21,6 @@ import Foundation
 public enum TreeLayout {
     // Row width limit relative to the square root of the trees' total area.
     private static let rowAspect = 1.6
-    // A column of children this tall pulls its parent this share of that
-    // height away (cables climbing a steep S would not bundle), at most
-    // `maxColumnGap`, never less than the gap.
-    private static let columnShare = 0.5
-    private static let maxColumnGap = 640.0
 
     // New rects for `rects` (same order). `parents[i]` is the index of the
     // pane that spawned pane i, nil for a root. A cycle is cut at its
@@ -123,13 +118,7 @@ public enum TreeLayout {
         let sub = kids[i] ?? []
         let deepest = sub.map { extent($0, r, kids, gap, heights) }.max() ?? 0
         guard deepest > 0 else { return r[i].w }
-        return r[i].w + columnGap(sub, heights, gap) + deepest
-    }
-
-    // Room between a pane and the column of its children.
-    private static func columnGap(_ sub: [Int], _ heights: [Int: Double], _ gap: Double) -> Double {
-        let stack = sub.reduce(0) { $0 + (heights[$1] ?? 0) } + gap * Double(max(sub.count - 1, 0))
-        return min(max(stack * columnShare, gap), max(maxColumnGap, gap))
+        return r[i].w + gap + deepest
     }
 
     // MARK: Place
@@ -166,7 +155,7 @@ public enum TreeLayout {
         let sub = kids[i] ?? []
         let stack = sub.reduce(0) { $0 + (heights[$1] ?? 0) } + gap * Double(max(sub.count - 1, 0))
         var cursor = top + (band - stack) / 2
-        let right = x + r[i].w + columnGap(sub, heights, gap)
+        let right = x + r[i].w + gap
 
         for c in sub {
             put(c, x: right, top: cursor, r, kids, gap, heights, &out)
