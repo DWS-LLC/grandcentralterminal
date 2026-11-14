@@ -104,6 +104,20 @@ final class SurfaceHost: @unchecked Sendable {
         ghostty_surface_set_content_scale(s, scale, scale)
     }
 
+    // Same as cmd-+ / cmd--: ghostty regrids the surface and the resize
+    // callback tells the daemon. Negative shrinks; nil resets to the
+    // configured size.
+    func adjustFont(by points: Double?) {
+        assert(Thread.isMainThread)
+        guard let s = surfaceIfOpen() else { return }
+
+        var action = "reset_font_size"
+        if let points {
+            action = points > 0 ? "increase_font_size:\(points)" : "decrease_font_size:\(-points)"
+        }
+        _ = ghostty_surface_binding_action(s, action, UInt(action.utf8.count))
+    }
+
     // Tell the daemon only when the grid really moved.
     private func reportIfMoved() {
         guard let g = grid() else { return }

@@ -3588,7 +3588,25 @@ final class CanvasView: NSView {
         switch cmd.verb {
         case .camera: scriptedCamera(cmd)
         case .action: scriptedAction(cmd)
+        case .font: scriptedFont(cmd)
+        case .session: scriptedSession(cmd)
         }
+    }
+
+    // gctd font: the named pane's text, else every pane's. New panes copy
+    // the focused pane's size, so they follow.
+    private func scriptedFont(_ cmd: CanvasCommand) {
+        let ids = cmd.pane.map { [$0] } ?? Array(panes.keys)
+        for id in ids {
+            panes[id]?.host?.adjustFont(by: cmd.fontDelta)
+        }
+    }
+
+    // gctd session: same swap as the Session menu; unknown names do nothing.
+    private func scriptedSession(_ cmd: CanvasCommand) {
+        guard let name = cmd.session else { return }
+
+        switchSession(to: name)
     }
 
     // Glide so the target world point sits at the viewport center:

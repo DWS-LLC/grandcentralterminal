@@ -57,6 +57,7 @@ func ambiguous(_ query: String, _ rows: [String]) -> Never {
 // MARK: - wait
 
 let staleDaemon = "daemon predates wait (proto < \(WaitProtoVersion)); relaunch the app to refresh it"
+let staleVerbs = "daemon predates font and session (proto < \(CanvasVerbProtoVersion)); relaunch the app to refresh it"
 let stalePeers = "daemon predates hosts (proto < \(PeerProtoVersion)); relaunch the app to refresh it"
 
 // Block on the pane's paneExit and leave with the program's status. The

@@ -6,7 +6,7 @@
 
 import Foundation
 
-public let ProtoVersion: UInt16 = 7
+public let ProtoVersion: UInt16 = 8
 // First protocol revision whose daemon understands MsgTag.arrangePanes.
 public let ArrangeProtoVersion: UInt16 = 2
 // First protocol revision whose daemon understands MsgTag.layoutPolicy.
@@ -20,6 +20,8 @@ public let PeerProtoVersion: UInt16 = 6
 // First protocol revision whose paneExit carries the real exit status and
 // whose daemon answers MsgTag.waitPane.
 public let WaitProtoVersion: UInt16 = 7
+// First protocol revision whose daemon relays the font and session canvas verbs.
+public let CanvasVerbProtoVersion: UInt16 = 8
 
 // PaneExit.code of a pane whose status nobody collected.
 public let ExitUnknown: Int32 = -1
@@ -594,6 +596,8 @@ public struct PaneDump: Codable, Sendable {
 public enum CanvasVerb: String, Codable, Sendable {
     case camera // animate to (x, y, zoom) or a pane's center
     case action // run a keybind action by name, e.g. "fit-all"
+    case font   // grow/shrink terminal text, or reset it
+    case session // show another machine's canvas
 }
 
 public struct CanvasCommand: Codable, Sendable {
@@ -604,11 +608,14 @@ public struct CanvasCommand: Codable, Sendable {
     public var y: Double?
     public var zoom: Double?      // camera scale; nil = keep
     public var duration: Double?  // seconds; nil = config default
+    public var fontDelta: Double? // .font: points to add (negative shrinks); nil = reset
+    public var session: String?   // .session: "local" or a [host.<name>]
     public init(verb: CanvasVerb, pane: PaneID? = nil, action: String? = nil,
                 x: Double? = nil, y: Double? = nil, zoom: Double? = nil,
-                duration: Double? = nil) {
+                duration: Double? = nil, fontDelta: Double? = nil, session: String? = nil) {
         self.verb = verb; self.pane = pane; self.action = action
         self.x = x; self.y = y; self.zoom = zoom; self.duration = duration
+        self.fontDelta = fontDelta; self.session = session
     }
 }
 

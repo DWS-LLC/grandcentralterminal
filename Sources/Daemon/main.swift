@@ -518,8 +518,6 @@ case "open":
         parent = p.id
     }
     if let me = caller {
-        anchor = Rect(x: me.rect.x + me.rect.w, y: me.rect.y,
-                      w: me.rect.w, h: me.rect.h)
         join = w.groups.first(where: { $0.members.contains(me.id) })?.id
         callerLink = me.id
     }
@@ -528,13 +526,31 @@ case "open":
         join = g.id
         callerLink = nil
     }
-    // size=w,h keeps the beside-caller spot, resized to fit the job.
-    if let s = f["size"] {
-        let n = s.split(separator: ",").compactMap { Double($0) }
-        guard n.count == 2, n.allSatisfy(\.isFinite) else { bad("size must be w,h, got \(s)") }
-        anchor.w = n[0]
-        anchor.h = n[1]
+    // side= picks the caller's edge (right by default); size=w,h or w%,h%
+    // (of the caller) resizes to fit the job. Both need a caller to anchor.
+    var side: Side?
+    if let raw = f["side"] {
+        guard let parsed = Side(rawValue: raw) else {
+            bad("side must be right, left, above or below, got \(raw)")
+        }
+        side = parsed
     }
+    if side != nil, caller == nil { bad("side= needs a calling pane or parent=") }
+    if side != nil, f["rect"] != nil { bad("side= and rect= both place the pane; pick one") }
+    var extent = Extent(w: anchor.w, h: anchor.h)
+    if let me = caller { extent = Extent(w: me.rect.w, h: me.rect.h) }
+    if let s = f["size"] {
+        do {
+            extent = try Placement.size(s, caller: caller?.rect)
+        } catch SizeError.needsCaller {
+            bad("size=\(s) is a share of the calling pane; there is none (use w,h)")
+        } catch {
+            bad("size must be w,h or w%,h%, got \(s)")
+        }
+    }
+    anchor.w = extent.w
+    anchor.h = extent.h
+    if let me = caller { anchor = Placement.beside(me.rect, side: side ?? .right, size: extent) }
     // Explicit rect=x,y,w,h (world points) pins the spot; still resolved.
     if let r = f["rect"] { anchor = parseRect(r) }
     // No cwd= opens where the caller stands (agents expect `cd repo; gctd
@@ -546,7 +562,7 @@ case "open":
     let reqID = UUID().uuidString
     _ = c.conn.send(tag: .createPane, json: CreatePane(
         rect: anchor, cwd: cwd, name: f["name"], command: f["cmd"],
-        joinGroup: join, joinDirection: join == nil ? nil : "right",
+        joinGroup: join, joinDirection: join == nil ? nil : (side ?? .right).rawValue,
         parent: parent ?? (f["rect"] == nil ? callerLink : nil), reqID: reqID,
         host: peerHost))
     // Answer is a paneCreated broadcast; errorReply on spawn failure.
@@ -804,6 +820,40 @@ case "do":
         cmd.pane = pane.id
     }
     sendCanvas(c, cmd)
+
+case "font":
+    // gctd font <+N|-N|reset> [pane]: terminal text size on every pane,
+    // or just one. Points, like the font-size config; lasts until relaunch.
+    let positional = rest.filter { !$0.contains("=") }
+    guard (1...2).contains(positional.count) else { bad("font <+N|-N|reset> [pane]") }
+    var delta: Double?
+    if positional[0] != "reset" {
+        guard let n = Double(positional[0]), n.isFinite, n != 0 else {
+            bad("font takes +N, -N or reset, got \(positional[0])")
+        }
+        delta = n
+    }
+    let c = needClient()
+    guard let w = c.welcome() else { die("no reply from daemon") }
+    guard w.version >= CanvasVerbProtoVersion else { die(staleVerbs) }
+    var cmd = CanvasCommand(verb: .font, fontDelta: delta)
+    if positional.count == 2 {
+        guard let pane = resolvePane(w, positional[1]) else { missing("pane \(positional[1])") }
+        cmd.pane = pane.id
+    }
+    sendCanvas(c, cmd)
+
+case "session":
+    // gctd session <name>: show that machine's canvas ("local" or a
+    // [host.<name>]), like the Session menu. Every canvas follows.
+    guard rest.count == 1 else { bad("session <name>") }
+    let c = needClient()
+    guard let w = c.welcome() else { die("no reply from daemon") }
+    guard w.version >= CanvasVerbProtoVersion else { die(staleVerbs) }
+    guard rest[0] == LocalHost || w.peers.contains(where: { $0.name == rest[0] }) else {
+        missing("session \(rest[0]) (have: \(([LocalHost] + w.peers.map(\.name)).joined(separator: ", ")))")
+    }
+    sendCanvas(c, CanvasCommand(verb: .session, session: rest[0]))
 
 case "inspect":
     // inspect [<pane>] [--json]: one pane in full (default: the caller).

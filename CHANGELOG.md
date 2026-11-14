@@ -3,6 +3,8 @@
 ## Unreleased
 
 ### Added
+- `gctd open side=right|left|above|below` picks the edge of the calling pane the new pane lands on, and `size=33%,100%` takes a share of the caller's width and height.
+- `gctd font +N|-N|reset [pane]` resizes terminal text on every pane, or one, like `⌘+` / `⌘-`. `gctd session <name>` switches the canvas to `local` or a host. Protocol 8.
 - Sessions: one canvas per machine. `local` is this machine's gctd, each `[host.<name>]` is another machine's. Right-click → Session (or `⌘⇧E`) swaps the whole canvas; each session keeps its own panes and camera.
 - New remote pane now puts the pane in your session's layout while the pty runs on the other machine, so remote panes group, tie and arrange with local ones. The pane greys out (`○`) while its host is unreachable and reattaches when it's back.
 - `gctd open host=<peer>` opens a pane that runs on a peer. `gctd list` shows peers and the guest panes a daemon hosts.

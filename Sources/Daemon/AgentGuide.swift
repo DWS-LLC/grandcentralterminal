@@ -71,9 +71,21 @@ pick the pane, and ask if it isn't obvious.
 | run it on another machine | add `host=<peer>`; `gctd hosts` lists them |
 | ping me when it's done | `gctd notify self "tests are green"` |
 | close what you opened | `gctd close <id>` for each id you kept, then `gctd list` |
+| "top in a narrow pane on the right" | `gctd open name=top side=right size=33%,100% cmd=top` |
+| "put it below / to the left" | `side=below size=100%,30%`, `side=left size=40%,100%` |
+| make the text bigger or smaller | `gctd font +2`, `gctd font -2`, `gctd font reset` (add a pane to change only it) |
+| switch to session "X" | `gctd session X` (`local` or a name from `gctd hosts`) |
 
 `size=w,h` is in world points: `480,240` for a task, `900,640` for a log.
-Omit it for an interactive shell (copies your pane). `cmd=` runs through the
+`size=33%,100%` is a share of your own pane's width and height. `side=` picks
+which edge of your pane it lands on: `right` (default), `left`, `above`,
+`below`. Both need you to be in a pane (or `parent=`), and the daemon still
+keeps clear of everything else. Omit `size` for an interactive shell (copies
+your pane).
+`open` never takes focus from the user, so a server can start behind their
+work. `gctd focus <id>` brings one forward when they ask.
+
+`cmd=` runs through the
 login shell, so `&&`, pipes and quotes work. The pane closes when its command
 exits and takes the scrollback with it: end with `; exec zsh` when you need to
 read the output afterward. Omit `cmd=` for a plain shell.
@@ -92,7 +104,7 @@ read the output afterward. Omit `cmd=` for a plain shell.
    lands; a server the user still needs stays, named and grouped.
    `gctd list` before you finish.
 7. Never `gctd stop`: it kills the daemon and every pane.
-8. Never `rect=` a pane across the canvas.
+8. Never `rect=` a pane across the canvas. Place with `side=` and `size=`.
 
 `gctd help` lists every command; `gctd help <command>` has the details.
 """#

@@ -21,9 +21,13 @@ let commandHelp: [CommandHelp] = [
                 summary: "all commands, or the details of one"),
 
     CommandHelp(name: "open",
-                synopsis: "open [cwd=..] [name=..] [cmd=..] [group=..] [parent=<pane>] [size=w,h] [rect=x,y,w,h] [host=<peer>] [--wait]",
+                synopsis: "open [cwd=..] [name=..] [cmd=..] [group=..] [parent=<pane>] [side=right|left|above|below] [size=w,h|w%,h%] [rect=x,y,w,h] [host=<peer>] [--wait]",
                 summary: "open a pane beside focused/origin, print its id",
                 notes: """
+                side= the caller's edge it lands on (default right).
+                size= world points, or a share of the caller: size=33%,100% beside
+                a 900x560 caller is 297x560. Needs a calling pane or parent=.
+                The pane never takes focus (unless nothing is focused); `gctd focus` does.
                 parent= wires it to that pane, whoever calls.
                 host= runs it on a [host.<peer>] machine.
                 --wait blocks until the pane's program ends and exits with its status
@@ -73,6 +77,10 @@ let commandHelp: [CommandHelp] = [
                 summary: "glide the camera to a world point or pane"),
     CommandHelp(name: "do", synopsis: "do <action> [pane] [dur=..]",
                 summary: "run a keybind action (fit-all, zoom-pane..)"),
+    CommandHelp(name: "font", synopsis: "font <+N|-N|reset> [pane]",
+                summary: "grow or shrink terminal text (points) on every pane, or one; lasts until relaunch"),
+    CommandHelp(name: "session", synopsis: "session <name>",
+                summary: "show a machine's canvas: local or a [host.<name>] (`gctd hosts`)"),
     CommandHelp(name: "agent", synopsis: "agent setup|status|remove|show|context [--agent NAME]... [--project] [--dry-run] [--force] [--json]",
                 summary: "teach coding agents about GCT: a skill and session hooks",
                 notes: """
