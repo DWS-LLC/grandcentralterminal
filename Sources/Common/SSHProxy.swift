@@ -7,14 +7,13 @@
 // fd makes ssh see EOF and exit; ssh dying gives the reader an EOF.
 
 import Foundation
-import Common
 
 private let sshPath = "/usr/bin/ssh"
 private let sshConnectTimeoutSecs = 5
 
 /// Connected fd tunneled through `proxy`, or -1 if ssh couldn't launch.
 /// Auth failures surface later as EOF (BatchMode: never prompts).
-func connectSSHProxy(proxy: String, host: String, port: UInt16) -> Int32 {
+public func connectSSHProxy(proxy: String, host: String, port: UInt16) -> Int32 {
     var pair: [Int32] = [-1, -1]
     guard socketpair(AF_UNIX, sockStream, 0, &pair) == 0 else { return -1 }
 

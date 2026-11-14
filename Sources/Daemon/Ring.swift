@@ -52,6 +52,14 @@ final class Ring {
         return out
     }
 
+    // Forget everything retained (a proxy pane re-syncing from its peer's ring).
+    func reset() {
+        lock.lock()
+        defer { lock.unlock() }
+        chunks.removeAll()
+        total = 0
+    }
+
     var count: Int {
         lock.lock()
         defer { lock.unlock() }

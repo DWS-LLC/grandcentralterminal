@@ -16,6 +16,11 @@ APP_NAME := Grand Central Terminal
 BUILD_DIR := build
 SWIFT_BUILD := .build/release
 BUNDLE := $(BUILD_DIR)/$(APP_NAME).app
+# The daemon runs as its own background app: macOS ties a child's LAN access
+# to the app that spawned it, so a daemon spawned by the canvas loses its
+# peer links the moment the canvas quits. As its own app it has its own
+# Local Network permission and outlives the canvas.
+DAEMON_APP := $(BUNDLE)/Contents/Helpers/GCT Daemon.app
 SUPPORT := $(HOME)/Library/Application Support/Grand Central Terminal
 DESTDIR :=
 ZIG ?= $(HOME)/bin/zig
@@ -47,6 +52,11 @@ build:
 	cp "$(SWIFT_BUILD)/ptyexec" "$(BUNDLE)/Contents/MacOS/"
 	cp Resources/AppIcon.icns "$(BUNDLE)/Contents/Resources/"
 	cp SKILL.md "$(BUNDLE)/Contents/Resources/"
+	mkdir -p "$(DAEMON_APP)/Contents/MacOS"
+	cp Resources/DaemonInfo.plist "$(DAEMON_APP)/Contents/Info.plist"
+	VER=$$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$(BUNDLE)/Contents/Info.plist"); \
+		/usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $$VER" -c "Set :CFBundleVersion $$VER" "$(DAEMON_APP)/Contents/Info.plist"
+	cp "$(SWIFT_BUILD)/GCTDaemon" "$(SWIFT_BUILD)/gctd" "$(SWIFT_BUILD)/ptyexec" "$(DAEMON_APP)/Contents/MacOS/"
 	mkdir -p "$(SUPPORT)/bin" "$(SUPPORT)/skills/gct"
 	# Rename-swap, never overwrite in place: the daemon executes from this
 	# path, and an in-place rewrite of a running image invalidates its code
@@ -66,7 +76,12 @@ sign: build
 		--sign "$(SIGN_IDENTITY)" \
 		"$(BUNDLE)/Contents/MacOS/GrandCentralTerminal" \
 		"$(BUNDLE)/Contents/MacOS/gctd" \
-		"$(BUNDLE)/Contents/MacOS/ptyexec"
+		"$(BUNDLE)/Contents/MacOS/ptyexec" \
+		"$(DAEMON_APP)/Contents/MacOS/GCTDaemon" \
+		"$(DAEMON_APP)/Contents/MacOS/gctd" \
+		"$(DAEMON_APP)/Contents/MacOS/ptyexec"
+	codesign --force --options runtime --timestamp \
+		--sign "$(SIGN_IDENTITY)" "$(DAEMON_APP)"
 	codesign --force --options runtime --timestamp \
 		--sign "$(SIGN_IDENTITY)" "$(BUNDLE)"
 	codesign --verify --strict --verbose=2 "$(BUNDLE)"

@@ -46,6 +46,7 @@ the key, e.g. `new-pane = "cmd+shift+t"`. `⌘⇧R` reloads the config live.
 | `⌘⇧R` | reload `config.toml` | `reload-config` |
 | `⌘⇧M` | move the focused pane to its nearest snap target (works with snapping off) | `move-window-to-snap` |
 | `⌘⇧A` | relax layout: the whole canvas as a left-to-right tree of the cables | `relax-layout` |
+| `⌘⇧E` | next session: swap the canvas to the next machine's ([remote.md](remote.md#sessions)) | `next-session` |
 | `⌘Q` | quit the canvas; panes keep running in `gctd` | |
 
 ## Mouse and trackpad

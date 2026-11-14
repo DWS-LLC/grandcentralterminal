@@ -12,7 +12,11 @@ can still read it back. The full agent prompt is [SKILL.md](../SKILL.md).
 ```sh
 gctd open name=build cmd="make -j8"   # pane around the working one, prints id
 gctd open name=log size=900,640 cmd="tail -f x.log"   # sized for the job
-gctd list                             # panes + groups
+gctd list [--json]                    # panes + groups; --json is the stable form
+gctd inspect [$ID] [--json]           # one pane in full (default: the caller)
+gctd hosts                            # peers this daemon dials, up or down
+gctd open --wait cmd="make test"      # block, exit with the command's status
+gctd wait $ID                         # same, for a pane already running
 gctd dump $ID limit=4000 --strip-ansi # scrollback tail as readable text
 gctd send $ID "make test"             # type into the pane (+ newline)
 gctd send $ID --no-newline '\x03'     # \xHH, \e, \n, \t, \r escapes: ^C is \x03
@@ -36,13 +40,50 @@ as one paste instead of running line by line (the program must have asked for
 it: shells and editors do). `notify` takes `title=..`; it shows nothing for a
 pane you're already looking at.
 
-Panes are addressed by uuid prefix, exact name, or `self` (the calling pane's
-`$GCT_PANE_ID`). `dump` reads the daemon's 8 MiB VT ring read-only, so poll it
+Panes are addressed by uuid (or `pane:<uuid>`), a unique id prefix or suffix
+(4+ characters), exact name, or `self` (the calling pane's `$GCT_PANE_ID`). A
+name or prefix that matches several panes changes nothing: the candidates are
+listed and the exit status is 3. `dump` reads the daemon's 8 MiB VT ring read-only, so poll it
 to follow a task; `--strip-ansi` scrubs escapes. `cmd=` runs through the login
 shell (real syntax: `&&`, pipes, quotes) and the pane exits when the command
 does (`; exec zsh` keeps it open). `size=w,h` (world points) resizes the new
 pane but keeps it around the caller: `480,240` for builds and servers,
 `900,640` for log tails.
+
+### Scripting
+
+`--json` prints one line with full ids and fixed keys; parse it, not the table:
+
+```sh
+gctd list --json | jq -r '.panes[] | select(.exited | not) | .name'
+gctd open --wait name=t cmd="pytest -q" || echo "tests failed: $?"
+```
+
+`wait` and `open --wait` leave with the program's own status (`n` for
+`exit(n)`, `128+signal` when killed). A pane closed by a client has no status
+and gives 1. The last 256 ended panes still answer `wait`; older ones are 3.
+
+| status | meaning |
+| --- | --- |
+| 0 | ok |
+| 1 | failed |
+| 2 | invalid command line |
+| 3 | pane/group/tie not found or ambiguous |
+| 4 | daemon unreachable |
+
+Inside a pane, `GCT_BIN_DIR` is the directory of the `gctd` that matches the
+running daemon, and it starts first on `PATH`. Your shell's startup files run
+after that: one that sets `PATH` to a fixed list (or macOS `path_helper`
+hoisting `/usr/local/bin`) can put an older `gctd` ahead of it. Pin it in
+`~/.zshrc` / `~/.bashrc`:
+
+```sh
+if [ -n "$GCT_BIN_DIR" ]; then
+    export PATH="$GCT_BIN_DIR:$PATH"
+fi
+```
+
+`gctd help` lists every command; `gctd help <command>` has the details.
 
 Group correlated windows, tail subagents in small grouped panes, close task
 panes when the work lands.

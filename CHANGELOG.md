@@ -1,5 +1,23 @@
 # Changelog
 
+## Unreleased
+
+### Added
+- Sessions: one canvas per machine. `local` is this machine's gctd, each `[host.<name>]` is another machine's. Right-click → Session (or `⌘⇧E`) swaps the whole canvas; each session keeps its own panes and camera.
+- New remote pane now puts the pane in your session's layout while the pty runs on the other machine, so remote panes group, tie and arrange with local ones. The pane greys out (`○`) while its host is unreachable and reattaches when it's back.
+- `gctd open host=<peer>` opens a pane that runs on a peer. `gctd list` shows peers and the guest panes a daemon hosts.
+- `gctd list --json`, `gctd inspect [pane]` and `gctd hosts`: full ids, stable keys, everything the daemon knows about a pane.
+- `gctd wait <pane>` and `gctd open --wait` block until the program ends and exit with its status (`128+signal` when killed). Panes that ended recently still answer.
+- Exit status says what went wrong: 2 bad command line, 3 target missing or ambiguous (candidates are listed), 4 daemon unreachable.
+- Panes accept `pane:<uuid>` and a short id suffix. `gctd help <command>` and `gctd <command> --help` give per-command details.
+- Panes get `GCT_BIN_DIR`, the `gctd` matching their daemon, first on `PATH`. Startup files that rewrite `PATH` can bury it; see docs/agents.md.
+
+### Changed
+- Protocol 7: `paneExit` carries the real exit status (it was always 0).
+- Protocol 6. The daemon, not the canvas, dials `[host.*]` (it re-reads `config.toml` when it changes). The canvas connects to one daemon at a time. Groups and ties may now mix hosts.
+- On macOS the canvas starts the daemon as its own background app (`GCT Daemon.app`) instead of as its child, so the daemon's LAN links to peers survive the canvas quitting. Its stderr goes to `daemon.log` beside `state.json`.
+- A peer's guest panes live outside its own layout: attaching to that machine's session never shows them, and a peer you stop talking to loses them after 7 days (or at the next reconnect, if you no longer have a pane for them).
+
 ## v0.14.0
 
 ### Added

@@ -1,14 +1,14 @@
-// HostHub: one CanvasConn per daemon (local unix + TCP remotes).
+// HostHub: the canvas's connection to the daemon of the session on screen
+// ("local" unix socket, or a [host.<name>] over TCP).
 //
-// The canvas keeps a single pane namespace, but PaneIDs are only unique
-// per daemon — two daemons mint colliding UUIDs freely. So the hub maps
-// every remote (owner, PaneID) pair to a stable local PaneID, and tags
-// each pane's host field with the owner label ("local" or the config
-// [host.<name>]). Groups are same-owner only: group ids are likewise
-// namespaced per owner, and cross-owner membership is refused canvas-side.
+// Only one session is live at a time, but PaneIDs are only unique per
+// daemon, so the hub still maps every (owner, PaneID) pair to a stable
+// canvas PaneID and tags each pane's host field: the owner label for the
+// daemon's own ptys, the peer name for proxy panes it runs elsewhere.
+// Group ids are namespaced the same way.
 //
-// All CanvasView call sites keep using `conn?....`; the hub routes each
-// request to the owning connection by pane/group id.
+// All CanvasView call sites keep using `hub.`; the hub routes each request
+// to the owning connection by pane/group id.
 
 import Foundation
 import Common
@@ -75,8 +75,11 @@ final class HostHub {
         var m = meta
         m.id = localPane(remote: meta.id, owner: owner)
         m.parent = meta.parent.map { localPane(remote: $0, owner: owner) }
-        // Tag the host so chrome/switcher read the owner, not "local".
-        m.host = owner
+        // The session's own ptys read as the owner, not "local"; a proxy
+        // pane keeps the peer host its daemon tagged it with.
+        if meta.host == LocalHost {
+            m.host = owner
+        }
         return m
     }
 
@@ -212,6 +215,10 @@ final class HostHub {
         for (owner, batch) in batches {
             conns[owner]?.arrangePanes(ArrangePanes(moves: batch))
         }
+    }
+
+    func peerRetry(_ name: String, owner: String) {
+        conns[owner]?.peerRetry(name)
     }
 
     func setLayoutPolicy(_ p: LayoutPolicy, owner: String) {

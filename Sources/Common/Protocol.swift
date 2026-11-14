@@ -6,7 +6,7 @@
 
 import Foundation
 
-public let ProtoVersion: UInt16 = 5
+public let ProtoVersion: UInt16 = 7
 // First protocol revision whose daemon understands MsgTag.arrangePanes.
 public let ArrangeProtoVersion: UInt16 = 2
 // First protocol revision whose daemon understands MsgTag.layoutPolicy.
@@ -15,6 +15,17 @@ public let LayoutProtoVersion: UInt16 = 3
 public let TieProtoVersion: UInt16 = 4
 // First protocol revision whose daemon echoes create reqIDs.
 public let ReqIDProtoVersion: UInt16 = 5
+// First protocol revision whose daemon hosts guest panes for peer daemons.
+public let PeerProtoVersion: UInt16 = 6
+// First protocol revision whose paneExit carries the real exit status and
+// whose daemon answers MsgTag.waitPane.
+public let WaitProtoVersion: UInt16 = 7
+
+// PaneExit.code of a pane whose status nobody collected.
+public let ExitUnknown: Int32 = -1
+
+// PaneMeta.host of a pane whose pty runs on the daemon holding it.
+public let LocalHost = "local"
 
 public enum MsgTag: UInt8 {
     // client -> daemon
@@ -43,6 +54,9 @@ public enum MsgTag: UInt8 {
     case notifyPane  = 23 // JSON PaneNotify (agent asks canvas to notify)
     case setTie      = 24 // JSON TieMeta (create or update a cable tie)
     case removeTie   = 25 // JSON TieRef
+    case claimGuests = 26 // JSON GuestClaim (peer -> host: the guests it keeps)
+    case peerRetry   = 27 // JSON PeerRef (canvas -> daemon: dial that host now)
+    case waitPane    = 28 // JSON PaneRef (reply: paneExit now if it already ended)
 
     // daemon -> client
     case welcome     = 64 // JSON Welcome
@@ -62,6 +76,7 @@ public enum MsgTag: UInt8 {
     case paneNotice    = 78 // JSON PaneNotify (daemon -> canvas: post this)
     case tieMeta       = 79 // JSON TieMeta (created or updated)
     case tieExit       = 80 // JSON TieRef
+    case peerState     = 81 // JSON PeerInfo (a peer link came up or went down)
 }
 
 public struct PaneID: Hashable, Sendable, CustomStringConvertible {
@@ -107,14 +122,18 @@ public struct Hello: Codable, Sendable {
     // Auth token for TCP remotes; nil = unix socket (trusted) or no auth.
     // Decodes missing (old peers) as nil; old decoders ignore the key.
     public var token: String?
-    public init(version: UInt16 = ProtoVersion, token: String? = nil) {
-        self.version = version; self.token = token
+    // Set by a peer daemon (its stable id): the link hosts guest panes for
+    // that owner instead of viewing the session. Nil = a UI/CLI client.
+    public var owner: String?
+    public init(version: UInt16 = ProtoVersion, token: String? = nil, owner: String? = nil) {
+        self.version = version; self.token = token; self.owner = owner
     }
-    enum CodingKeys: String, CodingKey { case version, token }
+    enum CodingKeys: String, CodingKey { case version, token, owner }
     public init(from decoder: any Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         version = try c.decodeIfPresent(UInt16.self, forKey: .version) ?? ProtoVersion
         token = try c.decodeIfPresent(String.self, forKey: .token)
+        owner = try c.decodeIfPresent(String.self, forKey: .owner)
     }
 }
 
@@ -145,18 +164,23 @@ public struct CreatePane: Codable, Sendable {
     // Echoed in PaneCreated so the requester spots its own reply among
     // concurrent creates. Decodes missing as nil.
     public var reqID: String?
+    // Peer host to run the pty on ([host.<name>]); the pane still lives in
+    // THIS daemon's layout. Nil = a local pty. Decodes missing as nil.
+    public var host: String?
     public init(rect: Rect, cwd: String? = nil, name: String? = nil,
                 command: String? = nil, allowOverlap: Bool = false, gap: Double = 0,
                 joinGroup: GroupID? = nil, joinDirection: String? = nil,
-                orbitAround: PaneID? = nil, parent: PaneID? = nil, reqID: String? = nil) {
+                orbitAround: PaneID? = nil, parent: PaneID? = nil, reqID: String? = nil,
+                host: String? = nil) {
         self.rect = rect; self.cwd = cwd; self.name = name
         self.command = command; self.allowOverlap = allowOverlap; self.gap = gap
         self.joinGroup = joinGroup; self.joinDirection = joinDirection
         self.orbitAround = orbitAround; self.parent = parent; self.reqID = reqID
+        self.host = host
     }
     enum CodingKeys: String, CodingKey {
         case rect, cwd, name, command, allowOverlap, gap, joinGroup, joinDirection
-        case orbitAround, parent, reqID
+        case orbitAround, parent, reqID, host
     }
     public init(from decoder: any Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -171,6 +195,7 @@ public struct CreatePane: Codable, Sendable {
         orbitAround = try c.decodeIfPresent(PaneID.self, forKey: .orbitAround)
         parent = try c.decodeIfPresent(PaneID.self, forKey: .parent)
         reqID = try c.decodeIfPresent(String.self, forKey: .reqID)
+        host = try c.decodeIfPresent(String.self, forKey: .host)
     }
 }
 
@@ -262,7 +287,9 @@ public struct PaneMeta: Codable, Sendable {
     public var rect: Rect
     public var name: String?      // user-set name; nil -> auto name (AutoName)
     public var cwd: String
-    public var host: String       // "local" or hostname
+    // "local" = the pty runs on this daemon; else the [host.<name>] peer
+    // that runs it for this session (a proxy pane).
+    public var host: String
     public var title: String?     // program-set title (OSC)
     public var exited: Bool
     // Floating: ignores same-group/ungrouped overlap (still hard-blocked
@@ -274,15 +301,21 @@ public struct PaneMeta: Codable, Sendable {
     public var repoRoot: String?  // git work tree containing cwd
     public var worktree: String?  // branch, only for a linked worktree
     public var parent: PaneID?    // pane that spawned this one (gctd open)
+    // Guest pane: a pty hosted for the peer daemon with this id; it has no
+    // place in this daemon's own layout. Decodes missing as nil.
+    public var guestOf: String?
+    // Proxy pane whose peer link is down: kept in the layout, input dropped.
+    public var offline: Bool
     public init(id: PaneID, rect: Rect, name: String?, cwd: String, host: String,
                 title: String?, exited: Bool, floating: Bool = false) {
         self.id = id; self.rect = rect; self.name = name; self.cwd = cwd
         self.host = host; self.title = title; self.exited = exited
         self.floating = floating
+        self.offline = false
     }
     enum CodingKeys: String, CodingKey {
         case id, rect, name, cwd, host, title, exited, floating
-        case proc, repoRoot, worktree, parent
+        case proc, repoRoot, worktree, parent, guestOf, offline
     }
     public init(from decoder: any Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -298,6 +331,8 @@ public struct PaneMeta: Codable, Sendable {
         repoRoot = try c.decodeIfPresent(String.self, forKey: .repoRoot)
         worktree = try c.decodeIfPresent(String.self, forKey: .worktree)
         parent = try c.decodeIfPresent(PaneID.self, forKey: .parent)
+        guestOf = try c.decodeIfPresent(String.self, forKey: .guestOf)
+        offline = try c.decodeIfPresent(Bool.self, forKey: .offline) ?? false
     }
 }
 
@@ -333,19 +368,46 @@ public struct Welcome: Codable, Sendable {
     // Absent on the wire from old daemons; decode as empty.
     public var groups: [GroupMeta]
     public var ties: [TieMeta]
+    // Guest panes this daemon hosts for peers (a UI client sees all of them,
+    // a peer link only its own). Never part of `panes`.
+    public var guests: [PaneMeta]
+    // Configured peer hosts and whether their link is up.
+    public var peers: [PeerInfo]
     public init(version: UInt16 = ProtoVersion, panes: [PaneMeta],
-                groups: [GroupMeta] = [], ties: [TieMeta] = []) {
+                groups: [GroupMeta] = [], ties: [TieMeta] = [],
+                guests: [PaneMeta] = [], peers: [PeerInfo] = []) {
         self.version = version; self.panes = panes; self.groups = groups
-        self.ties = ties
+        self.ties = ties; self.guests = guests; self.peers = peers
     }
-    enum CodingKeys: String, CodingKey { case version, panes, groups, ties }
+    enum CodingKeys: String, CodingKey { case version, panes, groups, ties, guests, peers }
     public init(from decoder: any Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         version = try c.decodeIfPresent(UInt16.self, forKey: .version) ?? ProtoVersion
         panes = try c.decodeIfPresent([PaneMeta].self, forKey: .panes) ?? []
         groups = try c.decodeIfPresent([GroupMeta].self, forKey: .groups) ?? []
         ties = try c.decodeIfPresent([TieMeta].self, forKey: .ties) ?? []
+        guests = try c.decodeIfPresent([PaneMeta].self, forKey: .guests) ?? []
+        peers = try c.decodeIfPresent([PeerInfo].self, forKey: .peers) ?? []
     }
+}
+
+// A configured peer host and the state of this daemon's link to it.
+public struct PeerInfo: Codable, Sendable, Equatable {
+    public var name: String
+    public var up: Bool
+    public init(name: String, up: Bool) { self.name = name; self.up = up }
+}
+
+public struct PeerRef: Codable, Sendable {
+    public var name: String
+    public init(name: String) { self.name = name }
+}
+
+// The guest ids a peer daemon still has proxies for. The host reaps every
+// other guest of that owner (crash or close-while-down leftovers).
+public struct GuestClaim: Codable, Sendable {
+    public var ids: [PaneID]
+    public init(ids: [PaneID]) { self.ids = ids }
 }
 
 public struct PaneCreated: Codable, Sendable {
@@ -356,13 +418,19 @@ public struct PaneCreated: Codable, Sendable {
 
 public struct PaneExit: Codable, Sendable {
     public var id: PaneID
+    // Shell-style status (128+signal when killed); ExitUnknown when the
+    // daemon never saw one (closed by a client, or no waitpid result).
     public var code: Int32
     public init(id: PaneID, code: Int32) { self.id = id; self.code = code }
 }
 
 public struct ErrorReply: Codable, Sendable {
     public var message: String
-    public init(message: String) { self.message = message }
+    // CreatePane.reqID this refuses; nil for every other failure.
+    public var reqID: String?
+    public init(message: String, reqID: String? = nil) {
+        self.message = message; self.reqID = reqID
+    }
 }
 
 // MARK: - Terminal groups

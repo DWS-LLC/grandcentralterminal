@@ -21,9 +21,9 @@ func log(_ s: String) {
     FileHandle.standardError.write(Data("[gctd] \(s)\n".utf8))
 }
 
-func die(_ s: String) -> Never {
+func die(_ s: String, _ code: CLIExit = .failed) -> Never {
     FileHandle.standardError.write(Data("gctd: \(s)\n".utf8))
-    exit(1)
+    exit(code.rawValue)
 }
 
 // Portable home: $HOME first (agents/sandboxes override it), passwd
@@ -142,7 +142,7 @@ final class GCTClient {
     func nextReply() -> Frame? {
         while let f = conn.readFrame() {
             switch f.tag {
-            case .paneMeta, .groupMeta, .groupExit, .paneExit:
+            case .paneMeta, .groupMeta, .groupExit, .paneExit, .peerState:
                 continue
             default:
                 return f
@@ -240,48 +240,70 @@ func hookNotice(_ raw: Data) -> (title: String, body: String)? {
     return nil
 }
 
-// Resolve a pane by uuid prefix, exact name, or $GCT_PANE_ID shorthand.
-// "self" = this pane (requires GCT_PANE_ID in env, i.e. called from a pane).
+// Resolve a pane by uuid (optionally `pane:`-typed), unique uuid prefix,
+// exact name, or short uuid suffix. "self" = this pane (requires
+// GCT_PANE_ID in env, i.e. called from a pane). Ambiguity lists the
+// candidates and exits notFound, changing nothing.
 func resolvePane(_ w: Welcome, _ raw: String) -> PaneMeta? {
+    // Guests (panes hosted for a peer) resolve too, so `close` can reap one.
+    let all = w.panes + w.guests
     let q: String
     if raw == "self" {
         guard let id = env["GCT_PANE_ID"], !id.isEmpty else {
-            die("self needs GCT_PANE_ID (run from inside a GCT pane)")
+            bad("self needs GCT_PANE_ID (run from inside a GCT pane)")
         }
         q = id
     } else {
-        q = raw
+        q = untyped(raw, kind: PaneKind)
     }
-    guard !q.isEmpty else { die("empty pane id") }
-    if let hit = w.panes.first(where: { $0.id.uuid.uuidString == q }) { return hit }
+    guard !q.isEmpty else { bad("empty pane id") }
+
+    func uuid(_ p: PaneMeta) -> String { p.id.uuid.uuidString.lowercased() }
+    let lower = q.lowercased()
+    if let hit = all.first(where: { uuid($0) == lower }) { return hit }
     // Ambiguous prefix: a unique name may still settle it, else refuse.
-    let prefixed = w.panes.filter { $0.id.uuid.uuidString.lowercased().hasPrefix(q.lowercased()) }
+    let prefixed = all.filter { uuid($0).hasPrefix(lower) }
     if prefixed.count == 1 { return prefixed[0] }
-    let named = w.panes.filter { ($0.name ?? "Terminal") == q }
+    func called(_ ps: [PaneMeta]) -> [PaneMeta] { ps.filter { ($0.name ?? "Terminal") == q } }
+    // A guest only answers to a name no local pane has.
+    let local = called(w.panes)
+    let named = local.isEmpty ? called(w.guests) : local
     if named.count == 1 { return named[0] }
-    if named.count > 1 { die("name \(q) matches \(named.count) panes; use an id prefix") }
-    if prefixed.count > 1 { die("id prefix \(q) matches \(prefixed.count) panes; use more of it") }
-    return nil
+    if named.count > 1 { ambiguous(q, named.map(paneRow)) }
+    if prefixed.count > 1 { ambiguous(q, prefixed.map(paneRow)) }
+
+    guard q.count >= MinSuffix else { return nil }
+    let tailed = all.filter { uuid($0).hasSuffix(lower) }
+    if tailed.count > 1 { ambiguous(q, tailed.map(paneRow)) }
+    return tailed.first
 }
 
 func resolveGroup(_ w: Welcome, _ raw: String) -> GroupMeta? {
-    guard !raw.isEmpty else { die("empty group id") }
-    if let hit = w.groups.first(where: { $0.id.uuid.uuidString == raw }) { return hit }
+    let q = untyped(raw, kind: GroupKind)
+    guard !q.isEmpty else { bad("empty group id") }
+
+    func uuid(_ g: GroupMeta) -> String { g.id.uuid.uuidString.lowercased() }
+    let lower = q.lowercased()
+    if let hit = w.groups.first(where: { uuid($0) == lower }) { return hit }
     // Same ambiguity rule as resolvePane.
-    let prefixed = w.groups.filter { $0.id.uuid.uuidString.lowercased().hasPrefix(raw.lowercased()) }
+    let prefixed = w.groups.filter { uuid($0).hasPrefix(lower) }
     if prefixed.count == 1 { return prefixed[0] }
-    let named = w.groups.filter { ($0.name ?? "") == raw }
+    let named = w.groups.filter { ($0.name ?? "") == q }
     if named.count == 1 { return named[0] }
-    if named.count > 1 { die("name \(raw) matches \(named.count) groups; use an id prefix") }
-    if prefixed.count > 1 { die("id prefix \(raw) matches \(prefixed.count) groups; use more of it") }
-    return nil
+    if named.count > 1 { ambiguous(q, named.map(groupRow)) }
+    if prefixed.count > 1 { ambiguous(q, prefixed.map(groupRow)) }
+
+    guard q.count >= MinSuffix else { return nil }
+    let tailed = w.groups.filter { uuid($0).hasSuffix(lower) }
+    if tailed.count > 1 { ambiguous(q, tailed.map(groupRow)) }
+    return tailed.first
 }
 
 // `key=value` args after the subcommand.
 func flags(_ args: [String]) -> [String: String] {
     var out = [String: String]()
     for a in args {
-        guard let eq = a.firstIndex(of: "=") else { die("expected key=value, got \(a)") }
+        guard let eq = a.firstIndex(of: "=") else { bad("expected key=value, got \(a)") }
         out[String(a[..<eq])] = String(a[a.index(after: eq)...])
     }
     return out
@@ -292,14 +314,14 @@ func parseRect(_ raw: String) -> Rect {
     let n = raw.split(separator: ",").compactMap { Double($0) }
     // nan/inf parse as Double but can't be JSON-encoded: send would fail
     // silently and the CLI would wait on a reply forever.
-    guard n.count == 4, n.allSatisfy(\.isFinite) else { die("rect must be x,y,w,h, got \(raw)") }
+    guard n.count == 4, n.allSatisfy(\.isFinite) else { bad("rect must be x,y,w,h, got \(raw)") }
     return Rect(x: n[0], y: n[1], w: n[2], h: n[3])
 }
 
 // Optional numeric flag; present-but-garbage dies instead of guessing.
 func number(_ f: [String: String], _ key: String) -> Double? {
     guard let raw = f[key] else { return nil }
-    guard let n = Double(raw), n.isFinite else { die("\(key) must be a number, got \(raw)") }
+    guard let n = Double(raw), n.isFinite else { bad("\(key) must be a number, got \(raw)") }
     return n
 }
 
@@ -363,49 +385,8 @@ func stripANSI(_ s: String) -> String {
 }
 
 func usage() -> Never {
-    fputs("""
-        usage: gctd <command> [args]
-
-          Daemon control (no command runs the daemon itself):
-            status                    list panes (alias: list)
-            stop                      kill daemon + panes
-            version                   print the gctd version (--version)
-
-          Agent/harness surface (prefer GCT panes for background tasks:
-          grouped, no time limits, user-inspectable on the canvas):
-            open [cwd=..] [name=..] [cmd=..] [group=..] [parent=<pane>] [size=w,h] [rect=x,y,w,h]
-                                      open a pane beside focused/origin, print its id
-                                      (parent= wires it to that pane, whoever calls)
-            tie <parent> <child>... [at=0.4]
-                                      tie the cables from <parent> to each <child>
-                                      into one bundle; prints the tie id
-            untie <tie>               remove a tie
-            move <pane> rect=x,y,w,h  place a pane (overlap rules still apply)
-            list                      panes + groups, one per line
-            dump <pane> [limit=N] [--strip-ansi]
-                                      scrollback snapshot (id prefix, name, or self)
-            send <pane> [text]...     type text into a pane (appends newline;
-                                      --no-newline to skip; --paste brackets it;
-                                      \\xHH/\\e/\\n/\\t escapes; no text reads stdin)
-            notify <pane> [title=..] <text>...
-                                      desktop notification, click focuses the pane
-                                      (--hook: Claude Code hook payload on stdin)
-            close <pane>              terminate a pane
-            rename <pane> name=..     name a pane
-            group <pane>... name=.. [color=#..]
-                                      group panes (2+), print group id
-            ungroup <group>           dissolve a group (panes survive)
-            focus <pane>              focus + center a pane on the canvas
-            camera [pane] [x=.. y=..] [zoom=..] [dur=..]
-                                      glide the camera to a world point or pane
-            do <action> [pane] [dur=..]
-                                      run a keybind action (fit-all, zoom-pane..)
-            agent-setup print|install|uninstall|context
-                                      skill install + live pane context for hooks
-                                      (--harness=claude,codex,opencode,cursor,cursor-agents;
-                                      install --hooks merges a Claude SessionStart hook)
-        """, stderr)
-    exit(2)
+    fputs(helpText(nil) ?? "", stderr)
+    exit(CLIExit.usage.rawValue)
 }
 
 guard let verb = args.first else {
@@ -432,8 +413,11 @@ guard let verb = args.first else {
     }
 
     let state = StateStore(path: statePath)
+    // Next to state.json, so isolated instances (GCT_STATE) get their own.
+    let idPath = (statePath as NSString).deletingLastPathComponent + "/daemon.id"
     let server = Server(state: state, sockPath: sockPath,
-                        tcpPort: servePort, token: serveToken)
+                        tcpPort: servePort, token: serveToken,
+                        daemonID: DaemonID.load(path: idPath))
 
     signal(SIGPIPE, SIG_IGN)
     // On TERM/INT: save pending state, exit. Children get EIO on their pty
@@ -461,9 +445,12 @@ let rest = Array(args.dropFirst())
 let defaultTieAt = 0.4
 
 func needClient() -> GCTClient {
-    guard let c = GCTClient() else { die("daemon not running (\(sockPath))") }
+    guard let c = GCTClient() else { die("daemon not running (\(sockPath))", .unreachable) }
     return c
 }
+
+// `gctd <cmd> --help`: first arg only, so `send <pane> --help` stays keystrokes.
+if rest.first == "--help" { printHelp(verb) }
 
 switch verb {
 case "version", "--version":
@@ -473,6 +460,10 @@ case "version", "--version":
 case "status", "list":
     let c = needClient()
     guard let w = c.welcome() else { die("no reply from daemon") }
+    if rest.contains("--json") {
+        printJSON(listJSON(w))
+        exit(0)
+    }
     if w.panes.isEmpty { print("no panes") }
     let auto = AutoName.names(w.panes.map {
         AutoName.Pane(id: $0.id, cwd: $0.cwd, proc: $0.proc, title: $0.title,
@@ -480,7 +471,14 @@ case "status", "list":
     }, home: daemonHome())
     for p in w.panes {
         let name = p.name ?? auto[p.id] ?? "Terminal"
-        print("\(p.id)  \(name)  \(p.cwd)  exited=\(p.exited)")
+        let host = p.host == LocalHost ? "" : "  host=\(p.host)\(p.offline ? " (offline)" : "")"
+        print("\(p.id)  \(name)  \(p.cwd)  exited=\(p.exited)\(host)")
+    }
+    for g in w.guests {
+        print("guest \(g.id)  \(g.name ?? "Terminal")  \(g.cwd)  guest-of=\(g.guestOf ?? "?")")
+    }
+    for peer in w.peers {
+        print("peer \(peer.name)  \(peer.up ? "up" : "down")")
     }
     for g in w.groups {
         print("group \(g.id)  \(g.name ?? "")  members=\(g.members.count)")
@@ -503,7 +501,9 @@ case "open":
     // the calling pane (self) when resolvable, else canvas origin.
     let c = needClient()
     guard let w = c.welcome() else { die("no reply from daemon") }
-    let f = flags(rest)
+    let waiting = rest.contains("--wait")
+    if waiting, w.version < WaitProtoVersion { die(staleDaemon) }
+    let f = flags(rest.filter { $0 != "--wait" })
     var anchor = Rect(x: 0, y: 0, w: 900, h: 560)
     var join: GroupID?
     var orbit: PaneID?
@@ -513,7 +513,7 @@ case "open":
     // parent= stands in for the caller: placed beside it, wired to it.
     var parent: PaneID?
     if let pq = f["parent"] {
-        guard let p = resolvePane(w, pq) else { die("no such pane \(pq)") }
+        guard let p = resolvePane(w, pq) else { missing("pane \(pq)") }
         caller = p
         parent = p.id
     }
@@ -531,7 +531,7 @@ case "open":
     // size=w,h keeps the beside-caller spot, resized to fit the job.
     if let s = f["size"] {
         let n = s.split(separator: ",").compactMap { Double($0) }
-        guard n.count == 2, n.allSatisfy(\.isFinite) else { die("size must be w,h, got \(s)") }
+        guard n.count == 2, n.allSatisfy(\.isFinite) else { bad("size must be w,h, got \(s)") }
         anchor.w = n[0]
         anchor.h = n[1]
     }
@@ -539,37 +539,45 @@ case "open":
     if let r = f["rect"] { anchor = parseRect(r) }
     // No cwd= opens where the caller stands (agents expect `cd repo; gctd
     // open cmd=make` to build the repo, not $HOME).
-    let cwd = f["cwd"] ?? FileManager.default.currentDirectoryPath
+    // host= opens on a peer, where this machine's cwd means nothing.
+    let peerHost = f["host"]
+    if peerHost != nil, w.version < PeerProtoVersion { die(stalePeers) }
+    let cwd = f["cwd"] ?? (peerHost == nil ? FileManager.default.currentDirectoryPath : nil)
     let reqID = UUID().uuidString
     _ = c.conn.send(tag: .createPane, json: CreatePane(
         rect: anchor, cwd: cwd, name: f["name"], command: f["cmd"],
         joinGroup: join, joinDirection: join == nil ? nil : "right",
-        orbitAround: f["rect"] == nil ? orbit : nil, parent: parent, reqID: reqID))
+        orbitAround: f["rect"] == nil ? orbit : nil, parent: parent, reqID: reqID,
+        host: peerHost))
     // Answer is a paneCreated broadcast; errorReply on spawn failure.
     // Tag-check first: a stray broadcast decodes as nothing, not as the
     // wrong reply (all reply shapes are [$id] flat strings otherwise).
     // reqID: another client's concurrent create is not our answer.
     while let r = c.nextReply() {
-        if r.tag == .paneCreated, let m: PaneCreated = r.decode(), ours(m.reqID, reqID, w) { print(m.meta.id); exit(0) }
+        if r.tag == .paneCreated, let m: PaneCreated = r.decode(), ours(m.reqID, reqID, w) {
+            print(m.meta.id)
+            if waiting { awaitExit(c, m.meta.id) }
+            exit(0)
+        }
         if r.tag == .errorReply, let e: ErrorReply = r.decode() { die(e.message) }
     }
     die("no reply from daemon")
 
 case "dump":
-    guard !rest.isEmpty else { die("dump <pane> [limit=N] [--strip-ansi]") }
+    guard !rest.isEmpty else { bad("dump <pane> [limit=N] [--strip-ansi]") }
     var strip = false
     var limit = 0
     var target: String?
     for a in rest {
         if a == "--strip-ansi" || a == "--strip" { strip = true }
-        else if a.hasPrefix("limit=") { guard let n = Int(a.dropFirst(6)) else { die("bad limit") }; limit = n }
+        else if a.hasPrefix("limit=") { guard let n = Int(a.dropFirst(6)) else { bad("bad limit") }; limit = n }
         else if target == nil { target = a }
-        else { die("unexpected \(a)") }
+        else { bad("unexpected \(a)") }
     }
-    guard let tq = target else { die("dump <pane> [limit=N] [--strip-ansi]") }
+    guard let tq = target else { bad("dump <pane> [limit=N] [--strip-ansi]") }
     let c = needClient()
     guard let w = c.welcome() else { die("no reply from daemon") }
-    guard let pane = resolvePane(w, tq) else { die("no such pane \(tq)") }
+    guard let pane = resolvePane(w, tq) else { missing("pane \(tq)") }
     _ = c.conn.send(tag: .dumpPane, json: DumpPane(id: pane.id, limit: limit))
     while let r = c.nextReply() {
         if r.tag == .paneDump, let d: PaneDump = r.decode() {
@@ -596,10 +604,10 @@ case "send":
     // in the pane's stdin exactly as typed (+ trailing newline default).
     // No text args reads stdin, so output pipes between panes:
     //   gctd dump build --strip-ansi | gctd send agent --paste
-    guard rest.count >= 1 else { die(sendUsage) }
+    guard rest.count >= 1 else { bad(sendUsage) }
     let c = needClient()
     guard let w = c.welcome() else { die("no reply from daemon") }
-    guard let pane = resolvePane(w, rest[0]) else { die("no such pane \(rest[0])") }
+    guard let pane = resolvePane(w, rest[0]) else { missing("pane \(rest[0])") }
     var parts = Array(rest.dropFirst())
     var newline = true
     var paste = false
@@ -613,14 +621,14 @@ case "send":
     let lf = UInt8(ascii: "\n")
     var keys: Data
     if parts.isEmpty {
-        guard isatty(STDIN_FILENO) == 0 else { die(sendUsage) }
+        guard isatty(STDIN_FILENO) == 0 else { bad(sendUsage) }
         keys = FileHandle.standardInput.readDataToEndOfFile()
         // The piped payload is literal; its last newline is just EOF.
         if keys.last == lf { keys.removeLast() }
     } else {
         keys = unescapeKeys(parts.joined(separator: " "))
     }
-    guard !keys.isEmpty else { die(sendUsage) }
+    guard !keys.isEmpty else { bad(sendUsage) }
 
     // Bracketed paste: a multi-line payload lands as one paste instead of
     // running line by line. The app must have asked for it (DECSET 2004).
@@ -636,7 +644,7 @@ case "notify":
     // must not block the agent.
     let isHook = rest.contains("--hook")
     let words = rest.filter { $0 != "--hook" }
-    guard let target = words.first else { die(notifyUsage) }
+    guard let target = words.first else { bad(notifyUsage) }
 
     var title: String?
     var body = words.dropFirst().filter { !$0.hasPrefix("title=") }.joined(separator: " ")
@@ -649,34 +657,34 @@ case "notify":
         title = title ?? hook.title
         body = hook.body
     }
-    guard !body.isEmpty else { die(notifyUsage) }
+    guard !body.isEmpty else { bad(notifyUsage) }
 
     let c = needClient()
     guard let w = c.welcome() else { die("no reply from daemon") }
-    guard let pane = resolvePane(w, target) else { die("no such pane \(target)") }
+    guard let pane = resolvePane(w, target) else { missing("pane \(target)") }
     _ = c.conn.send(tag: .notifyPane, json: PaneNotify(id: pane.id, title: title, body: body))
     exit(0)
 
 case "close":
-    guard rest.count == 1 else { die("close <pane>") }
+    guard rest.count == 1 else { bad("close <pane>") }
     let c = needClient()
     guard let w = c.welcome() else { die("no reply from daemon") }
-    guard let pane = resolvePane(w, rest[0]) else { die("no such pane \(rest[0])") }
+    guard let pane = resolvePane(w, rest[0]) else { missing("pane \(rest[0])") }
     _ = c.conn.send(tag: .closePane, json: PaneRef(id: pane.id))
     exit(0)
 
 case "tie":
     let args = rest.filter { !$0.contains("=") }
-    guard args.count >= 3 else { die("tie <parent> <child> <child>... [at=0.4]") }
+    guard args.count >= 3 else { bad("tie <parent> <child> <child>... [at=0.4]") }
     let f = flags(rest.filter { $0.contains("=") })
     let at = f["at"].flatMap(Double.init) ?? defaultTieAt
-    guard (0...1).contains(at) else { die("at must be 0...1, got \(f["at"] ?? "")") }
+    guard (0...1).contains(at) else { bad("at must be 0...1, got \(f["at"] ?? "")") }
 
     let c = needClient()
     guard let w = c.welcome() else { die("no reply from daemon") }
-    guard let parent = resolvePane(w, args[0]) else { die("no such pane \(args[0])") }
+    guard let parent = resolvePane(w, args[0]) else { missing("pane \(args[0])") }
     let strands = args.dropFirst().map { q -> TieMeta.Strand in
-        guard let child = resolvePane(w, q) else { die("no such pane \(q)") }
+        guard let child = resolvePane(w, q) else { missing("pane \(q)") }
         guard child.parent == parent.id else { die("\(q) was not spawned by \(args[0]): no cable to tie") }
         return TieMeta.Strand(parent: parent.id, child: child.id)
     }
@@ -690,25 +698,25 @@ case "tie":
     die("no reply from daemon")
 
 case "untie":
-    guard rest.count == 1 else { die("untie <tie>") }
+    guard rest.count == 1 else { bad("untie <tie>") }
     let c = needClient()
     guard let w = c.welcome() else { die("no reply from daemon") }
     let matches = w.ties.filter { $0.id.hasPrefix(rest[0].uppercased()) || $0.id == rest[0] }
-    guard matches.count == 1 else { die(matches.isEmpty ? "no such tie \(rest[0])" : "ambiguous tie \(rest[0])") }
+    guard matches.count == 1 else { die(matches.isEmpty ? "no such tie \(rest[0])" : "ambiguous tie \(rest[0])", .notFound) }
     _ = c.conn.send(tag: .removeTie, json: TieRef(id: matches[0].id))
     exit(0)
 
 case "rename":
-    guard rest.count == 2, rest[1].hasPrefix("name=") else { die("rename <pane> name=..") }
+    guard rest.count == 2, rest[1].hasPrefix("name=") else { bad("rename <pane> name=..") }
     let c = needClient()
     guard let w = c.welcome() else { die("no reply from daemon") }
-    guard let pane = resolvePane(w, rest[0]) else { die("no such pane \(rest[0])") }
+    guard let pane = resolvePane(w, rest[0]) else { missing("pane \(rest[0])") }
     let name = String(rest[1].dropFirst(5))
     _ = c.conn.send(tag: .renamePane, json: RenamePane(id: pane.id, name: name.isEmpty ? nil : name))
     exit(0)
 
 case "group":
-    guard rest.count >= 2 else { die("group <pane>... name=.. [color=#..]") }
+    guard rest.count >= 2 else { bad("group <pane>... name=.. [color=#..]") }
     let c = needClient()
     guard let w = c.welcome() else { die("no reply from daemon") }
     var name: String?
@@ -718,9 +726,9 @@ case "group":
         if a.hasPrefix("name=") { name = String(a.dropFirst(5)) }
         else if a.hasPrefix("color=") { color = String(a.dropFirst(6)) }
         else if let p = resolvePane(w, a) { panes.append(p.id) }
-        else { die("no such pane \(a)") }
+        else { missing("pane \(a)") }
     }
-    guard panes.count >= 2 else { die("group needs 2+ panes") }
+    guard panes.count >= 2 else { bad("group needs 2+ panes") }
     let reqID = UUID().uuidString
     _ = c.conn.send(tag: .createGroup, json: CreateGroup(name: name, color: color, members: panes, reqID: reqID))
     while let r = c.nextReply() {
@@ -730,18 +738,18 @@ case "group":
     die("no reply from daemon")
 
 case "ungroup":
-    guard rest.count == 1 else { die("ungroup <group>") }
+    guard rest.count == 1 else { bad("ungroup <group>") }
     let c = needClient()
     guard let w = c.welcome() else { die("no reply from daemon") }
-    guard let g = resolveGroup(w, rest[0]) else { die("no such group \(rest[0])") }
+    guard let g = resolveGroup(w, rest[0]) else { missing("group \(rest[0])") }
     _ = c.conn.send(tag: .deleteGroup, json: GroupRef(id: g.id))
     exit(0)
 
 case "focus":
-    guard rest.count == 1 else { die("focus <pane>") }
+    guard rest.count == 1 else { bad("focus <pane>") }
     let c = needClient()
     guard let w = c.welcome() else { die("no reply from daemon") }
-    guard let pane = resolvePane(w, rest[0]) else { die("no such pane \(rest[0])") }
+    guard let pane = resolvePane(w, rest[0]) else { missing("pane \(rest[0])") }
     // Daemon validates + broadcasts paneFocus; the canvas focuses,
     // raises, and centers per its camera-follows/fits flags. No success
     // reply — the broadcast IS the delivery (canvas may be hidden).
@@ -755,10 +763,10 @@ case "focus":
 case "move":
     // gctd move <pane> rect=x,y,w,h: place a pane (daemon-resolved, so
     // the no-overlap policy still holds). Scene staging for demos.
-    guard rest.count == 2, rest[1].hasPrefix("rect=") else { die("move <pane> rect=x,y,w,h") }
+    guard rest.count == 2, rest[1].hasPrefix("rect=") else { bad("move <pane> rect=x,y,w,h") }
     let c = needClient()
     guard let w = c.welcome() else { die("no reply from daemon") }
-    guard let pane = resolvePane(w, rest[0]) else { die("no such pane \(rest[0])") }
+    guard let pane = resolvePane(w, rest[0]) else { missing("pane \(rest[0])") }
     let rect = parseRect(String(rest[1].dropFirst("rect=".count)))
     _ = c.conn.send(tag: .movePane, json: MovePane(id: pane.id, rect: rect))
     exit(0)
@@ -767,7 +775,7 @@ case "camera":
     // gctd camera [pane] [x=.. y=..] [zoom=..] [dur=..]
     // e.g. `gctd camera build zoom=0.4 dur=3` glides to build's center.
     let positional = rest.filter { !$0.contains("=") }
-    guard positional.count <= 1 else { die("camera [pane] [x=..] [y=..] [zoom=..] [dur=..]") }
+    guard positional.count <= 1 else { bad("camera [pane] [x=..] [y=..] [zoom=..] [dur=..]") }
     let f = flags(rest.filter { $0.contains("=") })
     let c = needClient()
     var cmd = CanvasCommand(verb: .camera,
@@ -775,7 +783,7 @@ case "camera":
                             zoom: number(f, "zoom"), duration: number(f, "dur"))
     if let raw = positional.first {
         guard let w = c.welcome() else { die("no reply from daemon") }
-        guard let pane = resolvePane(w, raw) else { die("no such pane \(raw)") }
+        guard let pane = resolvePane(w, raw) else { missing("pane \(raw)") }
         cmd.pane = pane.id
     }
     sendCanvas(c, cmd)
@@ -785,17 +793,61 @@ case "do":
     // fit-all, zoom-pane, open-new-window-right), focusing pane first.
     // dur= paces the action's camera move, e.g. `do fit-all dur=4`.
     let positional = rest.filter { !$0.contains("=") }
-    guard (1...2).contains(positional.count) else { die("do <action> [pane] [dur=..]") }
+    guard (1...2).contains(positional.count) else { bad("do <action> [pane] [dur=..]") }
     let f = flags(rest.filter { $0.contains("=") })
     let c = needClient()
     var cmd = CanvasCommand(verb: .action, action: positional[0],
                             duration: number(f, "dur"))
     if positional.count == 2 {
         guard let w = c.welcome() else { die("no reply from daemon") }
-        guard let pane = resolvePane(w, positional[1]) else { die("no such pane \(positional[1])") }
+        guard let pane = resolvePane(w, positional[1]) else { missing("pane \(positional[1])") }
         cmd.pane = pane.id
     }
     sendCanvas(c, cmd)
+
+case "inspect":
+    // inspect [<pane>] [--json]: one pane in full (default: the caller).
+    let words = rest.filter { $0 != "--json" }
+    guard words.count <= 1 else { bad("inspect [<pane>] [--json]") }
+    let c = needClient()
+    guard let w = c.welcome() else { die("no reply from daemon") }
+    let query = words.first ?? "self"
+    guard let pane = resolvePane(w, query) else { missing("pane \(query)") }
+    let info = paneJSON(w, pane, names: displayNames(w))
+    if rest.contains("--json") {
+        printJSON(info)
+        exit(0)
+    }
+    for line in inspectLines(info) { print(line) }
+    exit(0)
+
+case "hosts":
+    let c = needClient()
+    guard let w = c.welcome() else { die("no reply from daemon") }
+    let peers = peersJSON(w)
+    if rest.contains("--json") {
+        printJSON(["hosts": peers])
+        exit(0)
+    }
+    if peers.isEmpty { print("no hosts") }
+    for p in peers { print("\(p.name)  \(p.up ? "up" : "down")  panes=\(p.panes)") }
+    exit(0)
+
+case "wait":
+    // wait <pane>: leave with the pane program's exit status.
+    guard rest.count == 1 else { bad("wait <pane>") }
+    let c = needClient()
+    guard let w = c.welcome() else { die("no reply from daemon") }
+    guard w.version >= WaitProtoVersion else { die(staleDaemon) }
+    // Not in the layout any more? A full uuid may still be in the daemon's
+    // recent-exit table; anything else is simply gone.
+    let known = resolvePane(w, rest[0])?.id ?? PaneID(string: untyped(rest[0], kind: PaneKind))
+    guard let id = known else { missing("pane \(rest[0])") }
+    _ = c.conn.send(tag: .waitPane, json: PaneRef(id: id))
+    awaitExit(c, id)
+
+case "help", "--help", "-h":
+    printHelp(rest.first)
 
 default:
     // runAgentSetup exits on every path, but the compiler can't see

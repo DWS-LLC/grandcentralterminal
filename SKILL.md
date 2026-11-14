@@ -11,7 +11,9 @@ canvas. Native background tasks are invisible to them. The daemon
 
 Binary: `~/Library/Application Support/Grand Central Terminal/bin/gctd`
 (or `gctd` on PATH). Inside a GCT pane, `GCT_SOCK`/`GCT_PANE_ID` are already
-set — `gctd` just works. Outside, it targets the live daemon by default.
+set, and `GCT_BIN_DIR` is the gctd matching the daemon — `gctd` just works.
+If `which gctd` isn't `$GCT_BIN_DIR/gctd`, a startup file reordered PATH: call
+`$GCT_BIN_DIR/gctd`. Outside, it targets the live daemon by default.
 Use the staged binary (same build as the daemon); a newer CLI against an
 older daemon may hang on new subcommands (`dump`) — relaunch the app to
 refresh a stale daemon.
@@ -23,7 +25,10 @@ refresh a stale daemon.
 gctd open name=build cmd="make -j8"
 ID=$(gctd open cwd=/tmp/work name=tests cmd="pytest -q")
 gctd open name=api-log size=900,640 cmd="tail -f api.log"
+gctd open host=enterprise name=build cmd="make -j8"   # pty on a peer machine, pane on this canvas
 ```
+
+`gctd list` shows the peers this daemon can reach (`peer <name> up`).
 
 Keep it nearby: run `gctd open` from your own pane so the new window orbits
 you, clear of other panes. Don't `rect=` it across the canvas.
@@ -46,6 +51,8 @@ shell. `group=<name|id>` joins that group.
 
 ```sh
 gctd list                              # panes + groups
+gctd list --json                       # stable ids/keys: parse this, not the lines
+gctd inspect self --json               # one pane: cwd, proc, repo, group, parent
 gctd dump self                         # this pane's scrollback
 gctd dump $ID limit=4000 --strip-ansi  # last 4KB, readable text
 gctd send $ID "make test"              # type into the pane (adds newline)
@@ -60,7 +67,18 @@ escape sequences for reading. `[truncated: ...]` on stderr means the ring
 held more than `limit` asked for. Poll `dump` to follow a background task —
 no timeouts, no lost output.
 
-Pane ids: uuid prefix, exact `name=`, or `self` (= `$GCT_PANE_ID`).
+Pane ids: uuid (or `pane:<uuid>`), unique prefix/suffix, exact `name=`, or
+`self` (= `$GCT_PANE_ID`). An ambiguous one lists candidates and exits 3.
+
+## Wait for a command
+
+```sh
+gctd open --wait name=tests cmd="pytest -q"   # blocks; exit = the command's status
+ID=$(gctd open name=build cmd="make"); gctd wait $ID
+```
+
+Prefer this to polling `dump`. Exit: n, or 128+signal; 1 = pane closed, 2 = bad
+args, 3 = no such pane / ambiguous, 4 = daemon unreachable.
 
 ## Organize: group correlated windows
 

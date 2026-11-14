@@ -162,4 +162,5 @@ slave pty as its controlling terminal, and execs the shell. Without the ctty,
 don't work. The environment pins `TERM=xterm-256color`, `COLORTERM=truecolor`,
 and `LANG=en_US.UTF-8` (GUI-launched daemons inherit launchd's sparse env,
 which turns htop monochrome) and strips `NO_COLOR`, because panes are new
-terminals and should color.
+terminals and should color. `GCT_PANE_ID`, `GCT_SOCK` and `GCT_BIN_DIR` tell
+`gctd` which pane, daemon and binary it belongs to (see [agents](agents.md#scripting)).

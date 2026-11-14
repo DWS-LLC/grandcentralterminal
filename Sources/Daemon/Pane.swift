@@ -14,7 +14,7 @@ import ProcInfo
 @_silgen_name("ptsname_r") func gct_ptsname_r(_ fd: Int32, _ buf: UnsafeMutablePointer<CChar>, _ len: UInt) -> Int32
 #endif
 
-final class Pane {
+class Pane {
     let id: PaneID
     var meta: PaneMeta
     let ring = Ring(cap: 8 << 20)  // 8 MiB scrollback
@@ -24,6 +24,8 @@ final class Pane {
     private var exitedFlag = false
     // waitpid collected the child: pid may now belong to someone else.
     private var reapedFlag = false
+    // Shell-style status from the waitpid that reaped the child.
+    private var exitCodeValue: Int32?
     private let lock = NSLock()
 
     // args used to spawn (for respawn-on-daemon-restart)
@@ -43,6 +45,11 @@ final class Pane {
     var reaped: Bool {
         lock.lock(); defer { lock.unlock() }
         return reapedFlag
+    }
+
+    var exitCode: Int32? {
+        lock.lock(); defer { lock.unlock() }
+        return exitCodeValue
     }
 
     // A hung-up session gets this long before SIGKILL.
@@ -169,14 +176,24 @@ final class Pane {
         pid = pidOut
     }
 
-    // ptyexec lives next to the daemon binary (bin/ staging or app bundle).
-    private static func helperPath() -> String {
+    // Directory of the running daemon binary (bin/ staging or app bundle).
+    private static func binDir() -> String {
         var self0 = CommandLine.arguments.first ?? ""
         if !self0.hasPrefix("/") {
             self0 = FileManager.default.currentDirectoryPath + "/" + self0
         }
-        let dir = (self0 as NSString).deletingLastPathComponent
-        return dir + "/ptyexec"
+        return (self0 as NSString).deletingLastPathComponent
+    }
+
+    // ptyexec lives next to the daemon binary.
+    private static func helperPath() -> String {
+        binDir() + "/ptyexec"
+    }
+
+    // PATH with `dir` first and no second copy of it.
+    private static func pathLeading(_ dir: String, _ path: String?) -> String {
+        let rest = (path ?? "").split(separator: ":").map(String.init).filter { $0 != dir }
+        return ([dir] + rest).joined(separator: ":")
     }
 
     private func childEnv() -> [String: String] {
@@ -198,6 +215,11 @@ final class Pane {
         // overrides flow through instead of hitting the live socket).
         env["GCT_PANE_ID"] = id.uuid.uuidString
         env["GCT_SOCK"] = Pane.sockPathForChildren()
+        // The gctd that matches this daemon goes first on PATH, so in-pane
+        // calls never hit a stale /usr/local/bin copy (skewed protocol).
+        let bin = Pane.binDir()
+        env["GCT_BIN_DIR"] = bin
+        env["PATH"] = Pane.pathLeading(bin, env["PATH"])
         // GUI-launched daemons inherit launchd's sparse env: no locale,
         // which degrades htop et al. to ASCII/monochrome output.
         if env["LANG"] == nil || env["LANG"]?.hasSuffix("UTF-8") != true {
@@ -368,9 +390,31 @@ final class Pane {
         // r < 0 (ECHILD): already gone, nothing left to collect.
         reapedFlag = true
         exitedFlag = true
-        guard r == pid else { return -1 }
-        return (status & 0o177) == 0 ? (status >> 8) & 0xff : 0
+        guard r == pid else {
+            exitCodeValue = ExitUnknown
+            return ExitUnknown
+        }
+
+        // Like a shell: exit(n) is n, death by signal is 128+signal.
+        let sig = status & 0o177
+        let code = sig == 0 ? (status >> 8) & 0xff : Self.signalBase + sig
+        exitCodeValue = code
+        return code
     }
+    private static let signalBase: Int32 = 128
+
+    // Reader-thread EOF can beat the child's zombie by a hair: give waitpid
+    // a moment so the status isn't lost. Returns what was collected.
+    func awaitExit() -> Int32? {
+        let deadline = Date().addingTimeInterval(Self.exitGrace)
+        while Date() < deadline {
+            if let code = exitCode ?? pollExit() { return code }
+            usleep(Self.exitPollMicros)
+        }
+        return exitCode
+    }
+    private static let exitGrace: TimeInterval = 0.5
+    private static let exitPollMicros: useconds_t = 5_000
 
     // Poll the child's cwd; returns it when changed.
     func pollCWD() -> String? {

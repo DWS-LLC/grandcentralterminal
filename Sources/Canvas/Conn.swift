@@ -23,6 +23,8 @@ protocol CanvasConnDelegate: AnyObject {
     func connTies(_ ties: [TieMeta], owner: String)
     func connTieMeta(_ tie: TieMeta, owner: String)
     func connTieExit(_ id: String, owner: String)
+    func connPeers(_ peers: [PeerInfo], owner: String)
+    func connPeerState(_ peer: PeerInfo, owner: String)
     func connClosed(owner: String)
 }
 
@@ -108,6 +110,7 @@ final class CanvasConn: @unchecked Sendable {
                 peerVersion = w.version
                 delegate?.connWelcome(w.panes, w.groups, owner: owner)
                 delegate?.connTies(w.ties, owner: owner)
+                delegate?.connPeers(w.peers, owner: owner)
             }
         case .paneCreated:
             if let m: PaneCreated = frame.decode() { delegate?.connPaneCreated(m.meta, owner: owner) }
@@ -137,12 +140,18 @@ final class CanvasConn: @unchecked Sendable {
             if let t: TieMeta = frame.decode() { delegate?.connTieMeta(t, owner: owner) }
         case .tieExit:
             if let r: TieRef = frame.decode() { delegate?.connTieExit(r.id, owner: owner) }
+        case .peerState:
+            if let p: PeerInfo = frame.decode() { delegate?.connPeerState(p, owner: owner) }
         default:
             break
         }
     }
 
-    func createPane(_ req: CreatePane) { conn.send(tag: .createPane, json: req) }
+    // An old daemon would ignore `host` and open the pane locally instead.
+    func createPane(_ req: CreatePane) {
+        guard req.host == nil || peerVersion >= PeerProtoVersion else { return }
+        conn.send(tag: .createPane, json: req)
+    }
     func attachPane(_ req: AttachPane) { conn.send(tag: .attachPane, json: req) }
     func resizePane(_ req: ResizePane) { conn.send(tag: .resizePane, json: req) }
     func closePane(_ id: PaneID) { conn.send(tag: .closePane, json: PaneRef(id: id)) }
@@ -164,6 +173,10 @@ final class CanvasConn: @unchecked Sendable {
     func setLayoutPolicy(_ p: LayoutPolicy) {
         guard peerVersion >= LayoutProtoVersion else { return }
         conn.send(tag: .layoutPolicy, json: p)
+    }
+    func peerRetry(_ name: String) {
+        guard peerVersion >= PeerProtoVersion else { return }
+        conn.send(tag: .peerRetry, json: PeerRef(name: name))
     }
     func paneCwd(_ req: PaneCwd) { conn.send(tag: .paneCwd, json: req) }
     func setFloating(_ req: SetFloating) { conn.send(tag: .setFloating, json: req) }

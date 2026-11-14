@@ -32,11 +32,12 @@ extension CanvasView: CanvasConnDelegate {
                 if !GCTConfig.current.allowWindowOverlap {
                     untangleLoadedPanes()
                 }
-                fitAll()
+                restoreSessionCamera()
             }
         } else if !mappedPanes.isEmpty {
-            fitAll()
+            restoreSessionCamera()
         }
+        endSessionFade()
     }
 
     func connPaneCreated(_ meta: PaneMeta, owner: String) {
@@ -124,6 +125,22 @@ extension CanvasView: CanvasConnDelegate {
 
     func connTieExit(_ id: String, owner: String) { tieGone(id) }
 
+    func connPeers(_ peers: [PeerInfo], owner: String) {
+        guard owner == session else { return }
+
+        sessionPeers = peers
+    }
+
+    func connPeerState(_ peer: PeerInfo, owner: String) {
+        guard owner == session else { return }
+
+        guard let at = sessionPeers.firstIndex(where: { $0.name == peer.name }) else {
+            sessionPeers.append(peer)
+            return
+        }
+        sessionPeers[at] = peer
+    }
+
     func connGroupExit(_ id: GroupID, owner: String) {
         let local = hub.localGroup(remote: id, owner: owner)
         groupViews[local]?.removeFromSuperview()
@@ -152,6 +169,8 @@ extension CanvasView: CanvasConnDelegate {
     }
 
     func connClosed(owner: String) {
+        // Dropped, not switched away from: the rebuilt canvas fits all again.
+        sessionCameras.removeValue(forKey: owner)
         if owner == "local" {
             // Daemon died: try to restart it and reconnect.
             reconnectLocal(after: Self.localReconnectDelay)
@@ -176,7 +195,8 @@ extension CanvasView: CanvasConnDelegate {
             CanvasView.ensureDaemon()
 
             DispatchQueue.main.async { [weak self] in
-                guard let self else { return }
+                // A session switch while we waited: local panes don't belong on that canvas.
+                guard let self, self.session == LocalHost else { return }
                 self.hub.disconnect(owner: "local")
                 guard self.hub.connectLocal(sockPath: CanvasPaths.sockPath, delegate: self) else {
                     self.reconnectLocal(after: Self.localRetryInterval)
@@ -206,24 +226,25 @@ extension CanvasView: CanvasConnDelegate {
         refreshGroupViews()
     }
 
-    /// (Re)connect every configured remote. Called at setup and on
-    /// reload-config: new hosts connect, dropped ones retry, removed ones
-    /// have their panes cleared.
+    /// Keep the connection of the session on screen alive. Called at setup,
+    /// on reload-config and on a session switch: a host session that lost
+    /// its config entry falls back to local, a dropped one is redialed.
     func syncRemotes() {
         let wanted = Set(GCTConfig.current.remotes.map(\.name))
-        // Removed hosts: clear panes, drop the conn + mappings.
-        for owner in hub.owners() where owner != "local" && !wanted.contains(owner) {
-            removeOwnerPanes(owner: owner)
-            hub.disconnect(owner: owner)
+        if session != LocalHost, !wanted.contains(session) {
+            switchSession(to: LocalHost)
+            return
         }
-        // New / reconnected hosts: dialed off-main, a dead host can't
-        // freeze the UI.
+
+        // Dialed off-main, a dead host can't freeze the UI.
         missingRemotes().forEach(redial)
         armRemoteRetry()
     }
 
+    // Only the session on screen is dialed; the others wait until you
+    // switch to them.
     private func missingRemotes() -> [GCTRemoteHost] {
-        GCTConfig.current.remotes.filter { hub.conn(forOwner: $0.name) == nil }
+        GCTConfig.current.remotes.filter { $0.name == session && hub.conn(forOwner: $0.name) == nil }
     }
 
     // Keeps redialing dropped hosts until every configured one is back.
@@ -253,7 +274,7 @@ extension CanvasView: CanvasConnDelegate {
                 guard let self else { return }
                 self.remoteRetry.end(h.name)
 
-                let current = GCTConfig.current.remotes.contains(h)
+                let current = h.name == self.session && GCTConfig.current.remotes.contains(h)
                 guard let conn, current, self.hub.conn(forOwner: h.name) == nil else {
                     conn?.close()
                     return
@@ -264,12 +285,6 @@ extension CanvasView: CanvasConnDelegate {
         }
     }
 
-    func retryRemote(_ name: String) {
-        guard let h = GCTConfig.current.remotes.first(where: { $0.name == name }),
-              hub.conn(forOwner: name) == nil else { return }
-        redial(h)
-    }
-
     // Spawn gctd if it isn't already listening.
     static func ensureDaemon() {
         DaemonInstall.stage()
@@ -278,18 +293,11 @@ extension CanvasView: CanvasConnDelegate {
             _ = Darwin.close(probe)  // probe only; don't leak the fd
             return
         }
-        let bin = CanvasPaths.daemonPath
-        guard FileManager.default.isExecutableFile(atPath: bin) else {
-            NSLog("[gct] daemon binary missing at \(bin)")
-            return
-        }
-        let p = Process()
-        p.executableURL = URL(fileURLWithPath: bin)
-        p.standardOutput = FileHandle.nullDevice
-        p.standardError = FileHandle.nullDevice
-        try? p.run()
-        // Give it a moment to bind.
-        for _ in 0..<50 {
+        guard launchDaemon() else { return }
+
+        // Give it a moment to bind (a first launch of the daemon app also
+        // waits on Gatekeeper).
+        for _ in 0..<daemonBindPolls {
             Thread.sleep(forTimeInterval: 0.05)
             let fd = connectUnixSocket(CanvasPaths.sockPath)
             guard fd >= 0 else { continue }
@@ -297,6 +305,53 @@ extension CanvasView: CanvasConnDelegate {
             _ = Darwin.close(fd)  // probe only, like the one above
             return
         }
+    }
+
+    private static let daemonBindPolls = 200
+
+    private static func launchDaemon() -> Bool {
+        if FileManager.default.fileExists(atPath: CanvasPaths.daemonAppPath) {
+            return launchDaemonApp()
+        }
+
+        // Bare `swift run`: no bundle, spawn the staged binary directly.
+        let bin = CanvasPaths.daemonPath
+        guard FileManager.default.isExecutableFile(atPath: bin) else {
+            NSLog("[gct] daemon binary missing at \(bin)")
+            return false
+        }
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: bin)
+        p.standardOutput = FileHandle.nullDevice
+        p.standardError = FileHandle.nullDevice
+        try? p.run()
+        return true
+    }
+
+    // The daemon is its own app (DAEMON_APP in the Makefile): macOS ties a
+    // child's LAN access to the app that spawned it, so a daemon spawned from
+    // here would lose its peer links when this app quits. LaunchServices hands
+    // it no environment, so GCT_* overrides (test/demo instances) ride along;
+    // -n because a second instance (demo beside live) must not just reuse the
+    // first.
+    private static func launchDaemonApp() -> Bool {
+        var args = ["-n", "-g", "-j", "--stderr", CanvasPaths.supportDir + "/daemon.log"]
+        for (key, value) in ProcessInfo.processInfo.environment where key.hasPrefix("GCT_") {
+            args += ["--env", "\(key)=\(value)"]
+        }
+        args.append(CanvasPaths.daemonAppPath)
+
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/usr/bin/open")
+        p.arguments = args
+        do {
+            try p.run()
+        } catch {
+            NSLog("[gct] open daemon app failed: \(error)")
+            return false
+        }
+        p.waitUntilExit()
+        return p.terminationStatus == 0
     }
 }
 

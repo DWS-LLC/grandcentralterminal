@@ -132,6 +132,7 @@ final class PaneView: NSView {
         self.meta.title = meta.title
         self.meta.cwd = meta.cwd
         self.meta.floating = meta.floating
+        self.meta.offline = meta.offline
         applyChrome()
     }
 
@@ -311,6 +312,7 @@ final class PaneView: NSView {
     // fill — local panes keep the theme chrome exactly).
     func applyChrome() {
         let t = GCTTheme.current
+        alphaValue = meta.offline ? Self.offlineAlpha : 1
         layer?.borderWidth = 0
         layer?.borderColor = nil
         // Multi-select beats focus: selected panes wear accent chrome so a
@@ -373,6 +375,8 @@ final class PaneView: NSView {
         layoutChrome()
     }
 
+    private static let offlineAlpha: CGFloat = 0.5
+
     private var titleText: String {
         // Remote panes lead with [host] so the owner reads in the
         // switcher, screenshots, and anywhere the title goes. Local
@@ -382,11 +386,13 @@ final class PaneView: NSView {
         let pin = meta.floating ? "⬆ " : ""
         let zoom = isZoomed ? "⤢ " : ""
         let notice = hasNotice ? "● " : ""
+        // Its host's link is down: kept in the layout, input goes nowhere.
+        let offline = meta.offline ? "○ " : ""
         let cwd = Self.tilde(meta.cwd, local: meta.host == "local" || meta.host.isEmpty)
         if meta.host == "local" || meta.host.isEmpty {
             return "\(notice)\(zoom)\(pin)\(kind) – \(cwd)"
         }
-        return "\(notice)\(zoom)\(pin)[\(meta.host)] \(kind) – \(cwd)"
+        return "\(notice)\(offline)\(zoom)\(pin)[\(meta.host)] \(kind) – \(cwd)"
     }
 
     // The cwd tail is what truncation eats first; "~" buys it back.

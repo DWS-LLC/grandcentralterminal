@@ -13,6 +13,9 @@ final class Remote: @unchecked Sendable {
     // Unix peers start trusted; TCP peers become trusted only after the
     // token hello. Untrusted peers get one hello chance, then dropped.
     var trusted = true
+    // A peer daemon's id when this link hosts its guest panes (Hello.owner);
+    // nil for UI and CLI clients.
+    var peerOwner: String?
     init(conn: Conn) { self.conn = conn }
 }
 
@@ -29,6 +32,11 @@ final class Server {
     private var panes = [PaneID: Pane]()
     // Closed/exited panes whose child housekeep hasn't waitpid'd yet.
     private var reaping = [Pane]()
+    // Last statuses of ended panes, so `gctd wait` after the fact still
+    // answers. Oldest drops first once past the cap.
+    private var exits = [PaneID: Int32]()
+    private var exitOrder = [PaneID]()
+    private static let exitsCap = 256
     // Group ownership: sanitized once on write; member ids pruned to
     // live panes on load and on every pane exit/close.
     private var groups = [GroupID: GroupMeta]()
@@ -36,6 +44,21 @@ final class Server {
     // pruned on every pane exit/close, and dropped under two strands.
     private var ties = [String: TieMeta]()
     private var remotes = [Remote]()
+    // Guest panes: ptys run for a peer daemon's session. Kept out of `panes`
+    // so layout, groups, saves and welcomes never see them; only the owning
+    // peer's link (peerRemotes) can attach, drive or list them.
+    private var guests = [PaneID: Pane]()
+    private var peerRemotes = [Remote]()
+    private var guestLastSeen = [String: Date]()
+    private static let guestTTL: TimeInterval = 7 * 24 * 3600
+    // Our own links to peers, and the proxy panes riding them:
+    // host name -> guest id on that host -> the pane standing in for it.
+    private let peers: PeerSet
+    private var proxies = [String: [PaneID: RemotePane]]()
+    // Slots promised to proxies still waiting on their peer. Not in `panes`
+    // yet, so a concurrent create would otherwise land on top of them.
+    private var reserved = [PaneID: Rect]()
+    private static let terminalReset = Data([0x1b, 0x63])  // ESC c (RIS)
     // Set by shutdown(): no more saves, no second teardown.
     private var stopping = false
     // Canvas window-gap (LayoutPolicy); floor for every placement.
@@ -44,20 +67,34 @@ final class Server {
     private static let maxTitleClearance: Double = 256
 
     init(state: StateStore, sockPath: String, tcpPort: UInt16? = nil,
-         token: String = "") {
+         token: String = "", daemonID: String) {
         self.state = state
         self.sockPath = sockPath
         self.tcpPort = tcpPort
         self.token = token
+        self.peers = PeerSet(ownerID: daemonID)
     }
 
     func run() {
         // Existing panes from a previous life: respawn their shells.
         // Groups restore with members pruned to live panes.
         let saved = state.load()
+        let savedRemote = Dictionary(saved.proxies.map { ($0.pane, $0.remote) },
+                                     uniquingKeysWith: { first, _ in first })
         for meta in saved.panes {
             var fresh = meta
             fresh.exited = false
+            // Proxy panes keep their slot; the peer link re-attaches them.
+            if fresh.host != LocalHost {
+                fresh.offline = true
+                let remoteID = savedRemote[fresh.id]
+                let proxy = RemotePane(meta: fresh, hostName: fresh.host, remoteID: remoteID)
+                panes[proxy.id] = proxy
+                if let remoteID {
+                    proxies[fresh.host, default: [:]][remoteID] = proxy
+                }
+                continue
+            }
             let pane = Pane(meta: fresh, command: nil)
             do {
                 try pane.spawn(cols: 80, rows: 24)
@@ -113,6 +150,7 @@ final class Server {
         if let port = tcpPort {
             Thread(block: { [weak self] in self?.runTCPListener(port) }).start()
         }
+        peers.start(delegate: self)
 
         while true {
             let cfd = accept(fd, nil, nil)
@@ -147,6 +185,13 @@ final class Server {
     private func join(_ remote: Remote) {
         lock.lock()
         remotes.append(remote)
+        lock.unlock()
+    }
+
+    // A peer daemon's link: never in `remotes`, so session broadcasts skip it.
+    private func joinPeer(_ remote: Remote) {
+        lock.lock()
+        peerRemotes.append(remote)
         lock.unlock()
     }
 
@@ -186,6 +231,10 @@ final class Server {
         defer {
             lock.lock()
             remotes.removeAll { $0 === remote }
+            peerRemotes.removeAll { $0 === remote }
+            if let owner = remote.peerOwner {
+                guestLastSeen[owner] = Date()
+            }
             remote.conn.close()
             lock.unlock()
         }
@@ -203,13 +252,18 @@ final class Server {
                 return
             }
             remote.trusted = true
-            join(remote)
+            if let owner = h.owner {
+                remote.peerOwner = owner
+                joinPeer(remote)
+            } else {
+                join(remote)
+            }
         }
 
         // Don't bail if the client is already gone (e.g. `stop` sends
         // killDaemon and exits before we write): fall through to the read
         // loop so a queued frame still lands instead of being dropped.
-        _ = remote.conn.send(tag: .welcome, json: welcomePayload())
+        _ = remote.conn.send(tag: .welcome, json: welcomePayload(for: remote))
         remote.conn.readLoop { [weak self] frame in
             self?.handle(remote, frame)
         }
@@ -225,19 +279,23 @@ final class Server {
         }
         switch frame.tag {
         case .hello, .listPanes:
-            _ = remote.conn.send(tag: .welcome, json: welcomePayload())
+            _ = remote.conn.send(tag: .welcome, json: welcomePayload(for: remote))
 
         case .killDaemon:
             shutdown()
 
         case .createPane:
             guard let req: CreatePane = frame.decode() else { return }
+            guard remote.peerOwner == nil else {
+                createGuest(remote, req)
+                return
+            }
             createPane(remote.conn, req)
 
         case .attachPane:
             guard let req: AttachPane = frame.decode() else { return }
             lock.lock()
-            guard let pane = panes[req.id] else {
+            guard let pane = paneLocked(req.id, for: remote) else {
                 lock.unlock()
                 _ = remote.conn.send(tag: .errorReply,
                                      json: ErrorReply(message: "no such pane"))
@@ -272,14 +330,14 @@ final class Server {
         case .inputPane:
             guard let id = frame.paneID else { return }
             lock.lock()
-            let pane = panes[id]
+            let pane = paneLocked(id, for: remote)
             lock.unlock()
             pane?.writeStdin(frame.data)
 
         case .resizePane:
             guard let req: ResizePane = frame.decode() else { return }
             lock.lock(); defer { lock.unlock() }
-            panes[req.id]?.resize(cols: req.cols, rows: req.rows)
+            paneLocked(req.id, for: remote)?.resize(cols: req.cols, rows: req.rows)
 
         case .renamePane:
             guard let req: RenamePane = frame.decode() else { return }
@@ -373,8 +431,14 @@ final class Server {
         case .closePane:
             guard let req: PaneRef = frame.decode() else { return }
             lock.lock()
+            if panes[req.id] == nil, let guest = guestLocked(req.id, for: remote) {
+                lock.unlock()
+                closeGuest(guest)
+                return
+            }
             guard let pane = panes[req.id] else { lock.unlock(); return }
             panes.removeValue(forKey: req.id)
+            forgetProxyLocked(pane)
             reaping.append(pane)
             for r in remotes {
                 r.subs.remove(req.id)
@@ -386,7 +450,7 @@ final class Server {
             // The reader thread unblocks with EIO once the shell dies; its
             // paneDied becomes a no-op (untracked), so broadcast here.
             pane.terminate()
-            broadcast(tag: .paneExit, json: PaneExit(id: req.id, code: -1))
+            announceExit(req.id, ExitUnknown)
             for g in pruned.touched { broadcast(tag: .groupMeta, json: g) }
             for gid in pruned.emptied { broadcast(tag: .groupExit, json: GroupRef(id: gid)) }
             broadcastTies(pruned)
@@ -554,7 +618,7 @@ final class Server {
             // agents poll this for background-task inspection.
             guard let req: DumpPane = frame.decode() else { return }
             lock.lock()
-            guard let pane = panes[req.id] else {
+            guard let pane = paneLocked(req.id, for: remote) else {
                 lock.unlock()
                 _ = remote.conn.send(tag: .errorReply,
                                      json: ErrorReply(message: "no such pane"))
@@ -580,6 +644,22 @@ final class Server {
                                  data: tail.base64EncodedString(), base64: true)
             }
             _ = remote.conn.send(tag: .paneDump, json: reply)
+
+        case .waitPane:
+            // Already ended: answer from the table. Live: say nothing, the
+            // client is subscribed and gets the paneExit broadcast.
+            guard let req: PaneRef = frame.decode() else { return }
+            lock.lock()
+            let ended = exits[req.id]
+            let live = paneLocked(req.id, for: remote) != nil
+            lock.unlock()
+            if let ended {
+                _ = remote.conn.send(tag: .paneExit, json: PaneExit(id: req.id, code: ended))
+                return
+            }
+            guard !live else { return }
+
+            _ = remote.conn.send(tag: .errorReply, json: ErrorReply(message: "no such pane"))
 
         case .focusPane:
             // Agent asks the canvas to focus a pane (raise + center).
@@ -609,6 +689,14 @@ final class Server {
                 return
             }
             broadcast(tag: .paneNotice, json: req)
+
+        case .claimGuests:
+            guard let owner = remote.peerOwner, let req: GuestClaim = frame.decode() else { return }
+            reapUnclaimed(owner: owner, keeping: Set(req.ids))
+
+        case .peerRetry:
+            guard let req: PeerRef = frame.decode() else { return }
+            peers.link(for: req.name)?.retryNow()
 
         case .canvasCommand:
             // Scripted camera/action: validate the target pane, then relay
@@ -660,12 +748,23 @@ final class Server {
     }
     private static let maxUTF8Len = 4
 
-    private func welcomePayload() -> Welcome {
+    private func welcomePayload(for remote: Remote) -> Welcome {
         lock.lock(); defer { lock.unlock() }
+        let owner = remote.peerOwner
+        let visible = guests.values
+            .filter { owner == nil || $0.meta.guestOf == owner }
+            .sorted { $0.id.uuid.uuidString < $1.id.uuid.uuidString }
+            .map(\.meta)
+        // A peer link serves guests only; the session is none of its business.
+        guard owner == nil else {
+            return Welcome(panes: [], guests: visible)
+        }
+
         return Welcome(panes: panes.values
             .sorted { $0.id.uuid.uuidString < $1.id.uuid.uuidString }
             .map(\.meta), groups: Array(groups.values),
-            ties: ties.values.sorted { $0.id < $1.id })
+            ties: ties.values.sorted { $0.id < $1.id },
+            guests: visible, peers: peers.infos())
     }
 
     // MARK: Groups (all require `lock`)
@@ -688,7 +787,11 @@ final class Server {
 
     private func snapshotLocked() -> SavedState {
         SavedState(panes: panes.values.map(\.meta),
-                   groups: Array(groups.values), ties: Array(ties.values))
+                   groups: Array(groups.values), ties: Array(ties.values),
+                   proxies: panes.values.compactMap { pane in
+                       guard let proxy = pane as? RemotePane, let remote = proxy.remoteID else { return nil }
+                       return SavedProxy(pane: proxy.id, remote: remote)
+                   })
     }
 
     // makeGroupLocked's fallout, broadcast once the lock drops.
@@ -855,9 +958,10 @@ final class Server {
         // split axis at admit time (cascade included). Foreign-group
         // clash still refuses the join (groupless pane, no error).
         lock.lock()
-        let rects = paneRectsLocked()
+        let rects = paneRectsLocked().merging(reserved) { live, _ in live }
         let metas = groupMetasLocked()
         let floating = floatingLocked()
+        let id = PaneID()
         let rect: Rect
         let gap = gapLocked(req.gap)
         // Agent spawn: orbit the caller, away from everyone else.
@@ -892,23 +996,38 @@ final class Server {
                 ?? (obstacles.isEmpty ? req.rect
                     : Overlap.resolve(req.rect, obstacles: obstacles, gap: gap))
         }
+        if req.host != nil {
+            reserved[id] = rect
+        }
         lock.unlock()
         let cwd = req.cwd ?? NSHomeDirectory()
-        var meta = PaneMeta(id: PaneID(), rect: rect, name: req.name,
-                            cwd: cwd, host: "local", title: nil, exited: false)
+        var meta = PaneMeta(id: id, rect: rect, name: req.name,
+                            cwd: cwd, host: LocalHost, title: nil, exited: false)
         meta.parent = req.parent ?? req.orbitAround
+        if let hostName = req.host {
+            meta.host = hostName
+            createProxy(requester, req, meta: meta)
+            return
+        }
         let pane = Pane(meta: meta, command: req.command)
         do {
             try pane.spawn(cols: 80, rows: 24)
         } catch {
             log("spawn failed: \(error)")
             _ = requester.send(tag: .errorReply,
-                               json: ErrorReply(message: "spawn failed: \(error)"))
+                               json: ErrorReply(message: "spawn failed: \(error)", reqID: req.reqID))
             return
         }
+        admit(pane, at: rect, req)
+    }
 
+    // Puts a ready pane into the layout: joins its group (shoving loose
+    // panes aside), saves, and tells every client. Local ptys come here
+    // straight from spawn, proxies once their peer has made the guest.
+    private func admit(_ pane: Pane, at rect: Rect, _ req: CreatePane) {
         lock.lock()
         panes[pane.id] = pane
+        reserved.removeValue(forKey: pane.id)
         // joinGroup: admit into the parent's group. Loose panes in the
         // grown path get SHOVED aside along the split axis first (same
         // axis/sign as keyboard grow); foreign groups never shove —
@@ -1014,7 +1133,7 @@ final class Server {
         pane.startIO({ [weak self] pane, data in
             self?.fanOut(pane: pane, data: data)
         }, { [weak self] pane in
-            self?.paneDied(pane)
+            self?.paneDied(pane, code: pane.awaitExit())
         })
     }
 
@@ -1024,7 +1143,9 @@ final class Server {
         lock.lock()
         pane.ring.append(data)
         var targets = [Remote]()
-        for r in remotes {
+        // Guest bytes go to the owning peer's link, session bytes to UI clients.
+        let audience = pane.meta.guestOf == nil ? remotes : peerRemotes
+        for r in audience {
             if r.subs.contains(pane.id) {
                 targets.append(r)
             } else if r.backlog[pane.id] != nil {
@@ -1043,7 +1164,13 @@ final class Server {
     // Called from the pane's reader thread (EOF/EIO) and from housekeep.
     // The reader thread owns closing the master fd; close() on macOS does
     // not unblock a blocked read, so we must not close here.
-    private func paneDied(_ pane: Pane) {
+    private func paneDied(_ pane: Pane, code: Int32? = nil) {
+        let status = code ?? pane.exitCode ?? ExitUnknown
+        guard pane.meta.guestOf == nil else {
+            guestDied(pane, status)
+            return
+        }
+
         // Check and remove in one section: reader EOF and housekeep both
         // land here, and only the first may broadcast.
         lock.lock()
@@ -1052,6 +1179,7 @@ final class Server {
             lock.unlock()
             return
         }
+        forgetProxyLocked(pane)
         reaping.append(pane)
         // Late reader output must not resurrect the id client-side.
         for r in remotes {
@@ -1062,7 +1190,7 @@ final class Server {
         scheduleSaveLocked()
         lock.unlock()
 
-        broadcast(tag: .paneExit, json: PaneExit(id: pane.id, code: 0))
+        announceExit(pane.id, status)
         for g in pruned.touched { broadcast(tag: .groupMeta, json: g) }
         for gid in pruned.emptied { broadcast(tag: .groupExit, json: GroupRef(id: gid)) }
         broadcastTies(pruned)
@@ -1071,6 +1199,15 @@ final class Server {
     private func broadcastTies(_ pruned: Pruned) {
         for t in pruned.ties { broadcast(tag: .tieMeta, json: t) }
         for id in pruned.tiesGone { broadcast(tag: .tieExit, json: TieRef(id: id)) }
+    }
+
+    // Remember the status for late waiters, then tell every client.
+    private func announceExit(_ id: PaneID, _ code: Int32) {
+        lock.lock()
+        if exits.updateValue(code, forKey: id) == nil { exitOrder.append(id) }
+        if exitOrder.count > Self.exitsCap { exits.removeValue(forKey: exitOrder.removeFirst()) }
+        lock.unlock()
+        broadcast(tag: .paneExit, json: PaneExit(id: id, code: code))
     }
 
     // Blocking writes outside the lock: a slow peer stalls only us.
@@ -1111,6 +1248,22 @@ final class Server {
                 }
             }
         }
+        var guestUpdates = [PaneMeta]()
+        for pane in guests.values {
+            guard pane.pollExit() == nil else {
+                Task { [weak self] in self?.paneDied(pane) }
+                continue
+            }
+
+            var changed = false
+            if let cwd = pane.pollCWD() {
+                pane.meta.cwd = cwd
+                changed = true
+            }
+            if pane.pollContext() { changed = true }
+            if changed { guestUpdates.append(pane.meta) }
+        }
+        let expired = expiredGuestsLocked()
         // Untracked panes still need waitpid, or they linger as zombies.
         reaping.removeAll { $0.reaped || $0.pollExit() != nil }
 
@@ -1123,6 +1276,14 @@ final class Server {
         for meta in changedMetas {
             for r in targets { _ = r.conn.send(tag: .paneMeta, json: meta) }
         }
+        for meta in guestUpdates {
+            sendToPeers(owner: meta.guestOf, tag: .paneMeta, json: meta)
+        }
+        for guest in expired {
+            log("guest \(guest.id) of \(guest.meta.guestOf ?? "?") expired")
+            closeGuest(guest)
+        }
+        peers.pollConfig()
     }
 
     func shutdown() {
@@ -1135,11 +1296,325 @@ final class Server {
         }
 
         stopping = true
-        let all = Array(panes.values)
+        let all = Array(panes.values) + Array(guests.values)
         panes.removeAll()
+        guests.removeAll()
         lock.unlock()
         state.saveNow()
         Pane.terminateAll(all)
         exit(0)
+    }
+
+    // MARK: Guests (this daemon hosts a pty for a peer's session)
+
+    // Session panes for UI clients; a peer link sees only its own guests.
+    private func paneLocked(_ id: PaneID, for remote: Remote) -> Pane? {
+        guard let owner = remote.peerOwner else { return panes[id] }
+        guard let guest = guests[id], guest.meta.guestOf == owner else { return nil }
+
+        return guest
+    }
+
+    // closePane also lets a UI client reap any guest (an orphan's last resort).
+    private func guestLocked(_ id: PaneID, for remote: Remote) -> Pane? {
+        guard let guest = guests[id] else { return nil }
+        guard let owner = remote.peerOwner else { return guest }
+
+        return guest.meta.guestOf == owner ? guest : nil
+    }
+
+    private func createGuest(_ requester: Remote, _ req: CreatePane) {
+        guard let owner = requester.peerOwner else { return }
+
+        // The peer's cwd may not exist here (a local path from its canvas).
+        var isDir: ObjCBool = false
+        let asked = req.cwd.flatMap {
+            FileManager.default.fileExists(atPath: $0, isDirectory: &isDir) && isDir.boolValue ? $0 : nil
+        }
+        var meta = PaneMeta(id: PaneID(), rect: req.rect, name: req.name,
+                            cwd: asked ?? NSHomeDirectory(), host: LocalHost,
+                            title: nil, exited: false)
+        meta.guestOf = owner
+        let pane = Pane(meta: meta, command: req.command)
+        do {
+            try pane.spawn(cols: 80, rows: 24)
+        } catch {
+            log("guest spawn failed: \(error)")
+            _ = requester.conn.send(tag: .errorReply, json: ErrorReply(
+                message: "spawn failed: \(error)", reqID: req.reqID))
+            return
+        }
+
+        lock.lock()
+        guests[pane.id] = pane
+        lock.unlock()
+        startPaneThreads(pane)
+        _ = requester.conn.send(tag: .paneCreated,
+                                json: PaneCreated(meta: pane.meta, reqID: req.reqID))
+    }
+
+    // False when it was already retired (close and exit race).
+    private func retireGuestLocked(_ pane: Pane) -> Bool {
+        guard guests.removeValue(forKey: pane.id) != nil else { return false }
+
+        reaping.append(pane)
+        for r in peerRemotes {
+            r.subs.remove(pane.id)
+            r.backlog.removeValue(forKey: pane.id)
+        }
+        return true
+    }
+
+    private func closeGuest(_ pane: Pane) {
+        lock.lock()
+        let retired = retireGuestLocked(pane)
+        lock.unlock()
+        guard retired else { return }
+
+        pane.terminate()
+        sendToPeers(owner: pane.meta.guestOf, tag: .paneExit,
+                    json: PaneExit(id: pane.id, code: ExitUnknown))
+    }
+
+    private func guestDied(_ pane: Pane, _ code: Int32) {
+        lock.lock()
+        pane.markExited()
+        let retired = retireGuestLocked(pane)
+        lock.unlock()
+        guard retired else { return }
+
+        sendToPeers(owner: pane.meta.guestOf, tag: .paneExit,
+                    json: PaneExit(id: pane.id, code: code))
+    }
+
+    // The owner's claim is its full list of live proxies: any other guest of
+    // that owner lost its proxy (crash before a save, close while the link
+    // was down) and would otherwise run forever.
+    private func reapUnclaimed(owner: String, keeping: Set<PaneID>) {
+        lock.lock()
+        let stale = guests.values.filter {
+            $0.meta.guestOf == owner && !keeping.contains($0.id)
+        }
+        lock.unlock()
+
+        for guest in stale {
+            log("reaping unclaimed guest \(guest.id) of \(owner)")
+            closeGuest(guest)
+        }
+    }
+
+    // An owner that never came back eventually loses its guests.
+    private func expiredGuestsLocked() -> [Pane] {
+        let online = Set(peerRemotes.compactMap(\.peerOwner))
+        let now = Date()
+        return guests.values.filter { guest in
+            guard let owner = guest.meta.guestOf, !online.contains(owner),
+                  let seen = guestLastSeen[owner] else { return false }
+
+            return now.timeIntervalSince(seen) > Self.guestTTL
+        }
+    }
+
+    private func sendToPeers(owner: String?, tag: MsgTag, json: some Codable & Sendable) {
+        lock.lock()
+        let targets = peerRemotes.filter { $0.peerOwner == owner }
+        lock.unlock()
+        for r in targets { _ = r.conn.send(tag: tag, json: json) }
+    }
+
+    // MARK: Proxies (a pane in this layout whose pty runs on a peer)
+
+    // The pane takes this layout's slot now; its pty is made on the peer, so
+    // it is admitted once the peer answers.
+    private func createProxy(_ requester: Conn, _ req: CreatePane, meta: PaneMeta) {
+        let hostName = meta.host
+        guard let link = peers.link(for: hostName), link.isUp else {
+            release(meta.id)
+            _ = requester.send(tag: .errorReply, json: ErrorReply(
+                message: "host \(hostName) is offline", reqID: req.reqID))
+            return
+        }
+
+        let ask = CreatePane(rect: meta.rect, cwd: req.cwd, name: req.name, command: req.command)
+        link.create(ask) { [weak self] result in
+            guard let self else { return }
+
+            switch result {
+            case .failure(let why):
+                release(meta.id)
+                _ = requester.send(tag: .errorReply, json: ErrorReply(
+                    message: "\(hostName): \(why)", reqID: req.reqID))
+            case .success(let guest):
+                let proxy = RemotePane(meta: meta, hostName: hostName, remoteID: guest.id)
+                proxy.meta.cwd = guest.cwd
+                lock.lock()
+                proxies[hostName, default: [:]][guest.id] = proxy
+                lock.unlock()
+                attachProxy(proxy, link, guest.id)
+                admit(proxy, at: meta.rect, req)
+            }
+        }
+    }
+
+    private func release(_ id: PaneID) {
+        lock.lock()
+        reserved.removeValue(forKey: id)
+        lock.unlock()
+    }
+
+    // Subscribe to the guest's bytes at the size the canvas last gave it.
+    private func attachProxy(_ proxy: RemotePane, _ link: PeerLink, _ guestID: PaneID) {
+        proxy.bind(link: link, remoteID: guestID)
+        let size = proxy.size
+        link.attach(guestID, cols: size.cols, rows: size.rows)
+        setLink(proxy, .up)
+    }
+
+    private enum LinkState {
+        case up, down
+    }
+
+    private func setLink(_ pane: Pane, _ state: LinkState) {
+        let offline = state == .down
+        lock.lock()
+        guard pane.meta.offline != offline else {
+            lock.unlock()
+            return
+        }
+
+        pane.meta.offline = offline
+        let meta = pane.meta
+        scheduleSaveLocked()
+        lock.unlock()
+        broadcast(tag: .paneMeta, json: meta)
+    }
+
+    private func forgetProxyLocked(_ pane: Pane) {
+        guard let proxy = pane as? RemotePane, let remote = proxy.remoteID else { return }
+
+        proxies[proxy.hostName]?.removeValue(forKey: remote)
+    }
+
+    private func proxiesLocked(of host: String) -> [RemotePane] {
+        panes.values.compactMap { $0 as? RemotePane }.filter { $0.hostName == host }
+    }
+
+    // The guest is gone (peer restarted, or reaped): same slot, fresh shell.
+    private func respawn(_ proxy: RemotePane, _ link: PeerLink) {
+        let ask = CreatePane(rect: proxy.meta.rect, cwd: proxy.meta.cwd, name: proxy.meta.name)
+        link.create(ask) { [weak self] result in
+            guard let self, case .success(let guest) = result else { return }
+
+            lock.lock()
+            let stillHere = panes[proxy.id] != nil
+            if stillHere {
+                if let old = proxy.remoteID {
+                    proxies[proxy.hostName]?.removeValue(forKey: old)
+                }
+                proxies[proxy.hostName, default: [:]][guest.id] = proxy
+            }
+            lock.unlock()
+
+            // Closed while the guest was being made: don't leave it behind.
+            guard stillHere else {
+                link.close(guest.id)
+                return
+            }
+            attachProxy(proxy, link, guest.id)
+        }
+    }
+}
+
+// MARK: - Peer links
+
+extension Server: PeerLinkDelegate {
+    func peerUp(_ link: PeerLink, welcome: Welcome) {
+        let name = link.host.name
+        guard peers.link(for: name) === link else { return }
+
+        let alive = Set(welcome.guests.map(\.id))
+        lock.lock()
+        let mine = proxiesLocked(of: name)
+        // Registered, not admitted yet: its guest is alive but it isn't in `mine`.
+        let inFlight = Set((proxies[name] ?? [:]).keys).intersection(alive)
+        lock.unlock()
+
+        // Claim first: the host reaps every guest of ours we don't list, and
+        // the respawns below must not be among the unlisted.
+        let kept = mine.filter { $0.remoteID.map(alive.contains) == true }
+        link.claim(Array(inFlight.union(kept.compactMap(\.remoteID))))
+
+        for proxy in kept {
+            guard let id = proxy.remoteID else { continue }
+
+            attachProxy(proxy, link, id)
+        }
+        for proxy in mine where !kept.contains(where: { $0 === proxy }) {
+            respawn(proxy, link)
+        }
+        broadcast(tag: .peerState, json: PeerInfo(name: name, up: true))
+    }
+
+    func peerDown(_ link: PeerLink) {
+        let name = link.host.name
+        // A replaced link's late drop must not undo its successor's attach.
+        if let current = peers.link(for: name), current !== link { return }
+
+        lock.lock()
+        let mine = proxiesLocked(of: name)
+        lock.unlock()
+
+        for proxy in mine {
+            setLink(proxy, .down)
+        }
+        broadcast(tag: .peerState, json: PeerInfo(name: name, up: false))
+    }
+
+    func peerOutput(_ link: PeerLink, id: PaneID, data: Data, source: PeerOutput) {
+        lock.lock()
+        let proxy = proxies[link.host.name]?[id]
+        lock.unlock()
+        guard let proxy else { return }
+
+        // A replay onto existing history is a re-sync after a drop (or a
+        // fresh shell in the slot): swap the ring, and reset connected
+        // canvases before redrawing, else the snapshot lands on top of the
+        // old screen and the bytes missed while down never show.
+        if source == .replay, proxy.ring.count > 0 {
+            lock.lock()
+            proxy.ring.reset()
+            lock.unlock()
+            fanOut(pane: proxy, data: Self.terminalReset + data)
+            return
+        }
+        fanOut(pane: proxy, data: data)
+    }
+
+    func peerMeta(_ link: PeerLink, meta: PaneMeta) {
+        lock.lock()
+        guard let proxy = proxies[link.host.name]?[meta.id] else {
+            lock.unlock()
+            return
+        }
+
+        // Only what the peer observes; slot, name and groups are ours.
+        proxy.meta.cwd = meta.cwd
+        proxy.meta.proc = meta.proc
+        proxy.meta.title = meta.title
+        proxy.meta.repoRoot = meta.repoRoot
+        proxy.meta.worktree = meta.worktree
+        let updated = proxy.meta
+        scheduleSaveLocked()
+        lock.unlock()
+        broadcast(tag: .paneMeta, json: updated)
+    }
+
+    func peerExit(_ link: PeerLink, id: PaneID, code: Int32) {
+        lock.lock()
+        let proxy = proxies[link.host.name]?[id]
+        lock.unlock()
+        guard let proxy else { return }
+
+        paneDied(proxy, code: code)
     }
 }

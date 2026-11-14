@@ -279,7 +279,7 @@ extension CanvasView {
             if let g = u.group, let name = groupMetas[g]?.name { return (name, 0) }
             return (first.map(arrangeLabel) ?? "", 0)
         case .directory:
-            let host = first.flatMap { hub.owner(of: $0.id) } ?? "local"
+            let host = first?.meta.host ?? LocalHost
             return (host + (first?.meta.cwd ?? ""), 0)
         case .status:
             let best = u.panes.map { statusPriority(panes[$0]?.programStatus?.state) }.min() ?? 0

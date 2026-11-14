@@ -64,20 +64,30 @@ final class StateStore {
     }
 }
 
+// A proxy pane's guest on its peer, so a restart finds it again.
+struct SavedProxy: Codable, Sendable {
+    var pane: PaneID
+    var remote: PaneID
+}
+
 // Persisted layout: panes plus groups. Legacy files decode as a bare
 // [PaneMeta] (see load()); writing is always the object form.
 struct SavedState: Codable, Sendable {
     var panes: [PaneMeta]
     var groups: [GroupMeta]
     var ties: [TieMeta]
-    init(panes: [PaneMeta] = [], groups: [GroupMeta] = [], ties: [TieMeta] = []) {
+    var proxies: [SavedProxy]
+    init(panes: [PaneMeta] = [], groups: [GroupMeta] = [], ties: [TieMeta] = [],
+         proxies: [SavedProxy] = []) {
         self.panes = panes; self.groups = groups; self.ties = ties
+        self.proxies = proxies
     }
-    enum CodingKeys: String, CodingKey { case panes, groups, ties }
+    enum CodingKeys: String, CodingKey { case panes, groups, ties, proxies }
     init(from decoder: any Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         panes = try c.decodeIfPresent([PaneMeta].self, forKey: .panes) ?? []
         groups = try c.decodeIfPresent([GroupMeta].self, forKey: .groups) ?? []
         ties = try c.decodeIfPresent([TieMeta].self, forKey: .ties) ?? []
+        proxies = try c.decodeIfPresent([SavedProxy].self, forKey: .proxies) ?? []
     }
 }

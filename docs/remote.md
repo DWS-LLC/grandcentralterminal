@@ -1,9 +1,8 @@
 # Remote daemons
 
 `gctd` runs on macOS (unix socket, `.app`-bundled) and Linux (unix socket plus
-optional TCP). The mac canvas talks to any number of remote daemons over TCP.
-Each host's windows get their own color, and right-clicking empty canvas offers
-"New remote pane" per host.
+optional TCP). Every machine has one session: its own canvas. You can create
+panes on other machines from yours, and you can attach to their sessions.
 
 ![Three remote hosts in formation around local panes, each in its own color](media/remote.jpg)
 
@@ -59,21 +58,50 @@ token = "<token>"
 proxy = "user@bastion"   # or an ~/.ssh/config alias
 ```
 
+## Sessions
+
+```
+canvas ─► local gctd ─ your session ─┬─ local pty
+                                     └─ proxy ──tcp──► enterprise gctd (guest pty)
+```
+
+- **Your session** is the local canvas. Right-click empty canvas → "New remote
+  pane" → host runs the pty on that machine, but the pane sits in *your*
+  layout: it groups, ties and arranges like any other, and wears the host's
+  color. `gctd open host=enterprise` does the same from the CLI.
+- **Their session** is what's on that machine's own canvas. Right-click →
+  "Session" (or `⌘⇧E` to cycle) swaps the whole canvas to it. The two sets of
+  panes are independent, and each session remembers its camera.
+- Your daemon dials every `[host.*]` itself and re-reads `config.toml` when it
+  changes, so `⌘⇧R` reaches it too.
+
 ## Rules
 
-Remote panes behave like local ones: PTYs live on the remote, and scrollback,
-resize, groups, and persistence all work. Three exceptions:
-
-- Groups are same-host only. A mixed selection groups its largest same-host
-  subset.
+- Remote panes are PTYs on the remote; scrollback, resize, groups and
+  persistence work. Your daemon keeps its own copy of the scrollback.
 - `⌘T` and directional splits follow the focused pane's host.
-- Each daemon arbitrates its own layout. The canvas pre-resolves against the
-  union world, so cross-host windows never overlap.
-
-`⌘⇧R` reconnects when `[host.*]` changes. A dropped host clears its panes and
-is redialed every 60s until it answers (a dead connection is noticed within
-~30s). A host that's down is greyed out under "New remote pane", with a
-retry button on its row to dial it now.
+- A host that drops greys its panes (`○`) and keeps them in the layout. Your
+  daemon redials with backoff (2s up to 60s); a greyed row under "New remote
+  pane" has a retry button. When it's back, panes reattach; if the remote
+  restarted, they come back as fresh shells in the same spot.
+- Guests belong to the daemon that made them. If you lose the pane for one
+  (crash, closed while the host was down) the host reaps it at the next
+  reconnect; one whose owner never returns goes after 7 days. `gctd list` on
+  the host shows them as `guest-of=`; `gctd close <id>` kills one.
+- Attaching to a host's session needs only the canvas to reach it, but "New
+  remote pane" needs *your daemon* to. Behind a bastion, `proxy` is used by
+  both.
+- On macOS the daemon runs inside its own background app, `GCT Daemon.app` (in
+  the canvas bundle, no Dock icon). macOS ties a process's LAN access to the app
+  that started it, so a daemon started by the canvas lost its peer links the
+  moment the canvas quit. As its own app it keeps them across canvas restarts.
+  If macOS asks to let "GCT Daemon" find devices on your local network, allow it;
+  peers stay down until you do. The daemon's log is `daemon.log` next to
+  `state.json`.
+- Agents in a remote pane talk to that machine's gctd: `gctd open` there lands
+  in its own session, not yours.
+- Switching sessions closes the old connection, so panes of a session you
+  aren't looking at can't ping you.
 
 ## CLI against a remote
 

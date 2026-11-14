@@ -19,6 +19,7 @@ VERSION="${VERSION#v}"  # tags arrive as v0.3.0
 SIGN_IDENTITY="${SIGN_IDENTITY:-Developer ID Application: Tanishq Dubey (P3FJ87836G)}"
 NOTARY_PROFILE="${NOTARY_PROFILE:-gct}"
 APP="build/Grand Central Terminal.app"
+DAEMON_APP="$APP/Contents/Helpers/GCT Daemon.app"
 
 # 1. Developer ID cert into a temp keychain (CI only: secret provided).
 if [ -n "${APPLE_CERT_P12_B64:-}" ]; then
@@ -69,7 +70,12 @@ codesign --force --options runtime --timestamp \
   --sign "$SIGN_IDENTITY" \
   "$APP/Contents/MacOS/GrandCentralTerminal" \
   "$APP/Contents/MacOS/gctd" \
-  "$APP/Contents/MacOS/ptyexec"
+  "$APP/Contents/MacOS/ptyexec" \
+  "$DAEMON_APP/Contents/MacOS/GCTDaemon" \
+  "$DAEMON_APP/Contents/MacOS/gctd" \
+  "$DAEMON_APP/Contents/MacOS/ptyexec"
+codesign --force --options runtime --timestamp \
+  --sign "$SIGN_IDENTITY" "$DAEMON_APP"
 codesign --force --options runtime --timestamp \
   --sign "$SIGN_IDENTITY" "$APP"
 codesign --verify --strict --verbose=2 "$APP"

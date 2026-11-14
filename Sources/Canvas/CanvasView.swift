@@ -101,6 +101,19 @@ final class CanvasView: NSView {
     let programStatus = ProgramStatusStore()
     let arrange = ArrangeState()
     let remoteRetry = RemoteRetry()
+    // The session on screen: "local" (this machine's gctd) or the
+    // [host.<name>] whose gctd we attached to. One at a time, each with its
+    // own panes; the hub only ever holds that one connection.
+    var session = LocalHost
+    // The camera left behind in each session, restored on return.
+    var sessionCameras = [String: Camera]()
+    // The session daemon's own peer hosts: the "New remote pane" rows.
+    var sessionPeers = [PeerInfo]()
+    // A switch is mid fade-out (more presses wait), and the next welcome
+    // fades the new session in. The generation retires stale give-up timers.
+    var switchingSession = false
+    var sessionFadePending = false
+    var sessionFadeGen = 0
     let notifier = Notifier()
     let notices = NoticeState()
     let dimTicker = DimTicker()
@@ -330,7 +343,7 @@ final class CanvasView: NSView {
     /// Run an executable+args in a new pane. Falls back to a login shell
     /// when the command line is empty.
     func openCommandInPane(_ exe: String, args: [String]) {
-        let cwd = focusedID.flatMap { panes[$0]?.meta.cwd }
+        let cwd = focusedCwd(onPeer: nil)
         let r = newPaneRect(direction: GCTConfig.current.newWindowDirection)
         var cmd = ([exe] + args).map {
             $0.contains(" ") ? "\"\($0)\"" : $0
@@ -344,7 +357,7 @@ final class CanvasView: NSView {
             name: exe.split(separator: "/").last.map(String.init),
             command: cmd,
             allowOverlap: GCTConfig.current.allowWindowOverlap, gap: currentGap(),
-            parent: focusedID), owner: "local")
+            parent: focusedID), owner: session)
     }
 
     private func layoutStatusBar() {
@@ -1930,36 +1943,12 @@ final class CanvasView: NSView {
         here.target = self
         here.representedObject = NSStringFromPoint(world)
         menu.addItem(here)
-        // Remote spawn: one item per connected host, same placement as
-        // "New pane here" but created on that daemon (per-host color
-        // chrome on arrival). Unconnected hosts show as disabled.
-        if !GCTConfig.current.remotes.isEmpty {
-            let remote = NSMenuItem(title: "New remote pane", action: nil, keyEquivalent: "")
-            let submenu = NSMenu(title: "New remote pane")
-            for h in GCTConfig.current.remotes {
-                let item = NSMenuItem(title: h.name,
-                                      action: #selector(newRemotePaneFromMenu(_:)),
-                                      keyEquivalent: "")
-                item.target = self
-                // "host|x,y" — world point rides along like "New pane here".
-                item.representedObject = h.name + "|" + NSStringFromPoint(world)
-                if hub.conn(forOwner: h.name) == nil {
-                    item.isEnabled = false
-                }
-                if let c = HostStyle.color(for: h.name) {
-                    item.attributedTitle = NSAttributedString(
-                        string: "  \(h.name)",
-                        attributes: [.foregroundColor: c])
-                }
-                if hub.conn(forOwner: h.name) == nil {
-                    item.view = RemoteRetryRow(name: h.name, color: HostStyle.color(for: h.name)) { [weak self] in
-                        self?.retryRemote(h.name)
-                    }
-                }
-                submenu.addItem(item)
-            }
-            remote.submenu = submenu
+        // Remote spawn + session switch live in CanvasSessions.
+        if let remote = remotePaneMenuItem(at: world) {
             menu.addItem(remote)
+        }
+        if let sessions = sessionMenuItem() {
+            menu.addItem(sessions)
         }
         let arrangeScope: ArrangeScope = !sel.isEmpty ? .selection
             : groupBG.map { .group($0.id) } ?? .all
@@ -2171,7 +2160,7 @@ final class CanvasView: NSView {
     @objc func newPaneHereFromMenu(_ sender: NSMenuItem) {
         guard let s = sender.representedObject as? String else { return }
         let p = NSPointFromString(s)
-        let cwd = focusedID.flatMap { panes[$0]?.meta.cwd }
+        let cwd = focusedCwd(onPeer: nil)
         var r = newPaneRect()
         r.origin = CGPoint(x: p.x - r.width / 2, y: p.y - r.height / 2)
         let obstacles = GroupLayout.creationObstacles(
@@ -2186,7 +2175,7 @@ final class CanvasView: NSView {
         askPane(CreatePane(
             rect: Rect(x: r.minX, y: r.minY, w: r.width, h: r.height),
             cwd: cwd,
-            allowOverlap: GCTConfig.current.allowWindowOverlap, gap: currentGap()), owner: "local")
+            allowOverlap: GCTConfig.current.allowWindowOverlap, gap: currentGap()), owner: session)
     }
 
 
@@ -2194,12 +2183,11 @@ final class CanvasView: NSView {
         guard let s = sender.representedObject as? String else { return }
         let parts = s.split(separator: "|", maxSplits: 1).map(String.init)
         guard parts.count == 2 else { return }
-        let owner = parts[0]
+        let host = parts[0]
         let p = NSPointFromString(parts[1])
-        guard hub.conn(forOwner: owner) != nil else { return }
-        // Same placement as "New pane here" (union-world resolve: the
-        // canvas arbitrates across ALL hosts; each daemon re-resolves
-        // against its own panes, idempotent on clean rects).
+        guard sessionPeers.first(where: { $0.name == host })?.up == true else { return }
+        // Same placement as "New pane here": the pane takes its slot in this
+        // session's layout, the peer only runs the pty.
         var r = newPaneRect()
         r.origin = CGPoint(x: p.x - r.width / 2, y: p.y - r.height / 2)
         let obstacles = GroupLayout.creationObstacles(
@@ -2213,7 +2201,8 @@ final class CanvasView: NSView {
         }
         askPane(CreatePane(
             rect: Rect(x: r.minX, y: r.minY, w: r.width, h: r.height),
-            allowOverlap: GCTConfig.current.allowWindowOverlap, gap: currentGap()), owner: owner)
+            allowOverlap: GCTConfig.current.allowWindowOverlap, gap: currentGap(),
+            host: host), owner: session)
     }
     override func mouseMoved(with event: NSEvent) {
         // Hover routing: the pane under the cursor gets position updates
@@ -2503,6 +2492,7 @@ final class CanvasView: NSView {
         case .toggleSnapping: toggleSnapping()
         case .moveWindowToSnap: snapFocusedToNearest()
         case .reloadConfig: reloadConfig()
+        case .nextSession: nextSession()
         // The whole canvas, whatever is focused: the menu narrows, the key doesn't.
         case .relaxLayout: relaxCanvas(scope: .all)
         }
@@ -2899,27 +2889,27 @@ final class CanvasView: NSView {
         // inside the own group's bounds, shoves loose blockers aside
         // along the split axis when the grown bounds demand it, and
         // admits it (refusal = groupless pane).
-        // Owner follows focus: splitting a remote pane opens on that
-        // host (groups are same-host, so the join stays valid).
-        let cwd = focusedID.flatMap { panes[$0]?.meta.cwd }
+        // The host follows focus: splitting a remote pane runs the new pty
+        // on that host, in the same session (and group) as the focused pane.
+        let host = focusedID.flatMap { panes[$0] }.flatMap(peerHost(of:))
+        let cwd = focusedCwd(onPeer: host)
         let inheritGroup = focusedID.flatMap { groupOf($0) }
-        let owner = focusedID.flatMap { hub.owner(of: $0) } ?? "local"
-        // Groups live per-daemon: translate the canvas group id to the
-        // remote one the owning daemon knows (nil = no join).
-        let remoteJoin = inheritGroup.flatMap { hub.remoteGroupID($0, owner: owner) }
+        // Translate the canvas group id to the one the daemon knows
+        // (nil = no join).
+        let remoteJoin = inheritGroup.flatMap { hub.remoteGroupID($0, owner: session) }
         let r = newPaneRect(direction: direction, ignoringGroup: inheritGroup)
         askPane(CreatePane(
             rect: Rect(x: r.minX, y: r.minY, w: r.width, h: r.height),
             cwd: cwd,
             allowOverlap: GCTConfig.current.allowWindowOverlap, gap: currentGap(),
             joinGroup: remoteJoin, joinDirection: direction.rawValue,
-            parent: focusedID), owner: owner)
+            parent: focusedID, host: host), owner: session)
     }
 
     // Drag-to-create: open a pane at the drawn rect (already snapped).
     // Same overlap/group rules as "New pane here", same cwd inheritance.
     func createPane(at rect: NSRect) {
-        let cwd = focusedID.flatMap { panes[$0]?.meta.cwd }
+        let cwd = focusedCwd(onPeer: nil)
         var r = rect
         let obstacles = GroupLayout.creationObstacles(
             paneRects: paneRects(),
@@ -2933,7 +2923,7 @@ final class CanvasView: NSView {
         askPane(CreatePane(
             rect: Rect(x: r.minX, y: r.minY, w: r.width, h: r.height),
             cwd: cwd,
-            allowOverlap: GCTConfig.current.allowWindowOverlap, gap: currentGap()), owner: "local")
+            allowOverlap: GCTConfig.current.allowWindowOverlap, gap: currentGap()), owner: session)
     }
 
     // New-pane placement: flush against the focused pane on the given
@@ -3072,7 +3062,11 @@ final class CanvasView: NSView {
         if focusedID == id {
             focusedID = nil
             // Focus falls to the top pane; the camera goes with it.
-            if let last = zOrder.last { focusPane(last); followFocus(last) }
+            // A session swap clears panes behind the fade: no glide there.
+            if let last = zOrder.last {
+                focusPane(last)
+                if !switchingSession { followFocus(last) }
+            }
         }
         refreshGroupViews()
     }
@@ -3510,7 +3504,7 @@ final class CanvasView: NSView {
         fitAll()
     }
 
-    func fitAll() {
+    func fitAll(duration: Double? = nil) {
         guard !zOrder.isEmpty else { return }
         var bbox = CGRect.null
         for pane in panes.values { bbox = bbox.union(pane.frame) }
@@ -3528,7 +3522,7 @@ final class CanvasView: NSView {
         if let packed = packedFit(), packed.scale > cam.scale {
             cam = packed
         }
-        animateCamera(to: cam)
+        animateCamera(to: cam, duration: duration)
     }
 
     // Fit-all that lets panes use the bbox's empty corners next to a PiP
@@ -3550,6 +3544,7 @@ final class CanvasView: NSView {
 
     // (timer, from, to, start time, duration seconds)
     private var cameraAnim: (Timer, Camera, Camera, Double, Double)?
+    static let cameraJumpSecs: Double = 0.01
     // Set only while a scripted action runs (gctd do .. dur=), so the
     // action's own camera move takes the script's pacing.
     private var scriptedAnimDuration: Double?
@@ -3558,6 +3553,14 @@ final class CanvasView: NSView {
     func animateCamera(to target: Camera, duration: Double? = nil) {
         cameraAnim?.0.invalidate()
         let from = camera
+        // A jump lands this frame: through the timer it would show one
+        // frame (or a few) at the old camera.
+        if let duration, duration <= Self.cameraJumpSecs {
+            cameraAnim = nil
+            camera = from.blend(to: target, t: 1, viewport: bounds.size)
+            applyCamera()
+            return
+        }
         let timer = Timer(timeInterval: 1.0 / 120.0, repeats: true) { [weak self] _ in
             self?.stepCamera()
         }
@@ -3699,6 +3702,9 @@ enum CanvasPaths {
     static let sockPath = ProcessInfo.processInfo.environment["GCT_SOCK"]
         ?? supportDir + "/daemon.sock"
     static let daemonPath = supportDir + "/bin/gctd"
+    // The daemon as its own app, inside this bundle (absent under `swift run`).
+    static let daemonAppPath = Bundle.main.bundleURL
+        .appendingPathComponent("Contents/Helpers/GCT Daemon.app").path
 }
 
 // MARK: - NSTextInputClient

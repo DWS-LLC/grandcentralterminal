@@ -33,6 +33,13 @@ let package = Package(
             path: "Sources/PtyExec"
         ),
 
+        // Executable of the daemon's own app bundle: supervises gctd so the
+        // app has an identity of its own for Local Network permission.
+        .executableTarget(
+            name: "GCTDaemon",
+            path: "Sources/DaemonLauncher"
+        ),
+
         .target(
             name: "Common",
             path: "Sources/Common"
