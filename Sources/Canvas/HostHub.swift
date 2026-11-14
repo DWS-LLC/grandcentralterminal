@@ -1,11 +1,10 @@
-// HostHub: the canvas's connection to the daemon of the session on screen
-// ("local" unix socket, or a [host.<name>] over TCP).
+// HostHub: the canvas's connections to the daemons of every attached session
+// ("local" unix socket, plus each attached [host.<name>] over TCP).
 //
-// Only one session is live at a time, but PaneIDs are only unique per
-// daemon, so the hub still maps every (owner, PaneID) pair to a stable
-// canvas PaneID and tags each pane's host field: the owner label for the
-// daemon's own ptys, the peer name for proxy panes it runs elsewhere.
-// Group ids are namespaced the same way.
+// PaneIDs are only unique per daemon, so the hub maps every (owner, PaneID)
+// pair to a stable canvas PaneID and tags each pane's host field: the owner
+// label for the daemon's own ptys, the peer name for proxy panes it runs
+// elsewhere. Group ids are namespaced the same way.
 //
 // All CanvasView call sites keep using `hub.`; the hub routes each request
 // to the owning connection by pane/group id.

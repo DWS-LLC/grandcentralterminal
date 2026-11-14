@@ -61,17 +61,43 @@ final class CanvasView: NSView {
             && statusBar?.superview != nil ? statusBar?.barHeight ?? 0 : 0
         return CGRect(origin: CGPoint(x: 0, y: barH), size: viewportSize)
     }
-    var panes = [PaneID: PaneView]()
-    var zOrder = [PaneID]()
-    private(set) var focusedID: PaneID?
-    private var focusTrail = FocusTrail()
+    // Per-session state (see SessionCanvas). `cur` is the session the code
+    // is acting on: the viewed one, or a parked one inside withCanvas.
+    var viewedCanvas = SessionCanvas()
+    lazy var cur: SessionCanvas = viewedCanvas
+    lazy var canvases: [String: SessionCanvas] = [LocalHost: viewedCanvas]
+    var panes: [PaneID: PaneView] {
+        get { cur.panes }
+        _modify { yield &cur.panes }
+    }
+    var zOrder: [PaneID] {
+        get { cur.zOrder }
+        _modify { yield &cur.zOrder }
+    }
+    private(set) var focusedID: PaneID? {
+        get { cur.focusedID }
+        set { cur.focusedID = newValue }
+    }
+    private var focusTrail: FocusTrail {
+        get { cur.focusTrail }
+        _modify { yield &cur.focusTrail }
+    }
     // Multi-select: staged pane ids (right-drag, shift+click, cmd+d)
     // that act as a unit for move/close/group WITHOUT being a daemon
     // group. Cleared on empty clicks, close, and explicit clear.
-    var selectedIDs = Set<PaneID>()
+    var selectedIDs: Set<PaneID> {
+        get { cur.selectedIDs }
+        _modify { yield &cur.selectedIDs }
+    }
     // Terminal groups: daemon-owned membership, local background views.
-    var groupMetas = [GroupID: GroupMeta]()
-    var groupViews = [GroupID: GroupView]()
+    var groupMetas: [GroupID: GroupMeta] {
+        get { cur.groupMetas }
+        _modify { yield &cur.groupMetas }
+    }
+    var groupViews: [GroupID: GroupView] {
+        get { cur.groupViews }
+        _modify { yield &cur.groupViews }
+    }
     // Rubber-band selection of pane ids (world rect at press/drag).
     var selectionBand: (anchor: CGPoint, current: CGPoint)?
     var selectionView: NSView?
@@ -102,13 +128,19 @@ final class CanvasView: NSView {
     let arrange = ArrangeState()
     let remoteRetry = RemoteRetry()
     // The session on screen: "local" (this machine's gctd) or the
-    // [host.<name>] whose gctd we attached to. One at a time, each with its
-    // own panes; the hub only ever holds that one connection.
+    // [host.<name>] whose gctd we attached to. Every attached session keeps
+    // its connection and panes (`canvases`); only this one is shown.
     var session = LocalHost
     // The camera left behind in each session, restored on return.
     var sessionCameras = [String: Camera]()
-    // The session daemon's own peer hosts: the "New remote pane" rows.
-    var sessionPeers = [PeerInfo]()
+    // Hosts being dialed for an attach, and the one to show once it lands.
+    var attaching = Set<String>()
+    var showWhenAttached: String?
+    // The viewed session's daemon peer hosts: the "New remote pane" rows.
+    var sessionPeers: [PeerInfo] {
+        get { cur.peers }
+        set { cur.peers = newValue }
+    }
     // A switch is mid fade-out (more presses wait), and the next welcome
     // fades the new session in. The generation retires stale give-up timers.
     var switchingSession = false
@@ -201,6 +233,59 @@ final class CanvasView: NSView {
         markedHost = nil
     }
 
+    // Session switch, leaving: hide the viewed session's views and let its
+    // renderers rest (VT keeps flowing, so it still notifies). Its focus
+    // is remembered, but no surface keeps the cursor.
+    func parkViewed() {
+        exitZoomRestore()
+        dropComposition()
+        drag = .none
+        hoverID = nil
+        if linkPane != nil {
+            linkPane = nil
+            NSCursor.arrow.set()
+        }
+
+        let c = viewedCanvas
+        for pane in c.panes.values {
+            pane.isHidden = true
+            pane.host?.setOcclusion(false)
+        }
+        for view in c.groupViews.values {
+            view.isHidden = true
+        }
+        c.focusedID.flatMap { c.panes[$0] }?.host?.setFocus(false)
+    }
+
+    // Session switch, arriving: `canvas` becomes the viewed one and shows.
+    func showViewed(_ canvas: SessionCanvas) {
+        viewedCanvas = canvas
+        cur = canvas
+
+        for pane in canvas.panes.values {
+            pane.isHidden = false
+            pane.syncSurfaceSize()
+        }
+        for view in canvas.groupViews.values {
+            view.isHidden = false
+        }
+
+        refreshGroupViews()
+        restackFloating()
+        refreshOcclusion()
+        refreshDim()
+        autoNameRefresh.schedule()
+        scheduleRenderZoom()
+
+        guard let id = canvas.focusedID, let pane = canvas.panes[id] else { return }
+        pane.host?.setFocus(true)
+        window?.makeFirstResponder(self)
+
+        // Coming back to the app clears it too (see setupNotices).
+        guard NSApp.isActive else { return }
+        clearNotice(id)
+    }
+
     // MARK: Setup
 
     func setup() {
@@ -220,7 +305,6 @@ final class CanvasView: NSView {
         if !hub.connectLocal(sockPath: CanvasPaths.sockPath, delegate: self) {
             reconnectLocal(after: 0)
         }
-        syncRemotes()
         // Window state drives occlusion: miniaturize / un-hide changes
         // which renderers need to run. Camera moves call refresh via
         // applyCamera; creation refreshes in makePaneView.
@@ -929,7 +1013,8 @@ final class CanvasView: NSView {
         let windowVisible = (window?.isVisible ?? false) && !(window?.isMiniaturized ?? false)
         let viewBounds = bounds
         backgroundShader?.isPaused = !windowVisible
-        for pane in panes.values {
+        // A parked session stays occluded; only the viewed one is tested.
+        for pane in viewedCanvas.panes.values {
             guard let host = pane.host else { continue }
             // World frame -> screen: camera transform, then view bounds.
             let sp = camera.worldToScreen(pane.frame.origin)
@@ -1016,13 +1101,22 @@ final class CanvasView: NSView {
     // z-order on every mouse sweep; click/keyboard focus still raises.
     func focusPane(_ id: PaneID, raise: Bool) {
         guard panes[id] != nil else { return }
+        // A parked session only remembers its focus; the surfaces stay
+        // unfocused until it is shown, so just one pane ever has the cursor.
+        let live = cur === viewedCanvas
         if let old = focusedID, old != id {
-            panes[old]?.host?.setFocus(false)
+            if live { panes[old]?.host?.setFocus(false) }
             panes[old]?.isFocused = false
-            dropComposition()
+            if live { dropComposition() }
         }
         focusedID = id
         arrange.noteFocus(id)
+        guard live else {
+            panes[id]?.isFocused = true
+            if raise { bringToFront(id) }
+            return
+        }
+
         clearNotice(id)
         // An explicit focus move exits a pane zoom: restore the zoomed
         // pane's frame + camera before going somewhere new.
@@ -3065,7 +3159,7 @@ final class CanvasView: NSView {
             // A session swap clears panes behind the fade: no glide there.
             if let last = zOrder.last {
                 focusPane(last)
-                if !switchingSession { followFocus(last) }
+                if !switchingSession, cur === viewedCanvas { followFocus(last) }
             }
         }
         refreshGroupViews()
@@ -3106,6 +3200,10 @@ final class CanvasView: NSView {
         panes[meta.id] = pane
         zOrder.append(meta.id)
         worldView.addSubview(pane)
+        if cur !== viewedCanvas {
+            pane.isHidden = true
+            host.setOcclusion(false)
+        }
         refreshGroupViews()
         autoNameRefresh.schedule()
 
@@ -3596,17 +3694,19 @@ final class CanvasView: NSView {
     // gctd font: the named pane's text, else every pane's. New panes copy
     // the focused pane's size, so they follow.
     private func scriptedFont(_ cmd: CanvasCommand) {
-        let ids = cmd.pane.map { [$0] } ?? Array(panes.keys)
-        for id in ids {
-            panes[id]?.host?.adjustFont(by: cmd.fontDelta)
+        // Every attached session's panes, not just the one on screen.
+        let all = canvases.values.flatMap { $0.panes.values }
+        let targets = cmd.pane.map { id in all.filter { $0.id == id } } ?? all
+        for pane in targets {
+            pane.host?.adjustFont(by: cmd.fontDelta)
         }
     }
 
-    // gctd session: same swap as the Session menu; unknown names do nothing.
+    // gctd session: same as the Session menu (attaches on demand); unknown names do nothing.
     private func scriptedSession(_ cmd: CanvasCommand) {
         guard let name = cmd.session else { return }
 
-        switchSession(to: name)
+        openSession(name)
     }
 
     // Glide so the target world point sits at the viewport center:

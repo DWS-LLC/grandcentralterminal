@@ -70,8 +70,17 @@ canvas ─► local gctd ─ your session ─┬─ local pty
   layout: it groups, ties and arranges like any other, and wears the host's
   color. `gctd open host=enterprise` does the same from the CLI.
 - **Their session** is what's on that machine's own canvas. Right-click →
-  "Session" (or `⌘⇧E` to cycle) swaps the whole canvas to it. The two sets of
+  "Session" attaches the host (nothing attaches on its own, and a relaunch
+  starts local-only) and shows it; `⌘⇧E` cycles the attached ones. The sets of
   panes are independent, and each session remembers its camera.
+- **Attached sessions stay live.** One is on screen, the rest are parked:
+  hidden, not rendering, but still running, so a bell, OSC 9 or agent hook in
+  a parked session posts a banner naming its host, and clicking it switches
+  there. The Session menu lists every configured host (attached,
+  reconnecting, not attached) with unread counts and a Detach row; the window
+  title shows how many sessions are attached. `gctd font` and `gctd session`
+  from any attached daemon reach the canvas; `gctd camera` and `gctd do` act
+  only on the session on screen.
 - Your daemon dials every `[host.*]` itself and re-reads `config.toml` when it
   changes, so `⌘⇧R` reaches it too.
 

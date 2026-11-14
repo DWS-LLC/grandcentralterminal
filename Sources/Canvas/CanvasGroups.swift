@@ -35,6 +35,7 @@ extension CanvasView {
         guard groupViews[id] == nil else { return }
         let v = GroupView(id: id)
         groupViews[id] = v
+        v.isHidden = cur !== viewedCanvas
         // Below every pane: groups are background.
         worldView.addSubview(v, positioned: .below, relativeTo: nil)
     }

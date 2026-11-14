@@ -6,8 +6,10 @@
 - `gctd open --keep-open` leaves a pane (dimmed, ✕) with its scrollback after its program ends, so `gctd dump` can still read it. It goes on `gctd close`, or after `keep-open-ttl` in `config.toml` (default `7d`, `0` = until closed). Kept panes don't survive a daemon restart. Protocol 9.
 - `gctd wait <pane> for=10m` (and `open --wait for=10m`) gives up after that long and exits 124.
 - `gctd open side=right|left|above|below` picks the edge of the calling pane the new pane lands on, and `size=33%,100%` takes a share of the caller's width and height.
-- `gctd font +N|-N|reset [pane]` resizes terminal text on every pane, or one, like `⌘+` / `⌘-`. `gctd session <name>` switches the canvas to `local` or a host (it then only hears that host's gctd, so switch back with `gctd session local` run there). Protocol 8.
-- Sessions: one canvas per machine. `local` is this machine's gctd, each `[host.<name>]` is another machine's. Right-click → Session (or `⌘⇧E`) swaps the whole canvas; each session keeps its own panes and camera.
+- `gctd font +N|-N|reset [pane]` resizes terminal text on every pane, or one, like `⌘+` / `⌘-`. `gctd session <name>` switches the canvas to `local` or a host, attaching it first if needed. Protocol 8.
+- Sessions: one canvas per machine. `local` is this machine's gctd, each `[host.<name>]` is another machine's. Right-click → Session picks one (attaching the host if it isn't yet) and `⌘⇧E` cycles the attached ones. Each session keeps its own panes and camera.
+- Attached sessions you aren't looking at stay live and still notify (banner, bell, OSC 9, agent hooks); clicking the banner switches to that session and pane. The Session menu shows each host as attached, reconnecting or not attached, with unread counts, and offers Detach. The window title says how many are attached.
+- `gctd font` and `gctd session` from any attached daemon reach the canvas, so they work while a host is on screen.
 - New remote pane now puts the pane in your session's layout while the pty runs on the other machine, so remote panes group, tie and arrange with local ones. The pane greys out (`○`) while its host is unreachable and reattaches when it's back.
 - `gctd open host=<peer>` opens a pane that runs on a peer. `gctd list` shows peers and the guest panes a daemon hosts.
 - `gctd list --json`, `gctd inspect [pane]` and `gctd hosts`: full ids, stable keys, everything the daemon knows about a pane.
@@ -17,6 +19,7 @@
 - Panes get `GCT_BIN_DIR`, the `gctd` matching their daemon, first on `PATH`. Startup files that rewrite `PATH` can bury it; see docs/agents.md.
 
 ### Changed
+- Nothing dials a `[host.<name>]` until you attach it, and attachments don't survive a relaunch. Hosts in `config.toml` are only available. A dropped attached host redials every 60s until you detach it.
 - `gctd open` no longer orbits the calling pane: spawns land flush beside it and keep `window-gap` air, like any other placement. The cable to the caller stays.
 - `⌘⇧A` spaces panes by exactly `window-gap`. The tree used to keep at least 48 points and stretch parent-to-children gaps up to 640.
 - `gctd agent-setup` is now `gctd agent`: `setup`, `status`, `remove`, `show`, `context`. Setup finds agents (Claude Code, Codex, opencode, pi), is safe to rerun, and takes `--agent`, `--project`, `--dry-run`, `--force` and `--json`. It always installs every hook the agent supports, including Claude's `Notification` and `Stop`, and `remove` takes them back out.

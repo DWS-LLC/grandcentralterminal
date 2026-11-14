@@ -106,10 +106,17 @@ final class NoticeState {
 
 extension CanvasView {
     func setupNotices() {
+        // The pane may live in a parked session: show that one first.
         notifier.onOpen = { [weak self] id in
-            guard let self, self.panes[id] != nil else { return }
-            self.focusPane(id)
-            self.followFocus(id)
+            guard let self, let owner = self.hub.owner(of: id),
+                  self.canvases[owner] != nil else { return }
+
+            self.switchSession(to: owner) {
+                guard self.panes[id] != nil else { return }
+
+                self.focusPane(id)
+                self.followFocus(id)
+            }
         }
 
         // Coming back to the app means you see the focused pane.
@@ -126,12 +133,19 @@ extension CanvasView {
         guard GCTConfig.current.notifications, let pane = panes[id] else { return }
         guard !notices.isReplaying(id) else { return }
 
-        let watching = NSApp.isActive && window?.isKeyWindow == true && focusedID == id
+        // Only the session on screen can be watched.
+        let watching = cur === viewedCanvas && NSApp.isActive
+            && window?.isKeyWindow == true && focusedID == id
         guard !watching, !notices.isRepeat(id, body) else { return }
 
         pane.hasNotice = true
+
+        // A parked session says which machine it is.
+        let from = cur === viewedCanvas ? nil : hub.owner(of: id)
+        let subtitle = [from, title == nil ? nil : pane.displayName]
+            .compactMap { $0 }.joined(separator: " · ")
         notifier.post(pane: id, title: title ?? pane.displayName,
-                      subtitle: title == nil ? nil : pane.displayName, body: body)
+                      subtitle: subtitle.isEmpty ? nil : subtitle, body: body)
     }
 
     func clearNotice(_ id: PaneID) {
