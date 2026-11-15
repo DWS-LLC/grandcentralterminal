@@ -3,6 +3,7 @@
 ## Unreleased
 
 ### Added
+- Plugins: a folder in `~/.config/gct/plugins/` with an `init.lua` that returns `{ setup = function(opts) end }`, started with the daemon like an autoload script and given its `[plugin.<name>]` table from `config.toml` (`enabled = false` keeps it off). `gctd plugin install owner/repo` (or a git URL, `--ref` for a branch, tag or commit), `list`, `update` and `remove` manage them, and `plugins.lock` pins each commit so another machine gets the same code. See docs/scripting.md.
 - `gctd lua` runs a Lua script against the daemon, in the style of Rex's `rex do`: `gct.pane.*` to open, wait on, dump and arrange panes, `gct.on` handlers for events (`pane_created`, `terminal.child_exited`, `terminal.pwd_changed`, `view_changed`, host links...), `gct.wait`, timers, `gct.exec`, `gct.json`, and Rex's layout builders. The script runs in the `gctd lua` process, never inside the daemon. See docs/scripting.md.
 - Scripts in `~/.config/gct/autoload/` start with the daemon, restart when saved, stop when deleted, and retry with backoff when they crash. Logs are in `script-logs/` beside `state.json`.
 - Bell, title, notification, focus, progress, clipboard and program-status events reach scripts: the canvas reports what it sees and the daemon relays it to clients that subscribed. Protocol 10; an older app or daemon just sends none.

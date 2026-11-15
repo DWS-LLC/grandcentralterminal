@@ -1,7 +1,10 @@
-// Scripts that start with the daemon: every *.lua in <config dir>/autoload/.
+// Scripts that start with the daemon: every *.lua in <config dir>/autoload/,
+// and every folder in <config dir>/plugins/ (see PluginStore).
 //
 //   ~/.config/gct/autoload/notify.lua ──► gctd --sock S lua notify.lua
 //                                          └─ stdout+stderr ► script-logs/notify.lua.log
+//   ~/.config/gct/plugins/leaf/       ──► gctd --sock S lua --plugin leaf
+//                                          └─ stdout+stderr ► script-logs/plugin-leaf.log
 //
 // Each runs as its own `gctd lua` process, a plain client of this daemon, so
 // the daemon never executes script code and a runaway script costs one
@@ -13,9 +16,22 @@
 import Foundation
 import Common
 
+// What to run for one autoload item, and what says it changed: a script file
+// or a plugin folder.
+private struct Source {
+    // Unique among items: "notify.lua", "plugin/leaf".
+    let key: String
+    // The words after `gctd --sock S lua`.
+    let launch: [String]
+    let stamp: Date
+    let opts: [String: String]
+}
+
 private final class Entry {
-    let file: String
+    let key: String
+    let launch: [String]
     var stamp: Date
+    var opts: [String: String]
     var process: Process?
     var failures = 0
     var retryAt = Date.distantPast
@@ -25,9 +41,11 @@ private final class Entry {
     var stopping: Date?
     var removed = false
 
-    init(file: String, stamp: Date) {
-        self.file = file
-        self.stamp = stamp
+    init(_ source: Source) {
+        key = source.key
+        launch = source.launch
+        stamp = source.stamp
+        opts = source.opts
     }
 }
 
@@ -37,6 +55,7 @@ final class ScriptAutoload {
     private static let maxBackoff: TimeInterval = 60
     private static let logCap = 1 << 20
     private static let suffix = ".lua"
+    private static let pluginPrefix = "plugin/"
 
     private let dir: String
     private let logDir: String
@@ -88,35 +107,62 @@ final class ScriptAutoload {
     // MARK: Folder
 
     private func scan() {
-        let fm = FileManager.default
-        let names = ((try? fm.contentsOfDirectory(atPath: dir)) ?? [])
-            .filter { $0.hasSuffix(Self.suffix) && !$0.hasPrefix(".") }
         var seen = Set<String>()
 
-        for name in names {
-            let path = dir + "/" + name
-            guard let stamp = (try? fm.attributesOfItem(atPath: path))?[.modificationDate] as? Date else { continue }
-
-            seen.insert(name)
-            guard let e = entries[name] else {
-                entries[name] = Entry(file: path, stamp: stamp)
+        for source in scripts() + plugins() {
+            seen.insert(source.key)
+            guard let e = entries[source.key] else {
+                entries[source.key] = Entry(source)
                 continue
             }
 
-            // Saved again: a fresh start, whatever happened to the last run.
-            guard e.stamp != stamp else { continue }
+            // Saved again, or its options edited: a fresh start, whatever
+            // happened to the last run.
+            guard e.stamp != source.stamp || e.opts != source.opts else { continue }
 
-            e.stamp = stamp
+            e.stamp = source.stamp
+            e.opts = source.opts
             e.done = false
             e.failures = 0
             e.retryAt = .distantPast
             stop(e)
         }
 
-        for (name, e) in entries where !seen.contains(name) {
+        for (key, e) in entries where !seen.contains(key) {
             e.removed = true
             stop(e)
         }
+    }
+
+    private func scripts() -> [Source] {
+        let fm = FileManager.default
+        let names = ((try? fm.contentsOfDirectory(atPath: dir)) ?? [])
+            .filter { $0.hasSuffix(Self.suffix) && !$0.hasPrefix(".") }
+        var out = [Source]()
+
+        for name in names {
+            let path = dir + "/" + name
+            guard let stamp = (try? fm.attributesOfItem(atPath: path))?[.modificationDate] as? Date else { continue }
+
+            out.append(Source(key: name, launch: [path], stamp: stamp, opts: [:]))
+        }
+
+        return out
+    }
+
+    // A plugin switched off with `enabled = false` is as good as absent.
+    private func plugins() -> [Source] {
+        var out = [Source]()
+
+        for p in PluginStore.installed() {
+            let opts = PluginStore.options(of: p.name)
+            guard PluginStore.isEnabled(opts) else { continue }
+
+            out.append(Source(key: Self.pluginPrefix + p.name, launch: ["--plugin", p.name],
+                              stamp: PluginStore.stamp(of: p), opts: opts))
+        }
+
+        return out
     }
 
     // MARK: One script
@@ -141,7 +187,7 @@ final class ScriptAutoload {
         }
 
         if e.removed {
-            entries[(e.file as NSString).lastPathComponent] = nil
+            entries[e.key] = nil
             return
         }
 
@@ -164,16 +210,16 @@ final class ScriptAutoload {
         e.failures += 1
         let wait = min(Self.maxBackoff, pow(2, Double(e.failures)))
         e.retryAt = now.addingTimeInterval(wait)
-        log("autoload \((e.file as NSString).lastPathComponent) exited \(status); retry in \(Int(wait))s")
+        log("autoload \(e.key) exited \(status); retry in \(Int(wait))s")
     }
 
     private func launch(_ e: Entry, _ now: Date) {
-        let name = (e.file as NSString).lastPathComponent
+        let name = e.key
         guard let exe = Bundle.main.executablePath ?? CommandLine.arguments.first else { return }
 
         let p = Process()
         p.executableURL = URL(fileURLWithPath: exe)
-        p.arguments = ["--sock", sock, "lua", e.file]
+        p.arguments = ["--sock", sock, "lua"] + e.launch
         // Not a pane: no GCT_PANE_ID, so the script has no "self".
         var env = ProcessInfo.processInfo.environment
         env["GCT_PANE_ID"] = nil
@@ -201,7 +247,7 @@ final class ScriptAutoload {
         let fm = FileManager.default
         try? fm.createDirectory(atPath: logDir, withIntermediateDirectories: true)
 
-        let path = "\(logDir)/\(name).log"
+        let path = "\(logDir)/\(name.replacingOccurrences(of: "/", with: "-")).log"
         let size = ((try? fm.attributesOfItem(atPath: path))?[.size] as? Int) ?? 0
         if size > Self.logCap { try? fm.removeItem(atPath: path) }
         if !fm.fileExists(atPath: path) { _ = fm.createFile(atPath: path, contents: nil) }

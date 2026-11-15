@@ -919,5 +919,6 @@ case "help", "--help", "-h":
 
 default:
     if verb == "agent" { runAgent(rest) }
+    if verb == "plugin" { runPlugin(rest) }
     usage()
 }

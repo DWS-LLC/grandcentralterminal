@@ -296,6 +296,61 @@ gct.on("terminal.child_exited", function(ctx, ev)
 end)
 ```
 
+## Plugins
+
+A plugin is a folder in `~/.config/gct/plugins/` (or `$GCT_CONFIG_DIR/plugins/`)
+with an `init.lua`. It runs like an autoloaded script, as its own process, with
+the same restart rules and a log in `script-logs/plugin-<name>.log`.
+
+```
+plugins/leaf/
+├── init.lua       returns { setup = function(opts) ... end }
+├── lua/           require("x") finds lua/x.lua, for this plugin only
+└── plugin.toml    optional: version = "1.2.0", description = "..."
+```
+
+```lua
+-- plugins/hello/init.lua
+return {
+  setup = function(opts)
+    gct.on("terminal.bell", function(ctx)
+      gct.pane.notify{ pane = ctx.pane_id, title = opts.title or "bell" }
+    end)
+  end,
+}
+```
+
+`setup` gets the `[plugin.<name>]` table of `config.toml` (numbers and booleans
+keep their type), and is also `gct.args`. Editing the table restarts the plugin;
+`enabled = false` stops it. A file that returns nothing, or a table without
+`setup`, simply runs.
+
+```toml
+[plugin.hello]
+title = "ding"
+```
+
+`gctd plugin` installs them from git:
+
+```sh
+gctd plugin install owner/repo            # GitHub; or a git URL, or ./path
+gctd plugin install owner/repo --ref v1.2 # a branch, tag or commit
+gctd plugin list [--json]
+gctd plugin update [name]                 # fetch, move to the ref's tip, re-pin
+gctd plugin remove name
+gctd plugin install                       # no argument: put back what plugins.lock names
+```
+
+`plugins.lock` (beside `config.toml`, safe to commit) records each plugin's
+source, ref and exact commit, so a second machine gets the same code with
+`gctd plugin install`. `update` moves a branch or the default branch to its tip
+and leaves a tag or commit where it is. A folder you made yourself is listed as
+`(local)` and `remove` won't delete it. A symlink into your own checkout works
+too, and is the way to develop one: saving any file in it restarts the plugin.
+
+A plugin runs with your permissions, `gct.exec` included. Read what you
+install.
+
 ## Coming from Rex
 
 - The namespace is `gct`, and GCT has panes where Rex has sessions, windows,
@@ -310,6 +365,10 @@ end)
   Rex's (`pane.split`).
 - Rex runs Lua 5.1, GCT 5.4: `setfenv` and `unpack` are gone. Load data-only
   files with `load(text, name, "t", {})`.
+- `rex.action` is `gct.action`. A Rex plugin is a Lua file that calls
+  `rex.action` from `init.lua`; here it is a [plugin](#plugins) folder whose
+  `init.lua` returns `{ setup = function(opts) end }`, and runs as its own
+  process, so a plugin can't see the others' actions or globals.
 - `rex.block.call` is `gct.block.call`, with the differences in
   [Terminal methods](#terminal-methods); `rex.server` is `gct.server`, scoped
   to a peer's panes.

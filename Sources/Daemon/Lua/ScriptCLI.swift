@@ -3,11 +3,12 @@
 //   gctd lua build.lua target=release     a file (ends in .lua or has a slash)
 //   gctd lua -e 'print(gct.pane_id)'      inline
 //   echo 'return 1+1' | gctd lua -        stdin
+//   gctd lua --plugin leaf                an installed plugin (see PluginStore)
 
 import Foundation
 import Common
 
-private let luaUsage = "lua <file.lua | -e code | -> [key=value]... [--args json|@file] [--json] [--for <span>] [--fail-fast] [--pane <pane>]"
+private let luaUsage = "lua <file.lua | -e code | -> [key=value]... [--args json|@file] [--json] [--for <span>] [--fail-fast] [--pane <pane>] [--plugin <name>]"
 private let luaSuffix = ".lua"
 private let fileMark = "@"
 
@@ -50,6 +51,7 @@ private struct LuaCall {
     var failFast = false
     var limit: TimeInterval?
     var pane: String?
+    var plugin: String?
 }
 
 private func parseLua(_ rest: [String]) -> LuaCall {
@@ -71,6 +73,7 @@ private func parseLua(_ rest: [String]) -> LuaCall {
         case "--fail-fast": call.failFast = true
         case "--args": extra = value("--args")
         case "--pane": call.pane = value("--pane")
+        case "--plugin": call.plugin = value("--plugin")
         case "--for":
             guard let secs = Span.parse(value("--for")), secs > 0 else { bad("--for takes a span like 90s, 10m, 2h") }
 
@@ -80,7 +83,9 @@ private func parseLua(_ rest: [String]) -> LuaCall {
         i += 1
     }
 
-    if call.source == nil {
+    if let name = call.plugin {
+        load(plugin: name, into: &call)
+    } else if call.source == nil {
         guard let script = call.words.first else { bad(luaUsage) }
 
         call.words.removeFirst()
@@ -95,6 +100,16 @@ private func parseLua(_ rest: [String]) -> LuaCall {
 
     if let extra { call.args.merge(jsonArgs(extra)) { _, json in json } }
     return call
+}
+
+// The plugin's init.lua, with its [plugin.<name>] options as gct.args.
+// key=value words on the command line win over the config's.
+private func load(plugin name: String, into call: inout LuaCall) {
+    guard let plugin = PluginStore.find(name) else { die("no plugin \(name) in \(PluginStore.dir())", .notFound) }
+
+    call.source = PluginStore.boot(plugin)
+    call.chunk = "=plugin:" + name
+    call.args = PluginStore.options(of: name).mapValues(inferred)
 }
 
 private func load(_ script: String, into call: inout LuaCall) {

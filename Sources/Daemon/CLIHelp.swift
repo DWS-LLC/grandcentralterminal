@@ -91,7 +91,7 @@ let commandHelp: [CommandHelp] = [
                 reaches it. After `session enterprise` it hears enterprise's gctd, not
                 this machine's: to come back, run `gctd session local` on enterprise.
                 """),
-    CommandHelp(name: "lua", synopsis: "lua <file.lua | -e code | -> [key=value]... [--args json|@file] [--json] [--for <span>] [--fail-fast] [--pane <pane>]",
+    CommandHelp(name: "lua", synopsis: "lua <file.lua | -e code | -> [key=value]... [--args json|@file] [--json] [--for <span>] [--fail-fast] [--pane <pane>] [--plugin <name>]",
                 summary: "run a Lua script against this daemon: open panes, react to events, keep timers",
                 notes: """
                 A file ends in .lua or has a slash; -e takes code, - reads stdin. key=value
@@ -102,7 +102,22 @@ let commandHelp: [CommandHelp] = [
                 the daemon going away. Handler errors print and the script carries on;
                 --fail-fast exits 1 on the first. --pane acts as that pane (default: the
                 caller). Scripts in ~/.config/gct/autoload/ start with the daemon.
+                --plugin runs an installed plugin by name (see `gctd help plugin`).
                 See docs/scripting.md.
+                """),
+    CommandHelp(name: "plugin", synopsis: "plugin install [owner/repo | url] [--name NAME] [--ref REF] | list [--json] | update [name] | remove <name>",
+                summary: "install, list, update and remove Lua plugins in ~/.config/gct/plugins/",
+                notes: """
+                install  clone owner/repo (GitHub) or a git URL, pin its commit in plugins.lock;
+                         with no argument, put back every plugin plugins.lock names
+                list     name, version, commit and source; (local) means a folder you made
+                update   fetch and move to the ref's tip (a tag or commit stays put), re-pin
+                remove   delete a plugin gctd installed; your own folders are left alone
+                --name   folder name (default: the repo's)   --ref  a branch, tag or commit
+                A plugin is a folder with init.lua returning { setup = function(opts) end };
+                opts come from [plugin.<name>] in config.toml (`enabled = false` keeps it off).
+                Plugins start with the daemon, one process each. A plugin runs with your
+                permissions: read it before you install it. See docs/scripting.md.
                 """),
     CommandHelp(name: "agent", synopsis: "agent setup|status|remove|show|context [--agent NAME]... [--project] [--dry-run] [--force] [--json]",
                 summary: "teach coding agents about GCT: a skill and session hooks",

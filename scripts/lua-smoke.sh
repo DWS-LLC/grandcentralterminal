@@ -238,6 +238,111 @@ check autoload-restart true "$(grep -q v2 autoload-ran.txt && echo true || echo 
 wait_for '! pgrep -f "autoload/mark.lua" >/dev/null'
 check autoload-stop true "$(pgrep -f 'autoload/mark.lua' >/dev/null && echo false || echo true)"
 
+# Plugins: plugins/<name>/init.lua, installed from git, options from config.toml.
+SRC="$D/plugsrc"
+mkdir -p "$SRC/lua"
+cat > "$SRC/init.lua" <<'LUA'
+local helper = require("helper")
+return { setup = function(opts)
+  local f = io.open("plugin-ran.txt", "a")
+  f:write(tostring(opts.msg), " ", tostring(opts.n), " ", helper.tag, " v1\n")
+  f:close()
+  -- A handler keeps the plugin running, so stopping it is something to see.
+  gct.on("never_fires", function() end)
+end }
+LUA
+echo 'return { tag = "helper-ok" }' > "$SRC/lua/helper.lua"
+printf 'version = "1.0.0"\ndescription = "smoke"\n' > "$SRC/plugin.toml"
+GIT() { git -C "$SRC" -c user.name=t -c user.email=t@t "$@"; }
+GIT init -q && GIT add -A && GIT commit -qm v1
+printf '\n[plugin.plugsrc]\nmsg = "hello"\nn = 3\n' >> cfg/config.toml
+plugin_up() { grep -q "$1" plugin-ran.txt 2>/dev/null && echo true || echo false; }
+
+out=$(G plugin install "$SRC" 2>&1)
+check plugin-install-status 0 "$?"
+check plugin-install-out true "$(echo "$out" | grep -q '^installed plugsrc' && echo true || echo false)"
+wait_for 'grep -q "hello 3 helper-ok v1" plugin-ran.txt 2>/dev/null'
+check plugin-runs true "$(plugin_up 'hello 3 helper-ok v1')"
+check plugin-list "plugsrc 1.0.0 managed" "$(G plugin list --json | python3 -c 'import json,sys; p=json.load(sys.stdin)["plugins"][0]; print(p["name"], p["version"], "managed" if p["managed"] else "hand")')"
+
+# Options edited: a fresh start with the new values.
+sed -i.bak 's/msg = "hello"/msg = "again"/' cfg/config.toml
+wait_for 'grep -q "again 3" plugin-ran.txt 2>/dev/null'
+check plugin-opts-restart true "$(plugin_up 'again 3 helper-ok v1')"
+
+# Update: a new commit upstream lands, re-pins, and restarts the plugin.
+sed -i.bak 's/ v1/ v2/' "$SRC/init.lua"
+GIT add init.lua && GIT commit -qm v2
+out=$(G plugin update 2>&1)
+check plugin-update-status 0 "$?"
+check plugin-update-out true "$(echo "$out" | grep -q '^plugsrc  .* -> ' && echo true || echo false)"
+wait_for 'grep -q "again 3 helper-ok v2" plugin-ran.txt 2>/dev/null'
+check plugin-update-runs true "$(plugin_up 'again 3 helper-ok v2')"
+check plugin-update-pin "$(GIT rev-parse HEAD)" "$(python3 -c 'import json; print(json.load(open("cfg/plugins.lock"))["plugins"]["plugsrc"]["commit"])')"
+out=$(G plugin update plugsrc 2>&1)
+check plugin-update-same true "$(echo "$out" | grep -q 'up to date' && echo true || echo false)"
+
+# enabled = false stops it; taking the line out starts it again.
+runs=$(wc -l < plugin-ran.txt)
+check plugin-stays-up true "$(pgrep -f 'plugin plugsrc' >/dev/null && echo true || echo false)"
+printf 'enabled = false\n' >> cfg/config.toml
+wait_for '! pgrep -f "plugin plugsrc" >/dev/null'
+check plugin-disabled true "$(pgrep -f 'plugin plugsrc' >/dev/null && echo false || echo true)"
+sed -i.bak '/^enabled/d' cfg/config.toml
+wait_for "[ \$(wc -l < plugin-ran.txt) -gt $runs ]"
+check plugin-reenabled true "$([ "$(wc -l < plugin-ran.txt)" -gt "$runs" ] && echo true || echo false)"
+
+# Remove: folder, pin and process go; the lock keeps nothing.
+G plugin remove plugsrc >/dev/null 2>&1
+check plugin-remove-status 0 "$?"
+check plugin-remove-folder true "$([ ! -e cfg/plugins/plugsrc ] && echo true || echo false)"
+check plugin-remove-pin 0 "$(grep -c plugsrc cfg/plugins.lock)"
+wait_for '! pgrep -f "plugin plugsrc" >/dev/null'
+check plugin-remove-stops true "$(pgrep -f 'plugin plugsrc' >/dev/null && echo false || echo true)"
+
+# Restore: the lock names a plugin whose folder is gone.
+G plugin install "$SRC" >/dev/null 2>&1
+/bin/rm -rf "$D/cfg/plugins/plugsrc"
+out=$(G plugin install 2>&1)
+check plugin-restore-out "restored plugsrc" "$out"
+check plugin-restore-v2 true "$(grep -q ' v2' cfg/plugins/plugsrc/init.lua && echo true || echo false)"
+G plugin remove plugsrc >/dev/null 2>&1
+
+# A symlinked folder is a plugin too, and saving a file in it restarts it.
+ln -s "$SRC" cfg/plugins/linked
+wait_for 'grep -q "nil nil helper-ok" plugin-ran.txt 2>/dev/null'
+check plugin-symlink-runs true "$(plugin_up 'nil nil helper-ok')"
+runs=$(grep -c 'nil nil' plugin-ran.txt)
+touch "$SRC/lua/helper.lua"
+wait_for "[ \$(grep -c 'nil nil' plugin-ran.txt) -gt $runs ]"
+check plugin-symlink-restart true "$([ "$(grep -c 'nil nil' plugin-ran.txt)" -gt "$runs" ] && echo true || echo false)"
+/bin/rm -f cfg/plugins/linked
+
+# Refusals: no init.lua, bad names, plugins you made by hand, unknown ones.
+mkdir -p "$D/emptysrc"
+git -C "$D/emptysrc" init -q
+echo x > "$D/emptysrc/readme"
+git -C "$D/emptysrc" add -A
+git -C "$D/emptysrc" -c user.name=t -c user.email=t@t commit -qm x
+G plugin install "$D/emptysrc" >/dev/null 2>&1
+check plugin-no-init 1 "$?"
+check plugin-no-leftovers 0 "$(ls -A cfg/plugins | grep -c .)"
+G plugin install "$SRC" --name ../evil >/dev/null 2>&1
+check plugin-bad-name 1 "$?"
+G plugin install "$SRC" --ref --upload-pack=x >/dev/null 2>&1
+check plugin-bad-ref 1 "$?"
+G plugin remove nope >/dev/null 2>&1
+check plugin-remove-unknown 3 "$?"
+mkdir -p cfg/plugins/handmade
+echo 'return {}' > cfg/plugins/handmade/init.lua
+G plugin remove handmade >/dev/null 2>&1
+check plugin-remove-by-hand 3 "$?"
+check plugin-by-hand-kept true "$([ -f cfg/plugins/handmade/init.lua ] && echo true || echo false)"
+check plugin-list-local true "$(G plugin list | grep -q '^handmade .*(local)' && echo true || echo false)"
+G lua --plugin nosuch >/dev/null 2>&1
+check plugin-run-unknown 3 "$?"
+/bin/rm -rf "$D/cfg/plugins/handmade"
+
 # Last: the daemon dies under a running script.
 G lua --for 30s -e 'gct.on("never_fires",function() end)' 2>err.txt &
 script=$!
