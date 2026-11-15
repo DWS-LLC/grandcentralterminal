@@ -719,9 +719,17 @@ final class ScriptRuntime {
             self.actionDepth += 1
             defer { self.actionDepth -= 1 }
 
+            // Before the pushes below: they bury argument 2 under the function.
+            let noArgs = vm.isNil(2)
+
             vm.push(fn)
             vm.push(self.ctxTable(nil, origin: "action"))
-            vm.pushCopy(of: 2)
+            // An action always gets a table, as from a key or the palette.
+            if noArgs {
+                vm.push([String: Any]())
+            } else {
+                vm.pushCopy(of: 2)
+            }
             do {
                 try vm.call(nargs: 2, nresults: 1)
                 return 1
