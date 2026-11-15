@@ -304,7 +304,11 @@ final class DoomController {
 
     private func afterVisible() {
         guard let win = window else { return }
-        win.makeFirstResponder(canvas)
+        // An open switcher or palette keeps the keyboard it had when the window
+        // went away: hiding GCT to copy something must not close it on the way back.
+        if canvas?.overlayOpen != true {
+            win.makeFirstResponder(canvas)
+        }
         canvas?.refreshOcclusion()
     }
 

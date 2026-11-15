@@ -91,6 +91,8 @@ final class PaletteView: NSView, NSTextFieldDelegate, NSTableViewDataSource, NST
         table.addTableColumn(NSTableColumn(identifier: .init("p")))
         table.doubleAction = #selector(activateRow)
         table.target = self
+        // A click picks a row; the text field keeps the keyboard.
+        table.refusesFirstResponder = true
 
         scroll.documentView = table
         scroll.hasVerticalScroller = false

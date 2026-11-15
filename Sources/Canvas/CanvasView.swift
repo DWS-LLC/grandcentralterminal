@@ -421,6 +421,12 @@ final class CanvasView: NSView {
            switcher.frame.contains(p) {
             return switcher
         }
+        // The palette's own controls take their clicks (a row, the field);
+        // a click anywhere else reaches the canvas, which closes it.
+        if let palette, palette.window != nil,
+           palette.frame.contains(p) {
+            return super.hitTest(point)
+        }
         return self
     }
 
@@ -1144,7 +1150,7 @@ final class CanvasView: NSView {
         if let pane = panes[id] {
             pane.isFocused = true
             pane.host?.setFocus(true)
-            window?.makeFirstResponder(self)
+            if !overlayOpen { window?.makeFirstResponder(self) }
         }
         if raise { bringToFront(id) }
         refreshDim()
@@ -1158,8 +1164,8 @@ final class CanvasView: NSView {
     private static let clickSlop: CGFloat = 4
 
     override func mouseDown(with event: NSEvent) {
-        // A click that reaches the canvas is outside the switcher.
-        if let s = switcher, s.window != nil { s.dismiss() }
+        // A click that reaches the canvas is outside the switcher and the palette.
+        closeOverlays()
         window?.makeFirstResponder(self)
         pendingClickFocus = nil
         let world = worldPoint(event)
@@ -1789,6 +1795,7 @@ final class CanvasView: NSView {
     // pops its menu (rename, color, ungroup); right-click on empty space
     // pans nothing and shows the canvas menu (new pane here).
     override func rightMouseDown(with event: NSEvent) {
+        closeOverlays()
         window?.makeFirstResponder(self)
         let world = worldPoint(event)
         if let pane = topPane(at: world) {
@@ -2325,7 +2332,7 @@ final class CanvasView: NSView {
         let mods = GhosttyMods(event.modifierFlags)
         let hovered = topPane(at: world)
         if GCTConfig.current.focusFollowsMouse, let h = hovered,
-           h.id != focusedID, !isResizingOrMoving, switcher?.window == nil {
+           h.id != focusedID, !isResizingOrMoving, !overlayOpen {
             focusPane(h.id, raise: false)
         }
         if let h = hovered {
@@ -3801,6 +3808,19 @@ final class CanvasView: NSView {
     }
 
     // MARK: Command palette
+
+    // The switcher or the palette is up and has the keyboard. Nothing takes it
+    // back but closing it: not a summon from doom (you may have left to copy
+    // something and come back to type), not hover focus, not a script's focus.
+    var overlayOpen: Bool {
+        switcher?.window != nil || palette?.window != nil
+    }
+
+    // A click outside either closes it, as esc does.
+    private func closeOverlays() {
+        if let s = switcher, s.window != nil { s.dismiss() }
+        if let p = palette, p.window != nil { p.dismiss() }
+    }
 
     func togglePalette() {
         dropComposition()
