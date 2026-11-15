@@ -135,6 +135,8 @@ final class CanvasView: NSView {
     let keyEngine = KeyEngine()
     // Which daemon each script's keymap came from, by script token.
     var keyOwners = [String: String]()
+    // The command palette entries scripts published, by script.
+    let paletteStore = PaletteStore()
     let keyHold = KeyHold()
     var keyHUD: KeyHUD?
     let arrange = ArrangeState()
@@ -203,6 +205,7 @@ final class CanvasView: NSView {
     // Weak: removeFromSuperview drops the last strong reference, so the
     // property self-clears after dismissal.
     private weak var switcher: SwitcherView?
+    private weak var palette: PaletteView?
     var firstRunHandled = false
     // Screen-space overlay status bar (nil when disabled in config).
     var statusBar: StatusBarView?
@@ -2586,6 +2589,7 @@ final class CanvasView: NSView {
         case .shrinkLeft: resizeFocused(edge: .left, grow: false)
         case .shrinkRight: resizeFocused(edge: .right, grow: false)
         case .switcher: toggleSwitcher()
+        case .commandPalette: togglePalette()
         case .fitAll: exitZoomThenFit()
         case .zoomPane: toggleZoomPane()
         case .cameraZoomPane: cameraZoomFocused()
@@ -3706,7 +3710,7 @@ final class CanvasView: NSView {
         case .sync: break // answered per owner, in connCanvasCommand
         case .reset: scriptedReset(cmd)
         case .theme: scriptedTheme(cmd)
-        case .keymap, .press, .reply: break // answered per owner, in connCanvasCommand
+        case .keymap, .press, .reply, .palette: break // answered per owner, in connCanvasCommand
         }
     }
 
@@ -3793,6 +3797,27 @@ final class CanvasView: NSView {
             return m
         }, order: zOrder)
         // Keep the bar on its own topmost layer, above the switcher.
+        if let bar = statusBar, bar.superview != nil { addSubview(bar) }
+    }
+
+    // MARK: Command palette
+
+    func togglePalette() {
+        dropComposition()
+        if let palette {
+            palette.dismiss()
+            window?.makeFirstResponder(self)
+            return
+        }
+        let p = PaletteView(frame: NSRect(x: bounds.midX - 320, y: bounds.midY - 240,
+                                          width: 640, height: 480))
+        p.onDismiss = { [weak self] in
+            self?.window?.makeFirstResponder(self)
+        }
+        addSubview(p)
+        palette = p
+        p.present(paletteRows())
+        // Keep the bar on its own topmost layer, above the palette.
         if let bar = statusBar, bar.superview != nil { addSubview(bar) }
     }
 }

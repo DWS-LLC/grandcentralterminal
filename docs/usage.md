@@ -13,6 +13,7 @@ big text.
 
 `⌘0` fits all panes. Two-finger double-tap toggles actual size vs fit-all.
 `⌘P` opens a type-to-filter switcher and glides the camera to the pick.
+`⌘⇧P` opens the command palette: every action, and the ones plugins add.
 `⌘H/J/K/L` focuses the nearest pane in that direction; the camera centers and
 zooms to fit it (both configurable).
 

@@ -165,6 +165,11 @@ final class ScriptRuntime {
         try? self.loop.act { try self.session.send(.canvasCommand, CanvasCommand(verb: .keymap, keymap: wire)) }
     }, same: { [unowned self] in self.vm.same($0, $1) })
 
+    // Shares the keys' token: the canvas names a script by it either way.
+    private lazy var palette = ScriptPalette(token: keys.token) { [unowned self] wire in
+        try? self.loop.act { try self.session.send(.canvasCommand, CanvasCommand(verb: .palette, palette: wire)) }
+    }
+
     private var session: ScriptSession { loop.session }
     private var pane: PaneID? { panes.last.flatMap { $0 } ?? session.home }
 
@@ -203,7 +208,8 @@ final class ScriptRuntime {
         }
 
         armed = false
-        guard !handlers.isEmpty || loop.timerCount > 0 || keys.hasBindings else { return 0 }
+        palette.flush()
+        guard !handlers.isEmpty || loop.timerCount > 0 || keys.hasBindings || palette.hasEntries else { return 0 }
 
         guard loop.pump(until: limit, dispatch: .allow, done: { false }) == .hangup else { return 0 }
 
@@ -686,7 +692,12 @@ final class ScriptRuntime {
                 throw ScriptError("action name is lowercase letters, digits and underscores")
             }
 
+            guard self.palette.count < ScriptPalette.maxEntries else {
+                throw ScriptError("at most \(ScriptPalette.maxEntries) palette actions")
+            }
+
             self.actions[name] = run
+            self.palette.set(name, ScriptPalette.entry(name: name, spec: spec))
             return 0
         }
 
@@ -725,12 +736,14 @@ final class ScriptRuntime {
 
 // Same file, so the extension reaches the runtime's private state.
 extension ScriptRuntime {
-    // Events from the canvas that only the runtime wants: a bound key was hit,
-    // or a canvas came up and needs the keymap again.
+    // Events from the canvas that only the runtime wants: a bound key was hit or
+    // a palette entry picked, or a canvas came up and needs the keymap and the
+    // palette again.
     fileprivate func fromCanvas(_ e: ScriptEvent) -> Bool {
         switch e.name {
         case PaneEventName.canvasUp:
             keys.resend()
+            palette.resend()
             return true
         case PaneEventName.keyFired:
             fire(e)
@@ -744,7 +757,7 @@ extension ScriptRuntime {
         guard let hit = keys.firing(e.fields) else { return }
 
         let focused = (e.fields["pane_id"] as? String).flatMap { PaneID(string: $0) }
-        let ctx = ctxTable(focused, origin: "key")
+        let ctx = ctxTable(focused, origin: e.fields["origin"] as? String ?? "key")
         let what = "key \(hit.label)"
 
         switch hit.run {
@@ -757,7 +770,7 @@ extension ScriptRuntime {
                 return
             }
 
-            callback(fn, [ctx, args], pane: focused, what: what)
+            callback(fn, [ctx, args ?? [:]], pane: focused, what: what)
         }
     }
 

@@ -343,6 +343,16 @@ G lua --plugin nosuch >/dev/null 2>&1
 check plugin-run-unknown 3 "$?"
 /bin/rm -rf "$D/cfg/plugins/handmade"
 
+# Palette: a titled action keeps its script up, an untitled one is for invoke.
+secs=$SECONDS
+G lua --for 2s -e 'gct.action{name="pal", title="Pal", run=function() end}' >/dev/null 2>&1
+check palette-keep-alive true "$([ $((SECONDS - secs)) -ge 1 ] && echo true || echo false)"
+secs=$SECONDS
+G lua -e 'gct.action{name="quiet", run=function() end}' >/dev/null 2>&1
+check palette-untitled-exits true "$([ $((SECONDS - secs)) -lt 2 ] && echo true || echo false)"
+lua palette-cap true 0 -e 'local ok, err = pcall(function() for i = 1, 1025 do gct.action{name = "a" .. i, title = "t", run = function() end} end end); print(tostring(err):find("at most 1024", 1, true) ~= nil); gct.stop(0)'
+lua palette-redefine '"ran"' 0 -e 'gct.action{name="x", title="X", run=function() return "old" end}; gct.action{name="x", run=function() return "ran" end}; local r = gct.invoke("x"); print(gct.json.encode(r)); gct.stop(0)'
+
 # Last: the daemon dies under a running script.
 G lua --for 30s -e 'gct.on("never_fires",function() end)' 2>err.txt &
 script=$!

@@ -21,6 +21,8 @@ final class Remote: @unchecked Sendable {
     // The keymap this client (a script) put on the canvas, so it can be taken
     // down when the script goes, however it goes.
     var keymapToken: String?
+    // The same for the command palette entries it published.
+    var paletteToken: String?
     init(conn: Conn) { self.conn = conn }
 }
 
@@ -245,9 +247,11 @@ final class Server {
             }
             remote.conn.close()
             let token = remote.keymapToken
+            let palette = remote.paletteToken
             lock.unlock()
 
             dropKeymap(token)
+            dropPalette(palette)
         }
 
         // TCP gate: the first frame must be a token hello. Unix peers
@@ -725,6 +729,11 @@ final class Server {
             if req.verb == .keymap, let wire = req.keymap {
                 lock.lock()
                 remote.keymapToken = wire.isEmpty ? nil : wire.token
+                lock.unlock()
+            }
+            if req.verb == .palette, let wire = req.palette {
+                lock.lock()
+                remote.paletteToken = wire.isEmpty ? nil : wire.token
                 lock.unlock()
             }
             broadcast(tag: .canvasRelay, json: req)
@@ -1256,6 +1265,13 @@ final class Server {
         guard let token else { return }
 
         broadcast(tag: .canvasRelay, json: CanvasCommand(verb: .keymap, keymap: KeymapWire(token: token)))
+    }
+
+    // A script that published palette entries is gone: tell the canvases to forget them.
+    private func dropPalette(_ token: String?) {
+        guard let token else { return }
+
+        broadcast(tag: .canvasRelay, json: CanvasCommand(verb: .palette, palette: PaletteWire(token: token)))
     }
 
     // Blocking writes outside the lock: a slow peer stalls only us.

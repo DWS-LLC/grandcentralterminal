@@ -6,7 +6,7 @@
 
 import Foundation
 
-public let ProtoVersion: UInt16 = 10
+public let ProtoVersion: UInt16 = 11
 // First protocol revision whose daemon understands MsgTag.arrangePanes.
 public let ArrangeProtoVersion: UInt16 = 2
 // First protocol revision whose daemon understands MsgTag.layoutPolicy.
@@ -27,6 +27,9 @@ public let KeepOpenProtoVersion: UInt16 = 9
 // First protocol revision whose daemon relays canvas events (MsgTag.event) to
 // clients that subscribed (MsgTag.subscribeEvents).
 public let EventProtoVersion: UInt16 = 10
+// First protocol revision whose daemon relays a script's command palette
+// entries (CanvasVerb.palette).
+public let PaletteProtoVersion: UInt16 = 11
 
 // PaneExit.code of a pane whose status nobody collected.
 public let ExitUnknown: Int32 = -1
@@ -123,7 +126,8 @@ public enum PaneEventName {
     public static let sizeState = "state.size"
     // The last thing a sync says: everything the canvas knew has been sent.
     public static let synced = "state.synced"
-    // A bound key was hit: payload names the script (token) and what to run.
+    // A bound key was hit, or a palette entry picked: payload names the script
+    // (token) and what to run.
     public static let keyFired = "state.key"
     // A canvas attached (or came back): scripts send their keymaps again.
     public static let canvasUp = "state.canvas"
@@ -670,6 +674,7 @@ public enum CanvasVerb: String, Codable, Sendable {
     case keymap // a script's whole set of key bindings (empty drops them)
     case press  // type a key sequence as if at the keyboard
     case reply  // a script's answer to a key it was told about
+    case palette // a script's whole list of command palette entries (empty drops them)
 }
 
 public struct CanvasCommand: Codable, Sendable {
@@ -686,15 +691,16 @@ public struct CanvasCommand: Codable, Sendable {
     public var keymap: KeymapWire? // .keymap
     public var keys: String?      // .press: "ctrl+b>c"
     public var reply: KeyReply?   // .reply
+    public var palette: PaletteWire? // .palette
     public init(verb: CanvasVerb, pane: PaneID? = nil, action: String? = nil,
                 x: Double? = nil, y: Double? = nil, zoom: Double? = nil,
                 duration: Double? = nil, fontDelta: Double? = nil, session: String? = nil,
                 colors: [String: String]? = nil, keymap: KeymapWire? = nil, keys: String? = nil,
-                reply: KeyReply? = nil) {
+                reply: KeyReply? = nil, palette: PaletteWire? = nil) {
         self.verb = verb; self.pane = pane; self.action = action
         self.x = x; self.y = y; self.zoom = zoom; self.duration = duration
         self.fontDelta = fontDelta; self.session = session; self.colors = colors
-        self.keymap = keymap; self.keys = keys; self.reply = reply
+        self.keymap = keymap; self.keys = keys; self.reply = reply; self.palette = palette
     }
 }
 

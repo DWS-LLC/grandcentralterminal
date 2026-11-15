@@ -272,7 +272,8 @@ keyboard of whoever is looking at it.
 - `gct.json.encode(v[, {indent=true}])` and `gct.json.decode(text)`; `null`
   becomes `nil`, and an empty table encodes as `{}`.
 - `gct.action{name=, run=function(ctx, args) end}` defines a named function;
-  `gct.invoke(name[, args])` runs it. `gct.log([level,] message)` prints to
+  `gct.invoke(name[, args])` runs it. Give it a `title` and it is also in the
+  [command palette](#command-palette). `gct.log([level,] message)` prints to
   stderr.
 
 ## Autoload
@@ -295,6 +296,42 @@ gct.on("terminal.child_exited", function(ctx, ev)
   end
 end)
 ```
+
+## Command palette
+
+`⌘⇧P` opens a palette of GCT's own actions and every script action that has a
+`title`. Type to filter: each word has to fit the title, category, keywords or
+description. `↑`/`↓` move, `⏎` runs, `esc` closes.
+
+```lua
+gct.action{
+  name = "open_notes",
+  title = "Notes: Open",
+  description = "Open today's notes in a split",
+  category = "Notes",
+  keywords = "journal todo",         -- a string, or a list of words
+  run = function(ctx, args)
+    gct.pane.open{ cmd = "nvim ~/notes/today.md", side = "right" }
+  end,
+}
+```
+
+`description`, `category` and `keywords` only help you find it; the title is what
+shows. An action without a `title` stays out of the palette: it is for
+`gct.invoke` and key bindings. Redefining one replaces it.
+
+A pick runs `run(ctx, args)` in the script that defined it, with `ctx.origin ==
+"palette"` and `ctx.pane_id` the focused pane when it lives on the script's host.
+`args` is an empty table: the palette has no way to ask for arguments, so an
+action that needs one asks for it itself. The `args = { target = "string?" }` in
+Rex's spec is accepted and ignored.
+
+Entries live as long as their script: a plugin's actions are there while it
+runs and go when it stops or its daemon's link does. They go out when the
+script's first run ends, so a main chunk that sleeps for a while shows up late.
+A script with nothing but titled actions stays up on its own. At most 1,024 per
+script. The actions of every attached host's scripts are in the one palette.
+Rebind it with `command-palette` under `[keybinds]`.
 
 ## Plugins
 
@@ -365,7 +402,8 @@ install.
   Rex's (`pane.split`).
 - Rex runs Lua 5.1, GCT 5.4: `setfenv` and `unpack` are gone. Load data-only
   files with `load(text, name, "t", {})`.
-- `rex.action` is `gct.action`. A Rex plugin is a Lua file that calls
+- `rex.action` is `gct.action`, and an action with a `title` is in the
+  [command palette](#command-palette). A Rex plugin is a Lua file that calls
   `rex.action` from `init.lua`; here it is a [plugin](#plugins) folder whose
   `init.lua` returns `{ setup = function(opts) end }`, and runs as its own
   process, so a plugin can't see the others' actions or globals.

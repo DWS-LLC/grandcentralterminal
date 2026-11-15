@@ -312,6 +312,7 @@ enum GCTAction: String, CaseIterable {
     case reloadConfig = "reload-config"
     case relaxLayout = "relax-layout"
     case nextSession = "next-session"
+    case commandPalette = "command-palette"
 }
 // MARK: - Config
 
@@ -792,6 +793,7 @@ struct GCTConfig {
             .reloadConfig: KeySequence("cmd+shift+r")!,
             .relaxLayout: KeySequence("cmd+shift+a")!,
             .nextSession: KeySequence("cmd+shift+e")!,
+            .commandPalette: KeySequence("cmd+shift+p")!,
         ]
     }
 
@@ -1069,6 +1071,8 @@ struct GCTConfig {
     shrink-window-left = "cmd+ctrl+shift+h"
     shrink-window-right = "cmd+ctrl+shift+l"
     switcher = "cmd+p"
+    # Command palette: built-in actions and the ones plugins and scripts add.
+    command-palette = "cmd+shift+p"
     fit-all = "cmd+0"
     # Focus zoom: the pane fills the viewport sharp (surface reflows +
     # re-renders, never a raster upscale). Toggle restores frame + camera.

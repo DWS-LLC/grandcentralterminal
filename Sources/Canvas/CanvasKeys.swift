@@ -148,16 +148,24 @@ extension CanvasView {
     // A script's binding was hit: say so on the link the script's daemon is
     // on. The script finds its own by token. False: nobody to tell.
     private func tell(_ f: KeyFire, _ what: [String: Any]) -> Bool {
-        guard let owner = keyOwners[f.source], let conn = hub.conn(forOwner: owner) else {
-            NSLog("[gct] key \(f.key) is bound by a script that is gone; ignored")
+        var fields = what
+        fields["key"] = f.key.description
+        fields["prefix"] = f.prefix.map(\.description)
+        if let mode = f.mode { fields["mode"] = mode }
+
+        return tellScript(f.source, owner: keyOwners[f.source], fields)
+    }
+
+    // The same, for anything that names a script by token: a bound key, or a
+    // palette entry picked. `owner` is the daemon the script runs against.
+    func tellScript(_ token: String, owner: String?, _ what: [String: Any]) -> Bool {
+        guard let owner, let conn = hub.conn(forOwner: owner) else {
+            NSLog("[gct] a script that is gone was asked to run something; ignored")
             return false
         }
 
         var fields = what
-        fields["token"] = f.source
-        fields["key"] = f.key.description
-        fields["prefix"] = f.prefix.map(\.description)
-        if let mode = f.mode { fields["mode"] = mode }
+        fields["token"] = token
 
         // The focused pane, by the id that daemon knows it by.
         if let id = focusedID, hub.owner(of: id) == owner, let theirs = hub.daemonID(of: id) {

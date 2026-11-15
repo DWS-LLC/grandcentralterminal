@@ -33,6 +33,7 @@ hotkey is the one exception, a system-wide key that can't be a sequence.
 | --- | --- | --- |
 | `⌘H/J/K/L` | focus nearest pane left/down/up/right | `move-focus-*` |
 | `⌘P` | pane switcher (type to filter, ⏎ to jump) | `switcher` |
+| `⌘⇧P` | command palette: GCT's actions and the ones plugins and scripts add ([scripting.md](scripting.md#command-palette)) | `command-palette` |
 | `⌘0` | fit all panes | `fit-all` |
 | `⌘Z` | focus-zoom pane to a sharp local fullscreen (toggle restores) | `zoom-pane` |
 | `⌘⇧Z` | camera-only zoom into the focused pane (it keeps its size, the camera moves) | `camera-zoom-pane` |

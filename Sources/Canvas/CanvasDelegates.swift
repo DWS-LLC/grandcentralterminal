@@ -199,7 +199,7 @@ extension CanvasView: CanvasConnDelegate {
 
         // Font and session are the canvas's own, whichever daemon asked.
         // Camera and actions act on the screen: only the session on it may.
-        let global = [.font, .session, .sync, .reset, .theme, .keymap, .press, .reply].contains(c.verb)
+        let global = [.font, .session, .sync, .reset, .theme, .keymap, .press, .reply, .palette].contains(c.verb)
         guard global || owner == session else {
             NSLog("[gct] \(owner) asked for a camera/action but is not on screen; ignored")
             return
@@ -213,12 +213,17 @@ extension CanvasView: CanvasConnDelegate {
             scriptedKeys(c, owner: owner)
             return
         }
+        if c.verb == .palette {
+            scriptedPalette(c, owner: owner)
+            return
+        }
 
         runCanvasCommand(c)
     }
 
     func connClosed(owner: String) {
         dropKeys(owner: owner)
+        dropPalette(owner: owner)
         // Dropped, not switched away from: the rebuilt canvas fits all again.
         sessionCameras.removeValue(forKey: owner)
         if owner == "local" {
