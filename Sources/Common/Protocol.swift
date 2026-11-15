@@ -6,7 +6,7 @@
 
 import Foundation
 
-public let ProtoVersion: UInt16 = 9
+public let ProtoVersion: UInt16 = 10
 // First protocol revision whose daemon understands MsgTag.arrangePanes.
 public let ArrangeProtoVersion: UInt16 = 2
 // First protocol revision whose daemon understands MsgTag.layoutPolicy.
@@ -24,6 +24,9 @@ public let WaitProtoVersion: UInt16 = 7
 public let CanvasVerbProtoVersion: UInt16 = 8
 // First protocol revision whose daemon keeps an ended pane open (CreatePane.keepOpen).
 public let KeepOpenProtoVersion: UInt16 = 9
+// First protocol revision whose daemon relays canvas events (MsgTag.event) to
+// clients that subscribed (MsgTag.subscribeEvents).
+public let EventProtoVersion: UInt16 = 10
 
 // PaneExit.code of a pane whose status nobody collected.
 public let ExitUnknown: Int32 = -1
@@ -32,6 +35,9 @@ public let ExitUnknown: Int32 = -1
 public let LocalHost = "local"
 
 public enum MsgTag: UInt8 {
+    // Tags below this one go client -> daemon; this one and above come back.
+    public static let firstReply: UInt8 = 64
+
     // client -> daemon
     case hello       = 1  // JSON Hello
     case createPane  = 2  // JSON CreatePane
@@ -61,6 +67,8 @@ public enum MsgTag: UInt8 {
     case claimGuests = 26 // JSON GuestClaim (peer -> host: the guests it keeps)
     case peerRetry   = 27 // JSON PeerRef (canvas -> daemon: dial that host now)
     case waitPane    = 28 // JSON PaneRef (reply: paneExit now if it already ended)
+    case subscribeEvents = 29 // no payload (this client wants MsgTag.event frames)
+    case reportEvent = 30 // JSON PaneEvent (canvas -> daemon: something only it saw)
 
     // daemon -> client
     case welcome     = 64 // JSON Welcome
@@ -81,6 +89,44 @@ public enum MsgTag: UInt8 {
     case tieMeta       = 79 // JSON TieMeta (created or updated)
     case tieExit       = 80 // JSON TieRef
     case peerState     = 81 // JSON PeerInfo (a peer link came up or went down)
+    case event         = 82 // JSON PaneEvent (to subscribers only)
+}
+
+// What the canvas saw that the daemon can't: a bell, a title, a notification
+// request, focus moving. The daemon relays it, untouched, to every client that
+// subscribed (scripts); nobody else gets the frame.
+public struct PaneEvent: Codable, Sendable {
+    public var id: PaneID?
+    public var name: String
+    public var title: String?
+    public var body: String?
+    // Anything richer than a title and a body: one JSON object, as text.
+    public var payload: String?
+    public init(id: PaneID?, name: String, title: String? = nil, body: String? = nil, payload: String? = nil) {
+        self.id = id; self.name = name; self.title = title; self.body = body; self.payload = payload
+    }
+}
+
+// Event names, shared by the canvas that reports them and the scripts that
+// listen. The terminal.* ones match Rex's.
+public enum PaneEventName {
+    public static let bell = "terminal.bell"
+    public static let title = "terminal.title_changed"
+    public static let notification = "terminal.desktop_notification"
+    public static let focused = "pane_focused"
+    public static let progress = "terminal.progress_report"
+    public static let clipboard = "terminal.clipboard_written"
+    public static let statusChanged = "terminal.program_status_changed"
+    public static let statusRemoved = "terminal.program_status_removed"
+    // Not for handlers: the canvas telling the script session what it knows,
+    // so block.call can answer. Never surfaces as an event.
+    public static let sizeState = "state.size"
+    // The last thing a sync says: everything the canvas knew has been sent.
+    public static let synced = "state.synced"
+    // A bound key was hit: payload names the script (token) and what to run.
+    public static let keyFired = "state.key"
+    // A canvas attached (or came back): scripts send their keymaps again.
+    public static let canvasUp = "state.canvas"
 }
 
 public struct PaneID: Hashable, Sendable, CustomStringConvertible {
@@ -618,6 +664,12 @@ public enum CanvasVerb: String, Codable, Sendable {
     case action // run a keybind action by name, e.g. "fit-all"
     case font   // grow/shrink terminal text, or reset it
     case session // show another machine's canvas
+    case sync   // re-report live pane state (program status, size) as events
+    case reset  // reset the pane's terminal (display only)
+    case theme  // replace the pane's default colors (display only)
+    case keymap // a script's whole set of key bindings (empty drops them)
+    case press  // type a key sequence as if at the keyboard
+    case reply  // a script's answer to a key it was told about
 }
 
 public struct CanvasCommand: Codable, Sendable {
@@ -630,12 +682,19 @@ public struct CanvasCommand: Codable, Sendable {
     public var duration: Double?  // seconds; nil = config default
     public var fontDelta: Double? // .font: points to add (negative shrinks); nil = reset
     public var session: String?   // .session: "local" or a [host.<name>]
+    public var colors: [String: String]? // .theme: foreground, background, cursor, "0"..."15" -> #rrggbb
+    public var keymap: KeymapWire? // .keymap
+    public var keys: String?      // .press: "ctrl+b>c"
+    public var reply: KeyReply?   // .reply
     public init(verb: CanvasVerb, pane: PaneID? = nil, action: String? = nil,
                 x: Double? = nil, y: Double? = nil, zoom: Double? = nil,
-                duration: Double? = nil, fontDelta: Double? = nil, session: String? = nil) {
+                duration: Double? = nil, fontDelta: Double? = nil, session: String? = nil,
+                colors: [String: String]? = nil, keymap: KeymapWire? = nil, keys: String? = nil,
+                reply: KeyReply? = nil) {
         self.verb = verb; self.pane = pane; self.action = action
         self.x = x; self.y = y; self.zoom = zoom; self.duration = duration
-        self.fontDelta = fontDelta; self.session = session
+        self.fontDelta = fontDelta; self.session = session; self.colors = colors
+        self.keymap = keymap; self.keys = keys; self.reply = reply
     }
 }
 

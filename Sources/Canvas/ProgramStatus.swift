@@ -29,6 +29,36 @@ struct ProgramRecord {
     var seq: UInt64         // update order: LRU eviction + recency tiebreak
 }
 
+extension ProgramRecord {
+    /// The record as scripts see it: only the keys the program reported.
+    var json: [String: Any] {
+        var out: [String: Any] = ["id": id, "state": state.rawValue]
+        if let kind { out["kind"] = kind.rawValue }
+        if let progress { out["progress"] = progress }
+        if let app { out["app"] = app }
+        if let title { out["title"] = title }
+        if let msg { out["msg"] = msg }
+        return out
+    }
+}
+
+/// Why a record left the store; scripts get it as the removal's `reason`.
+enum ProgramRemoval: String {
+    case clear      // the program sent state=clear
+    case prompt     // a new shell prompt ended working/blocked
+    case reset      // RIS
+    case input      // the user typed: done/error served their purpose
+    case evicted    // over the 256-record cap
+}
+
+/// What one batch of output did to a pane's records.
+struct ProgramDelta {
+    var changed: [ProgramRecord]
+    var removed: [(id: String, reason: ProgramRemoval)]
+
+    var isEmpty: Bool { changed.isEmpty && removed.isEmpty }
+}
+
 final class ProgramStatusStore {
     struct Summary: Equatable {
         var state: ProgramState
@@ -39,6 +69,10 @@ final class ProgramStatusStore {
         var changed: Bool
         var queryReply: Bool
     }
+
+    /// Called on every live change to a pane's records, so the canvas can
+    /// report it to scripts.
+    var onDelta: ((PaneID, ProgramDelta) -> Void)?
 
     private static let esc: UInt8 = 0x1B
     private static let osc7501: [UInt8] = [0x5D, 0x37, 0x35, 0x30, 0x31, 0x3B]  // ] 7501 ;
@@ -55,6 +89,8 @@ final class ProgramStatusStore {
         var carry = Data()       // unterminated tail: sequence split across chunks
         var seq: UInt64 = 0
         var last: Summary?
+        // Scratch for one ingest: why each removed record went.
+        var gone = [String: ProgramRemoval]()
     }
 
     private var panes: [PaneID: PaneState] = [:]
@@ -82,6 +118,8 @@ final class ProgramStatusStore {
             st.carry.removeAll(keepingCapacity: false)
         }
         let before = st.last
+        let was = st.records
+        st.gone.removeAll()
         var reply = false
         buf.withUnsafeBytes { (raw: UnsafeRawBufferPointer) in
             guard let base = raw.baseAddress?.assumingMemoryBound(to: UInt8.self) else { return }
@@ -105,6 +143,7 @@ final class ProgramStatusStore {
                 }
                 // RIS (ESC c): full reset drops every record.
                 if i + 1 < n, base[i + 1] == 0x63 {
+                    st.records.keys.forEach { st.gone[$0] = .reset }
                     st.records.removeAll()
                     i += 2
                     continue
@@ -134,9 +173,11 @@ final class ProgramStatusStore {
                         } else if isPromptStart(base, br) {
                             // New shell prompt: working/blocked are over.
                             // done/error survive; idle may drop.
-                            st.records = st.records.filter {
-                                $0.value.state != .working && $0.value.state != .blocked
+                            let over = st.records.filter {
+                                $0.value.state == .working || $0.value.state == .blocked
                             }
+                            over.keys.forEach { st.gone[$0] = .prompt }
+                            over.keys.forEach { st.records.removeValue(forKey: $0) }
                         }
                         i = end
                     }
@@ -154,6 +195,11 @@ final class ProgramStatusStore {
         }
         st.last = summarize(st)
         panes[pane] = st
+
+        // Replayed history is not news; only live output is reported.
+        if source == .live {
+            report(pane, from: was, to: st)
+        }
         return IngestResult(changed: st.last != before, queryReply: reply)
     }
 
@@ -165,12 +211,33 @@ final class ProgramStatusStore {
               st.records.values.contains(where: { $0.state == .done || $0.state == .error })
         else { return false }
         let before = st.last
-        st.records = st.records.filter {
-            $0.value.state != .done && $0.value.state != .error
+        let was = st.records
+        st.gone.removeAll()
+        for (id, rec) in st.records where rec.state == .done || rec.state == .error {
+            st.gone[id] = .input
+            st.records.removeValue(forKey: id)
         }
         st.last = summarize(st)
         panes[pane] = st
+        report(pane, from: was, to: st)
         return st.last != before
+    }
+
+    /// Every record of a pane, oldest report first.
+    func records(for pane: PaneID) -> [ProgramRecord] {
+        (panes[pane]?.records.values.sorted { $0.seq < $1.seq }) ?? []
+    }
+
+    // The difference between two states of one pane's records: a record is
+    // changed when its seq moved (every report replaces it, even an equal
+    // one) and removed when its id is gone.
+    private func report(_ pane: PaneID, from was: [String: ProgramRecord], to st: PaneState) {
+        let changed = st.records.values.filter { was[$0.id]?.seq != $0.seq }.sorted { $0.seq < $1.seq }
+        let removed = was.keys.filter { st.records[$0] == nil }.sorted().map { (id: $0, reason: st.gone[$0] ?? .evicted) }
+        let delta = ProgramDelta(changed: changed, removed: removed)
+        guard !delta.isEmpty else { return }
+
+        onDelta?(pane, delta)
     }
 
     func summary(for pane: PaneID) -> Summary? {
@@ -303,8 +370,12 @@ final class ProgramStatusStore {
             // clear is not a state: remove the record + everything beneath it.
             if let id = pairs["id"] {
                 guard Self.validID(id) else { return }
-                st.records = st.records.filter { $0.key != id && !$0.key.hasPrefix(id + "/") }
+                for key in st.records.keys where key == id || key.hasPrefix(id + "/") {
+                    st.gone[key] = .clear
+                    st.records.removeValue(forKey: key)
+                }
             } else {
+                st.records.keys.forEach { st.gone[$0] = .clear }
                 st.records.removeAll()
             }
             return
@@ -348,6 +419,7 @@ final class ProgramStatusStore {
         if st.records.count > 256 {
             // Past the cap: drop the least-recently-updated record.
             if let oldest = st.records.min(by: { $0.value.seq < $1.value.seq })?.key {
+                st.gone[oldest] = .evicted
                 st.records.removeValue(forKey: oldest)
             }
         }

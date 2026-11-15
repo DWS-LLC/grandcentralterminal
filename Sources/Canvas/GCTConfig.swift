@@ -346,7 +346,7 @@ struct GCTConfig {
     var titlebarBorderWidth: CGFloat = 4
     var shadowOpacity: Float = 0.55
     var shadowRadius: CGFloat = 12
-    var keybinds: [GCTAction: GCTKeybind] = GCTConfig.defaultKeybinds
+    var keybinds: [GCTAction: KeySequence] = GCTConfig.defaultKeybinds
     // Panes are kept from overlapping: creation, moves, and resizes all
     // resolve collisions.
     var allowWindowOverlap = false
@@ -360,6 +360,9 @@ struct GCTConfig {
     // Raising it re-spreads existing panes on reload-config (and on
     // next launch); lowering it only affects future moves.
     var windowGap: CGFloat = 0
+    // A half-typed key sequence ("ctrl+b" of "ctrl+b>c") is dropped after
+    // this long. 0 waits for ever.
+    var sequenceTimeout: TimeInterval = 2
     // Magnetic window snapping: dragging or resizing a pane within
     // snap-radius pulls it flush with nearby panes and lights
     // full-canvas guide lines. On by default; the toggle-snapping
@@ -502,6 +505,10 @@ struct GCTConfig {
         if let s = root["window-gap"], let n = Double(s),
            (0.0...256.0).contains(n) {
             cfg.windowGap = CGFloat(n)
+        }
+        if let s = root["sequence-timeout"], let n = Double(s),
+           (0.0...600.0).contains(n) {
+            cfg.sequenceTimeout = n
         }
         if let v = root["snapping"] {
             cfg.snapping = flag(v, cfg.snapping)
@@ -701,7 +708,7 @@ struct GCTConfig {
             guard let spec = kb[action.rawValue] else { continue }
             if spec.lowercased() == "none" {
                 binds[action] = nil
-            } else if let bind = GCTKeybind(spec) {
+            } else if let bind = KeySequence(spec) {
                 binds[action] = bind
             }
         }
@@ -746,45 +753,45 @@ struct GCTConfig {
         return (dir as NSString).appendingPathComponent(expanded)
     }
 
-    static var defaultKeybinds: [GCTAction: GCTKeybind] {
+    static var defaultKeybinds: [GCTAction: KeySequence] {
         [
-            .newPane: GCTKeybind("cmd+t")!,
-            .closePane: GCTKeybind("cmd+w")!,
-            .renamePane: GCTKeybind("cmd+r")!,
-            .moveFocusAbove: GCTKeybind("cmd+k")!,
-            .moveFocusBelow: GCTKeybind("cmd+j")!,
-            .moveFocusLeft: GCTKeybind("cmd+h")!,
-            .moveFocusRight: GCTKeybind("cmd+l")!,
-            .openNewAbove: GCTKeybind("cmd+shift+k")!,
-            .openNewBelow: GCTKeybind("cmd+shift+j")!,
-            .openNewLeft: GCTKeybind("cmd+shift+h")!,
-            .openNewRight: GCTKeybind("cmd+shift+l")!,
-            .growAbove: GCTKeybind("cmd+ctrl+k")!,
-            .growBelow: GCTKeybind("cmd+ctrl+j")!,
-            .growLeft: GCTKeybind("cmd+ctrl+h")!,
-            .growRight: GCTKeybind("cmd+ctrl+l")!,
-            .shrinkAbove: GCTKeybind("cmd+ctrl+shift+k")!,
-            .shrinkBelow: GCTKeybind("cmd+ctrl+shift+j")!,
-            .shrinkLeft: GCTKeybind("cmd+ctrl+shift+h")!,
-            .shrinkRight: GCTKeybind("cmd+ctrl+shift+l")!,
+            .newPane: KeySequence("cmd+t")!,
+            .closePane: KeySequence("cmd+w")!,
+            .renamePane: KeySequence("cmd+r")!,
+            .moveFocusAbove: KeySequence("cmd+k")!,
+            .moveFocusBelow: KeySequence("cmd+j")!,
+            .moveFocusLeft: KeySequence("cmd+h")!,
+            .moveFocusRight: KeySequence("cmd+l")!,
+            .openNewAbove: KeySequence("cmd+shift+k")!,
+            .openNewBelow: KeySequence("cmd+shift+j")!,
+            .openNewLeft: KeySequence("cmd+shift+h")!,
+            .openNewRight: KeySequence("cmd+shift+l")!,
+            .growAbove: KeySequence("cmd+ctrl+k")!,
+            .growBelow: KeySequence("cmd+ctrl+j")!,
+            .growLeft: KeySequence("cmd+ctrl+h")!,
+            .growRight: KeySequence("cmd+ctrl+l")!,
+            .shrinkAbove: KeySequence("cmd+ctrl+shift+k")!,
+            .shrinkBelow: KeySequence("cmd+ctrl+shift+j")!,
+            .shrinkLeft: KeySequence("cmd+ctrl+shift+h")!,
+            .shrinkRight: KeySequence("cmd+ctrl+shift+l")!,
             // new-window dims reuse move-focus-on-new-window (center) and
             // camera-follows/fits-focus-move (center/fit like focus moves).
-            .switcher: GCTKeybind("cmd+p")!,
-            .fitAll: GCTKeybind("cmd+0")!,
-            .zoomPane: GCTKeybind("cmd+z")!,
-            .cameraZoomPane: GCTKeybind("cmd+shift+z")!,
-            .copy: GCTKeybind("cmd+c")!,
-            .paste: GCTKeybind("cmd+v")!,
-            .groupSelection: GCTKeybind("cmd+g")!,
-            .ungroup: GCTKeybind("cmd+shift+g")!,
-            .toggleFloating: GCTKeybind("cmd+f")!,
-            .togglePaneSelection: GCTKeybind("cmd+d")!,
-            .clearPaneSelection: GCTKeybind("cmd+shift+d")!,
-            .toggleSnapping: GCTKeybind("cmd+shift+s")!,
-            .moveWindowToSnap: GCTKeybind("cmd+shift+m")!,
-            .reloadConfig: GCTKeybind("cmd+shift+r")!,
-            .relaxLayout: GCTKeybind("cmd+shift+a")!,
-            .nextSession: GCTKeybind("cmd+shift+e")!,
+            .switcher: KeySequence("cmd+p")!,
+            .fitAll: KeySequence("cmd+0")!,
+            .zoomPane: KeySequence("cmd+z")!,
+            .cameraZoomPane: KeySequence("cmd+shift+z")!,
+            .copy: KeySequence("cmd+c")!,
+            .paste: KeySequence("cmd+v")!,
+            .groupSelection: KeySequence("cmd+g")!,
+            .ungroup: KeySequence("cmd+shift+g")!,
+            .toggleFloating: KeySequence("cmd+f")!,
+            .togglePaneSelection: KeySequence("cmd+d")!,
+            .clearPaneSelection: KeySequence("cmd+shift+d")!,
+            .toggleSnapping: KeySequence("cmd+shift+s")!,
+            .moveWindowToSnap: KeySequence("cmd+shift+m")!,
+            .reloadConfig: KeySequence("cmd+shift+r")!,
+            .relaxLayout: KeySequence("cmd+shift+a")!,
+            .nextSession: KeySequence("cmd+shift+e")!,
         ]
     }
 
@@ -803,6 +810,9 @@ struct GCTConfig {
     # Raising it re-spreads existing panes on reload-config (and next
     # launch); lowering it only affects future moves.
     window-gap = 0
+    # A half-typed key sequence (ctrl+b of ctrl+b>c) is dropped after this
+    # many seconds (0-600, default 2; 0 waits for ever).
+    sequence-timeout = 2
     # How long a `gctd open --keep-open` pane lingers after its program
     # ends (s, m, h, d; 0 = until closed). gctd reads this one, not the app.
     keep-open-ttl = "7d"
@@ -1031,7 +1041,8 @@ struct GCTConfig {
     # App shortcuts. Modifiers cmd, ctrl, alt, shift joined with "+"; the
     # last part is the key, e.g. new-pane = "cmd+shift+t". Arrow keys
     # (left/right/up/down) and f1-f12 work too. Set any bind to "none"
-    # to unbind it; removing a key restores its default.
+    # to unbind it; removing a key restores its default. Join keys with ">"
+    # for a sequence (new-pane = "ctrl+b>c"); Escape cancels one midway.
     new-pane = "cmd+t"
     close-pane = "cmd+w"
     rename-pane = "cmd+r"

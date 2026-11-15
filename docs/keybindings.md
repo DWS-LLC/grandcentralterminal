@@ -5,6 +5,16 @@ Every shortcut is rebindable under `[keybinds]` in
 Format: modifiers `cmd`, `ctrl`, `alt`, `shift` joined with `+`, last part is
 the key, e.g. `new-pane = "cmd+shift+t"`. `⌘⇧R` reloads the config live.
 
+## Sequences
+
+A binding can be several keys, joined with `>`: `new-pane = "ctrl+b>c"` waits
+for `ctrl+b`, then `c`. A readout at the bottom of the canvas shows the keys
+typed so far; `escape`, any key the sequence doesn't continue with, or waiting
+longer than `sequence-timeout` (2s) cancels it. A key runs an action or opens a sequence, not both: if two bindings
+disagree, the one later in the list below wins. Scripts bind keys (and modes)
+too, see [scripting](scripting.md#keys); theirs beat the config's. The doom
+hotkey is the one exception, a system-wide key that can't be a sequence.
+
 ## Panes
 
 | Key | Action | Config name |

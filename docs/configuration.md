@@ -33,6 +33,9 @@ allow-window-overlap = false
 # Raising it re-spreads existing panes on reload-config (and next launch);
 # lowering it only affects future moves.
 window-gap = 0
+# A half-typed key sequence (ctrl+b of ctrl+b>c) is dropped after this many
+# seconds (0-600, default 2; 0 waits for ever).
+sequence-timeout = 2
 
 # Magnetic snapping: drags/resizes within snap-radius pull flush with nearby
 # panes and light full-canvas guides. snapping-type picks the anchors: edges

@@ -178,6 +178,11 @@ final class CanvasConn: @unchecked Sendable {
         guard peerVersion >= PeerProtoVersion else { return }
         conn.send(tag: .peerRetry, json: PeerRef(name: name))
     }
+    // Old daemons drop the connection on an unknown tag; no scripts there anyway.
+    func reportEvent(_ e: PaneEvent) {
+        guard peerVersion >= EventProtoVersion else { return }
+        conn.send(tag: .reportEvent, json: e)
+    }
     func paneCwd(_ req: PaneCwd) { conn.send(tag: .paneCwd, json: req) }
     func setFloating(_ req: SetFloating) { conn.send(tag: .setFloating, json: req) }
     func sendInput(_ id: PaneID, _ data: Data) {

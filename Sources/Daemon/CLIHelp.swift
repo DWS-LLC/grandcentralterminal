@@ -91,6 +91,19 @@ let commandHelp: [CommandHelp] = [
                 reaches it. After `session enterprise` it hears enterprise's gctd, not
                 this machine's: to come back, run `gctd session local` on enterprise.
                 """),
+    CommandHelp(name: "lua", synopsis: "lua <file.lua | -e code | -> [key=value]... [--args json|@file] [--json] [--for <span>] [--fail-fast] [--pane <pane>]",
+                summary: "run a Lua script against this daemon: open panes, react to events, keep timers",
+                notes: """
+                A file ends in .lua or has a slash; -e takes code, - reads stdin. key=value
+                words reach the script as gct.args (3, 1.5, true, false keep their type);
+                --args takes JSON, inline or @file. A returned value prints as JSON.
+                The script runs here, in this process: gctd itself never executes it. With
+                gct.on handlers or timers it stays up until gct.stop(), --for <span>, ^C or
+                the daemon going away. Handler errors print and the script carries on;
+                --fail-fast exits 1 on the first. --pane acts as that pane (default: the
+                caller). Scripts in ~/.config/gct/autoload/ start with the daemon.
+                See docs/scripting.md.
+                """),
     CommandHelp(name: "agent", synopsis: "agent setup|status|remove|show|context [--agent NAME]... [--project] [--dry-run] [--force] [--json]",
                 summary: "teach coding agents about GCT: a skill and session hooks",
                 notes: """

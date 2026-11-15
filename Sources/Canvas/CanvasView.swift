@@ -76,7 +76,13 @@ final class CanvasView: NSView {
     }
     private(set) var focusedID: PaneID? {
         get { cur.focusedID }
-        set { cur.focusedID = newValue }
+        set {
+            let moved = cur.focusedID != newValue
+            cur.focusedID = newValue
+            guard moved, let id = newValue else { return }
+
+            hub.reportEvent(PaneEvent(id: id, name: PaneEventName.focused))
+        }
     }
     private var focusTrail: FocusTrail {
         get { cur.focusTrail }
@@ -125,6 +131,12 @@ final class CanvasView: NSView {
     // OSC 7501 program-status records: one store for every pane on every
     // host (canvas-local; the daemon never sees these bytes).
     let programStatus = ProgramStatusStore()
+    // Every key binding: the config's, and the scripts' (CanvasKeys).
+    let keyEngine = KeyEngine()
+    // Which daemon each script's keymap came from, by script token.
+    var keyOwners = [String: String]()
+    let keyHold = KeyHold()
+    var keyHUD: KeyHUD?
     let arrange = ArrangeState()
     let remoteRetry = RemoteRetry()
     // The session on screen: "local" (this machine's gctd) or the
@@ -290,6 +302,8 @@ final class CanvasView: NSView {
 
     func setup() {
         ghosttyApp = GhosttyApp(delegate: self)
+        reportStatus()
+        loadConfigKeys()
         worldView.wantsLayer = true
         addSubview(worldView)
         worldView.frame = bounds
@@ -804,6 +818,7 @@ final class CanvasView: NSView {
         let oldGap = GCTConfig.current.windowGap
         let oldOverlap = GCTConfig.current.allowWindowOverlap
         GCTConfig.current = GCTConfig.load()
+        loadConfigKeys()
         ghosttyApp?.reloadConfig()
         applyTheme()
         syncStatusBarToConfig()
@@ -2521,14 +2536,14 @@ final class CanvasView: NSView {
             NotificationCenter.default.post(name: .gctToggleDoom, object: nil)
             return
         }
-        // App shortcuts first, from the config's keybinds.
-        if let action = GCTAction.allCases.first(where: {
-            GCTConfig.current.keybinds[$0]?.matchesLocal(event) ?? false
-        }) {
-            perform(action)
-            return
-        }
+        // App shortcuts first: the config's keybinds, scripts' bindings, modes.
+        if routeKey(event) { return }
 
+        passKey(event)
+    }
+
+    // The key goes to the focused terminal, as if nothing had claimed it.
+    func passKey(_ event: NSEvent) {
         guard let host = focusedHost else {
             super.keyDown(with: event)
             return
@@ -3688,6 +3703,10 @@ final class CanvasView: NSView {
         case .action: scriptedAction(cmd)
         case .font: scriptedFont(cmd)
         case .session: scriptedSession(cmd)
+        case .sync: break // answered per owner, in connCanvasCommand
+        case .reset: scriptedReset(cmd)
+        case .theme: scriptedTheme(cmd)
+        case .keymap, .press, .reply: break // answered per owner, in connCanvasCommand
         }
     }
 

@@ -7,6 +7,7 @@ import Common
 
 extension CanvasView: CanvasConnDelegate {
     func connWelcome(_ panes: [PaneMeta], _ groups: [GroupMeta], owner: String) {
+        announceCanvas(owner: owner)
         withCanvas(owner) {
             let mappedPanes = panes.map { hub.inboundPane($0, owner: owner) }
             let mappedGroups = groups.map { hub.inboundGroup($0, owner: owner) }
@@ -198,9 +199,18 @@ extension CanvasView: CanvasConnDelegate {
 
         // Font and session are the canvas's own, whichever daemon asked.
         // Camera and actions act on the screen: only the session on it may.
-        let global = c.verb == .font || c.verb == .session
+        let global = [.font, .session, .sync, .reset, .theme, .keymap, .press, .reply].contains(c.verb)
         guard global || owner == session else {
             NSLog("[gct] \(owner) asked for a camera/action but is not on screen; ignored")
+            return
+        }
+
+        if c.verb == .sync {
+            syncScripts(owner: owner)
+            return
+        }
+        if c.verb == .keymap || c.verb == .press || c.verb == .reply {
+            scriptedKeys(c, owner: owner)
             return
         }
 
@@ -208,6 +218,7 @@ extension CanvasView: CanvasConnDelegate {
     }
 
     func connClosed(owner: String) {
+        dropKeys(owner: owner)
         // Dropped, not switched away from: the rebuilt canvas fits all again.
         sessionCameras.removeValue(forKey: owner)
         if owner == "local" {
@@ -459,6 +470,7 @@ extension CanvasView: CanvasConnDelegate {
 extension CanvasView: GhosttyAppDelegate {
     func surfaceResize(_ host: SurfaceHost, _ cols: UInt16, _ rows: UInt16) {
         hub.resizePane(ResizePane(id: host.paneID, cols: cols, rows: rows))
+        reportSize(host, cols: cols, rows: rows)
     }
 
     func surfaceClose(_ host: SurfaceHost, confirmed: Bool) {
@@ -473,6 +485,7 @@ extension CanvasView: GhosttyAppDelegate {
             pane.reportedTitle = title
             autoNameRefresh.schedule()
         }
+        hub.reportEvent(PaneEvent(id: host.paneID, name: PaneEventName.title, title: title))
     }
 
     func surfacePwd(_ host: SurfaceHost, _ pwd: String) {
@@ -489,10 +502,12 @@ extension CanvasView: GhosttyAppDelegate {
     func surfaceBell(_ host: SurfaceHost) {
         NSSound.beep()
         postNotice(host.paneID, title: nil, body: "Bell")
+        hub.reportEvent(PaneEvent(id: host.paneID, name: PaneEventName.bell))
     }
 
     func surfaceNotify(_ host: SurfaceHost, title: String?, body: String) {
         postNotice(host.paneID, title: title, body: body)
+        hub.reportEvent(PaneEvent(id: host.paneID, name: PaneEventName.notification, title: title, body: body))
     }
 
     // Panes report hover out of order (the one entered, then the one left),

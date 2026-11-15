@@ -163,6 +163,11 @@ final class HostHub {
         return (c, remote)
     }
 
+    // The id the owning daemon knows the pane by.
+    func daemonID(of local: PaneID) -> PaneID? {
+        remotePane(local)?.1
+    }
+
     private func remoteGroup(_ local: GroupID) -> (CanvasConn, GroupID)? {
         guard let owner = groupOwner[local], let remote = groupRemote[local],
               let c = conns[owner] else { return nil }
@@ -227,6 +232,14 @@ final class HostHub {
     func paneCwd(_ req: PaneCwd) {
         guard let (c, remote) = remotePane(req.id) else { return }
         c.paneCwd(PaneCwd(id: remote, cwd: req.cwd))
+    }
+
+    func reportEvent(_ e: PaneEvent) {
+        guard let id = e.id, let (c, remote) = remotePane(id) else { return }
+
+        var out = e
+        out.id = remote
+        c.reportEvent(out)
     }
 
     func setFloating(_ req: SetFloating) {

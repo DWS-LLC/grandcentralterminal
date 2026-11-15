@@ -24,7 +24,7 @@ STAGE=$(mktemp -d)
 trap 'rm -rf "$STAGE"' EXIT
 
 mkdir -p "$STAGE/Sources"
-cp -r Sources/Common Sources/Daemon Sources/ProcInfo Sources/PtyExec "$STAGE/Sources/"
+cp -r Sources/Common Sources/Daemon Sources/ProcInfo Sources/CLua Sources/PtyExec "$STAGE/Sources/"
 cat > "$STAGE/Package.swift" <<'EOF'
 // swift-tools-version:5.10
 import PackageDescription
@@ -33,10 +33,11 @@ let package = Package(
     name: "GCTRemote",
     targets: [
         .target(name: "ProcInfo", path: "Sources/ProcInfo"),
+        .target(name: "CLua", path: "Sources/CLua", cSettings: [.define("LUA_USE_POSIX")]),
         .target(name: "Common", path: "Sources/Common"),
         .executableTarget(
             name: "gctd",
-            dependencies: ["Common", "ProcInfo"],
+            dependencies: ["Common", "ProcInfo", "CLua"],
             path: "Sources/Daemon"
         ),
         .executableTarget(

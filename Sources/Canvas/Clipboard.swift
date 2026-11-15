@@ -72,6 +72,9 @@ enum GhosttyClipboard {
     private static let previewBytes = 2048
     private static let previewImageMax = NSSize(width: 320, height: 240)
     private static let rememberTitle = "Remember for this session"
+    private static let plainText = "text/plain"
+    // Scripts are told what was copied, up to this much of it.
+    private static let announceLimit = 64 * 1024
 
     // MARK: libghostty callbacks
 
@@ -152,6 +155,7 @@ enum GhosttyClipboard {
 
         guard confirm else {
             store(reps)
+            announce(ud, reps)
             return
         }
 
@@ -159,7 +163,16 @@ enum GhosttyClipboard {
         prompt(.write, reps, canRemember: false) { verdict in
             guard verdict != .deny else { return }
             store(reps)
+            announce(ud, reps)
         }
+    }
+
+    // Tell the canvas what landed on the pasteboard, for scripts listening.
+    private static func announce(_ ud: UnsafeMutableRawPointer?, _ reps: [Rep]) {
+        guard let host = host(ud), let text = reps.first(where: { $0.mime == plainText }) else { return }
+
+        // Lossy on purpose: a cut at the limit can split a character.
+        host.delegate?.surfaceClipboard(host, text: String(decoding: text.data.prefix(announceLimit), as: UTF8.self))
     }
 
     // MARK: Pasteboard

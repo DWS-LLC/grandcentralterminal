@@ -16,7 +16,7 @@ SWIFT_VER="${SWIFT_VER:-6.4}"
 STAGE=$(mktemp -d)
 trap 'rm -rf "$STAGE"' EXIT
 mkdir -p "$STAGE/Sources"
-cp -r Sources/Common Sources/Daemon Sources/ProcInfo Sources/PtyExec "$STAGE/Sources/"
+cp -r Sources/Common Sources/Daemon Sources/ProcInfo Sources/CLua Sources/PtyExec "$STAGE/Sources/"
 sed -i.bak "s/GCTVersion = \"dev\"/GCTVersion = \"$VERSION\"/" "$STAGE/Sources/Daemon/Version.swift"
 rm "$STAGE/Sources/Daemon/Version.swift.bak"
 cat > "$STAGE/Package.swift" <<'EOF'
@@ -27,10 +27,11 @@ let package = Package(
     name: "GCTRemote",
     targets: [
         .target(name: "ProcInfo", path: "Sources/ProcInfo"),
+        .target(name: "CLua", path: "Sources/CLua", cSettings: [.define("LUA_USE_POSIX")]),
         .target(name: "Common", path: "Sources/Common"),
         .executableTarget(
             name: "gctd",
-            dependencies: ["Common", "ProcInfo"],
+            dependencies: ["Common", "ProcInfo", "CLua"],
             path: "Sources/Daemon"
         ),
         .executableTarget(

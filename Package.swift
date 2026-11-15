@@ -26,6 +26,14 @@ let package = Package(
             path: "Sources/ShaderXlate"
         ),
 
+        // Lua 5.4 (vendored, MIT): the interpreter behind `gctd lua`. No
+        // dlopen, so it links static on Linux; scripts get Lua modules only.
+        .target(
+            name: "CLua",
+            path: "Sources/CLua",
+            cSettings: [.define("LUA_USE_POSIX")]
+        ),
+
         // setsid + ctty + exec helper: the daemon spawns this instead of the
         // shell so panes get a real controlling terminal (SIGWINCH, ^C...).
         .executableTarget(
@@ -45,10 +53,17 @@ let package = Package(
             path: "Sources/Common"
         ),
 
+        // Key notation + the key engine: pure logic, tested without a canvas.
+        .testTarget(
+            name: "CommonTests",
+            dependencies: ["Common"],
+            path: "Tests/CommonTests"
+        ),
+
         // Headless daemon that owns PTYs, panes, and persistence.
         .executableTarget(
             name: "gctd",
-            dependencies: ["Common", "ProcInfo"],
+            dependencies: ["Common", "ProcInfo", "CLua"],
             path: "Sources/Daemon"
         ),
 

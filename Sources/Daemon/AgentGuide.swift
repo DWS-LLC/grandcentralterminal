@@ -70,6 +70,7 @@ pick the pane, and ask if it isn't obvious.
 | tail a log | `gctd open name=api-log size=900,640 cmd="tail -f api.log"` |
 | run it on another machine | add `host=<peer>`; `gctd hosts` lists them |
 | ping me when it's done | `gctd notify self "tests are green"` |
+| react to events, hold a timer, script several steps | `gctd lua script.lua` or `gctd lua -e '...'`: `gct.on("terminal.child_exited", fn)`, `gct.pane.open{...}`. See docs/scripting.md in the repo |
 | close what you opened | `gctd close <id>` for each id you kept, then `gctd list` |
 | "top in a narrow pane on the right" | `gctd open name=top side=right size=33%,100% cmd=top` |
 | "put it below / to the left" | `side=below size=100%,30%`, `side=left size=40%,100%` |

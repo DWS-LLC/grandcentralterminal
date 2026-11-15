@@ -16,6 +16,11 @@ final class Remote: @unchecked Sendable {
     // A peer daemon's id when this link hosts its guest panes (Hello.owner);
     // nil for UI and CLI clients.
     var peerOwner: String?
+    // Asked for MsgTag.event frames (a script); everyone else never sees one.
+    var wantsEvents = false
+    // The keymap this client (a script) put on the canvas, so it can be taken
+    // down when the script goes, however it goes.
+    var keymapToken: String?
     init(conn: Conn) { self.conn = conn }
 }
 
@@ -54,6 +59,8 @@ final class Server {
     // Our own links to peers, and the proxy panes riding them:
     // host name -> guest id on that host -> the pane standing in for it.
     private let peers: PeerSet
+    // Scripts in <config>/autoload/, each its own `gctd lua` process.
+    private let autoload: ScriptAutoload
     private var proxies = [String: [PaneID: RemotePane]]()
     // Slots promised to proxies still waiting on their peer. Not in `panes`
     // yet, so a concurrent create would otherwise land on top of them.
@@ -73,6 +80,7 @@ final class Server {
         self.tcpPort = tcpPort
         self.token = token
         self.peers = PeerSet(ownerID: daemonID)
+        self.autoload = ScriptAutoload(sock: sockPath, statePath: statePath)
     }
 
     func run() {
@@ -236,7 +244,10 @@ final class Server {
                 guestLastSeen[owner] = Date()
             }
             remote.conn.close()
+            let token = remote.keymapToken
             lock.unlock()
+
+            dropKeymap(token)
         }
 
         // TCP gate: the first frame must be a token hello. Unix peers
@@ -682,6 +693,23 @@ final class Server {
             guard let req: PeerRef = frame.decode() else { return }
             peers.link(for: req.name)?.retryNow()
 
+        case .subscribeEvents:
+            lock.lock()
+            remote.wantsEvents = true
+            lock.unlock()
+
+        case .reportEvent:
+            // The canvas saw something (bell, title, focus): hand it to the
+            // scripts listening. A pane we don't have is a stale report.
+            guard let req: PaneEvent = frame.decode() else { return }
+            lock.lock()
+            let known = req.id.map { panes[$0] != nil } ?? true
+            let targets = remotes.filter(\.wantsEvents)
+            lock.unlock()
+            guard known else { return }
+
+            for r in targets { _ = r.conn.send(tag: .event, json: req) }
+
         case .canvasCommand:
             // Scripted camera/action: validate the target pane, then relay
             // verbatim. The canvas owns the semantics.
@@ -693,6 +721,11 @@ final class Server {
                 _ = remote.conn.send(tag: .errorReply,
                                      json: ErrorReply(message: "no such pane"))
                 return
+            }
+            if req.verb == .keymap, let wire = req.keymap {
+                lock.lock()
+                remote.keymapToken = wire.isEmpty ? nil : wire.token
+                lock.unlock()
             }
             broadcast(tag: .canvasRelay, json: req)
 
@@ -1218,6 +1251,13 @@ final class Server {
         broadcast(tag: .paneExit, json: PaneExit(id: id, code: code, kept: kept))
     }
 
+    // A script that bound keys is gone: tell the canvases to forget them.
+    private func dropKeymap(_ token: String?) {
+        guard let token else { return }
+
+        broadcast(tag: .canvasRelay, json: CanvasCommand(verb: .keymap, keymap: KeymapWire(token: token)))
+    }
+
     // Blocking writes outside the lock: a slow peer stalls only us.
     private func broadcast(tag: MsgTag, json: some Codable & Sendable) {
         lock.lock()
@@ -1293,6 +1333,7 @@ final class Server {
         }
         peers.pollConfig()
         sweepKept()
+        autoload.poll()
     }
 
     // Ended keep-open panes older than keep-open-ttl get closed. The
@@ -1339,6 +1380,7 @@ final class Server {
         guests.removeAll()
         lock.unlock()
         state.saveNow()
+        autoload.stopAll()
         Pane.terminateAll(all)
         exit(0)
     }

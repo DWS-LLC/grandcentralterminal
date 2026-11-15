@@ -3,6 +3,12 @@
 ## Unreleased
 
 ### Added
+- `gctd lua` runs a Lua script against the daemon, in the style of Rex's `rex do`: `gct.pane.*` to open, wait on, dump and arrange panes, `gct.on` handlers for events (`pane_created`, `terminal.child_exited`, `terminal.pwd_changed`, `view_changed`, host links...), `gct.wait`, timers, `gct.exec`, `gct.json`, and Rex's layout builders. The script runs in the `gctd lua` process, never inside the daemon. See docs/scripting.md.
+- Scripts in `~/.config/gct/autoload/` start with the daemon, restart when saved, stop when deleted, and retry with backoff when they crash. Logs are in `script-logs/` beside `state.json`.
+- Bell, title, notification, focus, progress, clipboard and program-status events reach scripts: the canvas reports what it sees and the daemon relays it to clients that subscribed. Protocol 10; an older app or daemon just sends none.
+- `gct.block.call` runs Rex's terminal methods on a pane (`title`, `pwd`, `process`, `size`, `program_status`, `format`, `write`, `reset`, `set_theme`, `list_dir`), and `gct.servers()` / `gct.server(label)` aim the pane calls at one peer.
+- Key sequences: `[keybinds]` values can be several keys joined with `>` (`new-pane = "ctrl+b>c"`). A readout at the bottom of the canvas shows the keys typed so far; `escape` cancels, and so does waiting longer than `sequence-timeout` (2s by default).
+- `gct.bind`, `gct.unbind`, `gct.mode`, `gct.bindings` and `gct.modes` (Rex's `rex.bind` family): a script binds keys, sequences and modes (`resize/left`, exclusive modes, `client.mode.enter`) to built-in actions, its own actions or functions. They live on the canvas while the script runs and go when it does. A key bound to a function waits for it: return `true` to keep the key, anything else lets it through to the terminal (a quarter second to answer, then the key stays eaten). `gct.client.press("ctrl+b>c")` types keys at the canvas.
 - `gctd open --keep-open` leaves a pane (dimmed, ✕) with its scrollback after its program ends, so `gctd dump` can still read it. It goes on `gctd close`, or after `keep-open-ttl` in `config.toml` (default `7d`, `0` = until closed). Kept panes don't survive a daemon restart. Protocol 9.
 - `gctd wait <pane> for=10m` (and `open --wait for=10m`) gives up after that long and exits 124.
 - `gctd open side=right|left|above|below` picks the edge of the calling pane the new pane lands on, and `size=33%,100%` takes a share of the caller's width and height.

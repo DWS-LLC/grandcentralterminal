@@ -911,6 +911,9 @@ case "wait":
     _ = c.conn.send(tag: .waitPane, json: PaneRef(id: id))
     awaitExit(c, id, limit: limit)
 
+case "lua":
+    runLua(rest)
+
 case "help", "--help", "-h":
     printHelp(rest.first)
 

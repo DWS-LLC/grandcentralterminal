@@ -117,6 +117,14 @@ public final class Conn: @unchecked Sendable {
         return writeFrame(payload)
     }
 
+    // A frame whose JSON the caller already wrote (scripts' raw gct.call).
+    @discardableResult
+    public func sendRaw(tag: MsgTag, json: Data) -> Bool {
+        var payload = json
+        payload.insert(tag.rawValue, at: 0)
+        return writeFrame(payload)
+    }
+
     @discardableResult
     public func sendData(tag: MsgTag, paneID: PaneID, data: Data) -> Bool {
         var payload = Data(capacity: data.count + 17)

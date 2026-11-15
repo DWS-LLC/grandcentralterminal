@@ -15,6 +15,8 @@
   <a href="docs/keybindings.md">Keybindings</a>
   ·
   <a href="docs/agents.md">Agents</a>
+  ·
+  <a href="docs/scripting.md">Scripting</a>
 </p>
 
 <p align="center">

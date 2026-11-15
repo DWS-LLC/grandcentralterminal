@@ -17,6 +17,10 @@ protocol GhosttyAppDelegate: AnyObject {
     func surfaceBell(_ host: SurfaceHost)
     // Desktop notification request (OSC 9 / OSC 777;notify).
     func surfaceNotify(_ host: SurfaceHost, title: String?, body: String)
+    // OSC 9;4 progress: state is ghostty's (remove, set, error, ...), progress 0-100 or nil.
+    func surfaceProgress(_ host: SurfaceHost, state: String, progress: Int?)
+    // The program wrote text to the clipboard (OSC 52 and friends), once allowed.
+    func surfaceClipboard(_ host: SurfaceHost, text: String)
     // Cursor over a clickable link or not (hand cursor).
     func surfacePointer(_ host: SurfaceHost, _ shape: PointerShape)
     // Hovered link's URL, nil once the cursor leaves it.
@@ -259,6 +263,10 @@ final class GhosttyApp: @unchecked Sendable {
             let body = n.body.map { String(cString: $0) } ?? ""
             host.delegate?.surfaceNotify(host, title: title?.isEmpty == true ? nil : title, body: body)
             return true
+        case GHOSTTY_ACTION_PROGRESS_REPORT:
+            let r = action.action.progress_report
+            host.delegate?.surfaceProgress(host, state: Self.progressName(r.state), progress: r.progress < 0 ? nil : Int(r.progress))
+            return true
         case GHOSTTY_ACTION_MOUSE_SHAPE:
             let link = action.action.mouse_shape == GHOSTTY_MOUSE_SHAPE_POINTER
             host.delegate?.surfacePointer(host, link ? .link : .arrow)
@@ -277,6 +285,16 @@ final class GhosttyApp: @unchecked Sendable {
             return true
         default:
             return false
+        }
+    }
+
+    private static func progressName(_ s: ghostty_action_progress_report_state_e) -> String {
+        switch s {
+        case GHOSTTY_PROGRESS_STATE_SET: return "set"
+        case GHOSTTY_PROGRESS_STATE_ERROR: return "error"
+        case GHOSTTY_PROGRESS_STATE_INDETERMINATE: return "indeterminate"
+        case GHOSTTY_PROGRESS_STATE_PAUSE: return "pause"
+        default: return "remove"
         }
     }
 
