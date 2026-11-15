@@ -696,8 +696,10 @@ final class ScriptRuntime {
                 throw ScriptError("at most \(ScriptPalette.maxEntries) palette actions")
             }
 
+            // Before the action is kept: a bad spec leaves nothing half-defined.
+            let entry = try ScriptPalette.entry(name: name, spec: spec)
             self.actions[name] = run
-            self.palette.set(name, ScriptPalette.entry(name: name, spec: spec))
+            self.palette.set(name, entry)
             return 0
         }
 

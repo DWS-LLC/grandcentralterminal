@@ -351,6 +351,8 @@ secs=$SECONDS
 G lua -e 'gct.action{name="quiet", run=function() end}' >/dev/null 2>&1
 check palette-untitled-exits true "$([ $((SECONDS - secs)) -lt 2 ] && echo true || echo false)"
 lua palette-cap true 0 -e 'local ok, err = pcall(function() for i = 1, 1025 do gct.action{name = "a" .. i, title = "t", run = function() end} end end); print(tostring(err):find("at most 1024", 1, true) ~= nil); gct.stop(0)'
+# An args spec is checked when the action is defined: a table of name = "type".
+lua palette-args-spec '[false,false,true,true]' 0 -e 'local f = function() end; local a = pcall(gct.action, {name = "b1", title = "B", args = 5, run = f}); local b = pcall(gct.action, {name = "b2", title = "B", args = {n = 5}, run = f}); local c = pcall(gct.action, {name = "b3", title = "B", args = {n = "integer", note = "string?", odd = "mystery"}, run = f}); local d = pcall(gct.action, {name = "b4", args = 5, run = f}); print(gct.json.encode({a, b, c, d})); gct.stop(0)'
 lua palette-redefine '"ran"' 0 -e 'gct.action{name="x", title="X", run=function() return "old" end}; gct.action{name="x", run=function() return "ran" end}; local r = gct.invoke("x"); print(gct.json.encode(r)); gct.stop(0)'
 
 # Last: the daemon dies under a running script.

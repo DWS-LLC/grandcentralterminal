@@ -322,9 +322,28 @@ shows. An action without a `title` stays out of the palette: it is for
 
 A pick runs `run(ctx, args)` in the script that defined it, with `ctx.origin ==
 "palette"` and `ctx.pane_id` the focused pane when it lives on the script's host.
-`args` is an empty table: the palette has no way to ask for arguments, so an
-action that needs one asks for it itself. The `args = { target = "string?" }` in
-Rex's spec is accepted and ignored.
+`args` is an empty table unless the action asks for some.
+
+Give it `args` and the palette asks for them first, one at a time:
+
+```lua
+gct.action{
+  name = "open_day",
+  title = "Notes: Open Day",
+  args = { day = "string", line = "integer?" },
+  run = function(ctx, args)
+    gct.pane.open{ cmd = "nvim +" .. (args.line or 1) .. " ~/notes/" .. args.day .. ".md" }
+  end,
+}
+```
+
+Each is `name = "type"`, with `string`, `number`, `integer` or `boolean` for the
+type (anything else is text). A trailing `?` makes it optional: a blank answer
+leaves it out of `args`. A table has no order, so they are asked by name.
+`⏎` takes an answer; one that doesn't fit stays put, with what it expected.
+`esc` goes back to the list, filter and all. The script gets numbers as numbers
+and booleans as `true` / `false` (typed as yes, no, on, off, 1 or 0). This is
+Rex's `args = { target = "string?" }`, so a Rex script's schema works as is.
 
 Entries live as long as their script: a plugin's actions are there while it
 runs and go when it stops or its daemon's link does. They go out when the

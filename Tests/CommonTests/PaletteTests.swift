@@ -61,4 +61,62 @@ final class PaletteTests: XCTestCase {
         XCTAssertEqual(relayed.verb, .palette)
         XCTAssertEqual(relayed.palette?.entries.count, 2)
     }
+
+    // MARK: Arguments
+
+    func testSpecReadsRexSpelling() {
+        XCTAssertEqual(PaletteArg(name: "n", spec: "string"), PaletteArg(name: "n", kind: .text))
+        XCTAssertEqual(PaletteArg(name: "n", spec: "string?"), PaletteArg(name: "n", kind: .text, optional: true))
+        XCTAssertEqual(PaletteArg(name: "n", spec: "Integer").kind, .integer)
+        XCTAssertEqual(PaletteArg(name: "n", spec: "int?").kind, .integer)
+        XCTAssertEqual(PaletteArg(name: "n", spec: "float").kind, .number)
+        XCTAssertEqual(PaletteArg(name: "n", spec: "bool").kind, .boolean)
+        // Not ours: text, so a Rex script still loads.
+        XCTAssertEqual(PaletteArg(name: "n", spec: "path").kind, .text)
+        XCTAssertTrue(PaletteArg(name: "n", spec: "path?").optional)
+    }
+
+    func testAnswersAreTyped() {
+        let text = PaletteArg(name: "t", kind: .text)
+        XCTAssertEqual(text.value(of: " hi there "), .text(" hi there "))
+
+        let whole = PaletteArg(name: "i", kind: .integer)
+        XCTAssertEqual(whole.value(of: "42"), .integer(42))
+        XCTAssertEqual(whole.value(of: " -7 "), .integer(-7))
+        XCTAssertNil(whole.value(of: "4.5"))
+        XCTAssertNil(whole.value(of: "x"))
+
+        let number = PaletteArg(name: "n", kind: .number)
+        XCTAssertEqual(number.value(of: "4.5"), .number(4.5))
+        XCTAssertEqual(number.value(of: "3"), .number(3))
+        XCTAssertNil(number.value(of: "nan"))
+        XCTAssertNil(number.value(of: "inf"))
+        XCTAssertNil(number.value(of: ""))
+
+        let flag = PaletteArg(name: "b", kind: .boolean)
+        for yes in ["true", "Yes", " y ", "ON", "1"] { XCTAssertEqual(flag.value(of: yes), .boolean(true), yes) }
+        for no in ["false", "NO", "n", "off", "0"] { XCTAssertEqual(flag.value(of: no), .boolean(false), no) }
+        XCTAssertNil(flag.value(of: "maybe"))
+    }
+
+    func testValuesAreJSON() throws {
+        let values: [PaletteArg.Value] = [.text("a"), .number(1.5), .integer(3), .boolean(true)]
+        let data = try JSONSerialization.data(
+            withJSONObject: ["t": values[0].json, "n": values[1].json, "i": values[2].json, "b": values[3].json],
+            options: [.sortedKeys])
+        XCTAssertEqual(String(decoding: data, as: UTF8.self), #"{"b":true,"i":3,"n":1.5,"t":"a"}"#)
+    }
+
+    func testEntryCarriesItsArgsOnTheWire() throws {
+        let entry = PaletteWire.Entry(name: "open", title: "Open", args: [
+            PaletteArg(name: "count", kind: .integer),
+            PaletteArg(name: "note", kind: .text, optional: true),
+        ])
+        let back = try JSONDecoder().decode(PaletteWire.Entry.self, from: JSONEncoder().encode(entry))
+        XCTAssertEqual(back, entry)
+
+        // An entry from before args existed has none.
+        let old = try JSONDecoder().decode(PaletteWire.Entry.self, from: Data(#"{"name":"a","title":"A"}"#.utf8))
+        XCTAssertNil(old.args)
+    }
 }

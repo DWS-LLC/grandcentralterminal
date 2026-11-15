@@ -76,18 +76,18 @@ extension CanvasView {
             let e = listed.entry
             let detail = e.description ?? ""
             return PaletteRow(
-                title: e.title, detail: detail,
+                title: e.title, detail: detail, args: e.args ?? [],
                 text: PaletteText(title: e.title, category: e.category ?? "", keywords: e.keywords ?? "", detail: detail),
-                run: { [weak self] in self?.pick(listed) })
+                run: { [weak self] answers in self?.pick(listed, answers: answers) })
         }
 
         let builtIns = GCTAction.allCases.filter { $0 != .commandPalette }.map { action -> PaletteRow in
             let title = Self.title(of: action)
             let keys = GCTConfig.current.keybinds[action]?.description ?? ""
             return PaletteRow(
-                title: title, detail: keys,
+                title: title, detail: keys, args: [],
                 text: PaletteText(title: title, category: builtInCategory, keywords: action.rawValue),
-                run: { [weak self] in self?.runCanvasCommand(CanvasCommand(verb: .action, action: action.rawValue)) })
+                run: { [weak self] _ in self?.runCanvasCommand(CanvasCommand(verb: .action, action: action.rawValue)) })
         }
 
         return scripts + builtIns
@@ -98,8 +98,11 @@ extension CanvasView {
         action.rawValue.split(separator: "-").map { $0.prefix(1).uppercased() + $0.dropFirst() }.joined(separator: " ")
     }
 
-    private func pick(_ listed: PaletteStore.Listed) {
-        let what: [String: Any] = ["action": listed.entry.name, "key": pickLabel, "origin": pickOrigin]
+    // `answers` is the JSON object of what the palette asked for; nil when it asked nothing.
+    private func pick(_ listed: PaletteStore.Listed, answers: String?) {
+        var what: [String: Any] = ["action": listed.entry.name, "key": pickLabel, "origin": pickOrigin]
+        if let answers { what["args"] = answers }
+
         _ = tellScript(listed.token, owner: listed.owner, what)
     }
 }

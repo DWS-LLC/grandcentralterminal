@@ -9,6 +9,91 @@
 
 import Foundation
 
+// One thing an action asks for before it runs: `args = { count = "integer", note = "string?" }`.
+// The palette asks for each in turn and hands the script a table of the answers.
+public struct PaletteArg: Codable, Sendable, Equatable {
+    public enum Kind: String, Codable, Sendable {
+        case text = "string"
+        case number
+        case integer
+        case boolean
+    }
+
+    // What the answer was typed as, ready for JSON.
+    public enum Value: Sendable, Equatable {
+        case text(String)
+        case number(Double)
+        case integer(Int)
+        case boolean(Bool)
+
+        public var json: Any {
+            switch self {
+            case .text(let v): return v
+            case .number(let v): return v
+            case .integer(let v): return v
+            case .boolean(let v): return v
+            }
+        }
+    }
+
+    private static let optionalMark = "?"
+    private static let kinds: [String: Kind] = [
+        "string": .text, "text": .text,
+        "number": .number, "float": .number, "double": .number,
+        "integer": .integer, "int": .integer,
+        "boolean": .boolean, "bool": .boolean,
+    ]
+    private static let yes: Set<String> = ["true", "yes", "y", "on", "1"]
+    private static let no: Set<String> = ["false", "no", "n", "off", "0"]
+
+    public var name: String
+    public var kind: Kind
+    // A blank answer leaves it out.
+    public var optional: Bool
+
+    public init(name: String, kind: Kind, optional: Bool = false) {
+        self.name = name; self.kind = kind; self.optional = optional
+    }
+
+    // Rex's spelling: "string", "integer?"... A kind we don't know is text, so a
+    // script written for Rex still loads.
+    public init(name: String, spec: String) {
+        let optional = spec.hasSuffix(Self.optionalMark)
+        let word = optional ? String(spec.dropLast(Self.optionalMark.count)) : spec
+        self.init(name: name, kind: Self.kinds[word.lowercased()] ?? .text, optional: optional)
+    }
+
+    // What to tell the person typing: "a whole number", "yes or no".
+    public var hint: String {
+        switch kind {
+        case .text: return "text"
+        case .number: return "a number"
+        case .integer: return "a whole number"
+        case .boolean: return "yes or no"
+        }
+    }
+
+    // The typed answer, nil when it isn't one.
+    public func value(of input: String) -> Value? {
+        switch kind {
+        case .text:
+            return .text(input)
+        case .number:
+            guard let v = Double(input.trimmingCharacters(in: .whitespaces)), v.isFinite else { return nil }
+
+            return .number(v)
+        case .integer:
+            return Int(input.trimmingCharacters(in: .whitespaces)).map(Value.integer)
+        case .boolean:
+            let word = input.trimmingCharacters(in: .whitespaces).lowercased()
+            if Self.yes.contains(word) { return .boolean(true) }
+            if Self.no.contains(word) { return .boolean(false) }
+
+            return nil
+        }
+    }
+}
+
 public struct PaletteWire: Codable, Sendable {
     public struct Entry: Codable, Sendable, Equatable {
         public var name: String
@@ -16,11 +101,13 @@ public struct PaletteWire: Codable, Sendable {
         public var description: String?
         public var category: String?
         public var keywords: String?
+        // In the order they are asked; nil or empty: runs at once.
+        public var args: [PaletteArg]?
 
         public init(name: String, title: String, description: String? = nil,
-                    category: String? = nil, keywords: String? = nil) {
+                    category: String? = nil, keywords: String? = nil, args: [PaletteArg]? = nil) {
             self.name = name; self.title = title; self.description = description
-            self.category = category; self.keywords = keywords
+            self.category = category; self.keywords = keywords; self.args = args
         }
     }
 

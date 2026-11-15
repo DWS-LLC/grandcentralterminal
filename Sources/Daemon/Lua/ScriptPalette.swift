@@ -34,13 +34,31 @@ final class ScriptPalette {
     var count: Int { entries.count }
 
     // The palette entry for gct.action's spec, nil when it has no title.
-    static func entry(name: String, spec: [String: Any]) -> PaletteWire.Entry? {
+    static func entry(name: String, spec: [String: Any]) throws -> PaletteWire.Entry? {
         guard let title = spec["title"] as? String, !title.isEmpty else { return nil }
 
         return PaletteWire.Entry(name: name, title: title,
                                  description: spec["description"] as? String,
                                  category: spec["category"] as? String,
-                                 keywords: keywords(spec["keywords"]))
+                                 keywords: keywords(spec["keywords"]),
+                                 args: try args(spec["args"]))
+    }
+
+    // Rex's `args = { count = "integer", note = "string?" }`. A table has no
+    // order, so they are asked by name.
+    private static func args(_ raw: Any?) throws -> [PaletteArg]? {
+        guard let raw else { return nil }
+        guard let table = raw as? [String: Any] else {
+            throw ScriptError("args is a table of name = type, like { count = \"integer\", note = \"string?\" }")
+        }
+
+        return try table.sorted { $0.key < $1.key }.map { name, spec in
+            guard let spec = spec as? String else {
+                throw ScriptError("args.\(name) is a type like \"string\", \"number?\", \"integer\" or \"boolean\"")
+            }
+
+            return PaletteArg(name: name, spec: spec)
+        }
     }
 
     // Rex writes them as one string; a list of words is fine too.
