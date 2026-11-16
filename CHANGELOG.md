@@ -3,6 +3,7 @@
 ## Unreleased
 
 ### Added
+- Command groups, StarCraft style: select windows or groups, `⌘⇧1-9` stores them in a slot, `⌘1-9` brings them back: the session switches, they are selected and the camera fits them. A slot holds one session's windows and goes when they are all gone or that session detaches. Config names `command-group-assign-N` / `command-group-recall-N`.
 - A session with no windows says which one it is, in the middle of the canvas, with the key that opens a pane.
 - Plugins: a folder in `~/.config/gct/plugins/` with an `init.lua` that returns `{ setup = function(opts) end }`, started with the daemon like an autoload script and given its `[plugin.<name>]` table from `config.toml` (`enabled = false` keeps it off). `gctd plugin install owner/repo` (or a git URL, `--ref` for a branch, tag or commit), `list`, `update` and `remove` manage them, and `plugins.lock` pins each commit so another machine gets the same code. See docs/scripting.md.
 - Command palette, `⌘⇧P` (`command-palette`): GCT's own actions and every script action with a `title` (`gct.action{name=, title=, description=, category=, keywords=, args=, run=}`), filtered as you type. `args = { count = "integer", note = "string?" }` makes the palette ask for each first. A script's entries go when the script does. Protocol 11; an older daemon just shows none.

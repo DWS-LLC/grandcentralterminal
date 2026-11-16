@@ -35,6 +35,7 @@ hotkey is the one exception, a system-wide key that can't be a sequence.
 | `⌘P` | pane switcher (type to filter, ⏎ to jump) | `switcher` |
 | `⌘⇧P` | command palette: GCT's actions and the ones plugins and scripts add ([scripting.md](scripting.md#command-palette)) | `command-palette` |
 | `⌘0` | fit all panes | `fit-all` |
+| `⌘⇧1-9` / `⌘1-9` | command groups: store the selected windows in slot N / bring slot N back (switches to its session, selects and fits it). A slot holds one session and goes when its windows do | `command-group-assign-N` / `command-group-recall-N` |
 | `⌘Z` | focus-zoom pane to a sharp local fullscreen (toggle restores) | `zoom-pane` |
 | `⌘⇧Z` | camera-only zoom into the focused pane (it keeps its size, the camera moves) | `camera-zoom-pane` |
 | `⌘+` / `⌘-` | per-pane font zoom (ghostty's, carries to new panes) | |

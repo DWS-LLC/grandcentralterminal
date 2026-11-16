@@ -313,6 +313,48 @@ enum GCTAction: String, CaseIterable {
     case relaxLayout = "relax-layout"
     case nextSession = "next-session"
     case commandPalette = "command-palette"
+    case commandGroupAssign1 = "command-group-assign-1"
+    case commandGroupAssign2 = "command-group-assign-2"
+    case commandGroupAssign3 = "command-group-assign-3"
+    case commandGroupAssign4 = "command-group-assign-4"
+    case commandGroupAssign5 = "command-group-assign-5"
+    case commandGroupAssign6 = "command-group-assign-6"
+    case commandGroupAssign7 = "command-group-assign-7"
+    case commandGroupAssign8 = "command-group-assign-8"
+    case commandGroupAssign9 = "command-group-assign-9"
+    case commandGroupRecall1 = "command-group-recall-1"
+    case commandGroupRecall2 = "command-group-recall-2"
+    case commandGroupRecall3 = "command-group-recall-3"
+    case commandGroupRecall4 = "command-group-recall-4"
+    case commandGroupRecall5 = "command-group-recall-5"
+    case commandGroupRecall6 = "command-group-recall-6"
+    case commandGroupRecall7 = "command-group-recall-7"
+    case commandGroupRecall8 = "command-group-recall-8"
+    case commandGroupRecall9 = "command-group-recall-9"
+}
+
+enum CommandGroupOp {
+    case assign
+    case recall
+}
+
+extension GCTAction {
+    // command-group-assign-3 -> (.assign, 3); nil for every other action.
+    var commandGroup: (op: CommandGroupOp, slot: Int)? {
+        let ops: [(prefix: String, op: CommandGroupOp)] = [
+            ("command-group-assign-", .assign),
+            ("command-group-recall-", .recall),
+        ]
+        for (prefix, op) in ops {
+            guard rawValue.hasPrefix(prefix), let slot = Int(rawValue.dropFirst(prefix.count)) else {
+                continue
+            }
+
+            return (op, slot)
+        }
+
+        return nil
+    }
 }
 // MARK: - Config
 
@@ -794,6 +836,24 @@ struct GCTConfig {
             .relaxLayout: KeySequence("cmd+shift+a")!,
             .nextSession: KeySequence("cmd+shift+e")!,
             .commandPalette: KeySequence("cmd+shift+p")!,
+            .commandGroupAssign1: KeySequence("cmd+shift+1")!,
+            .commandGroupRecall1: KeySequence("cmd+1")!,
+            .commandGroupAssign2: KeySequence("cmd+shift+2")!,
+            .commandGroupRecall2: KeySequence("cmd+2")!,
+            .commandGroupAssign3: KeySequence("cmd+shift+3")!,
+            .commandGroupRecall3: KeySequence("cmd+3")!,
+            .commandGroupAssign4: KeySequence("cmd+shift+4")!,
+            .commandGroupRecall4: KeySequence("cmd+4")!,
+            .commandGroupAssign5: KeySequence("cmd+shift+5")!,
+            .commandGroupRecall5: KeySequence("cmd+5")!,
+            .commandGroupAssign6: KeySequence("cmd+shift+6")!,
+            .commandGroupRecall6: KeySequence("cmd+6")!,
+            .commandGroupAssign7: KeySequence("cmd+shift+7")!,
+            .commandGroupRecall7: KeySequence("cmd+7")!,
+            .commandGroupAssign8: KeySequence("cmd+shift+8")!,
+            .commandGroupRecall8: KeySequence("cmd+8")!,
+            .commandGroupAssign9: KeySequence("cmd+shift+9")!,
+            .commandGroupRecall9: KeySequence("cmd+9")!,
         ]
     }
 
@@ -1074,6 +1134,13 @@ struct GCTConfig {
     # Command palette: built-in actions and the ones plugins and scripts add.
     command-palette = "cmd+shift+p"
     fit-all = "cmd+0"
+    # Command groups (StarCraft-style): select windows or groups, cmd+shift+N
+    # stores them in slot N, cmd+N brings them back: the session switches
+    # and the camera fits them. A slot holds one session's windows; it goes
+    # when they are all gone or the session detaches. N = 1..9, e.g.
+    # command-group-assign-1 / command-group-recall-1.
+    command-group-assign-1 = "cmd+shift+1"
+    command-group-recall-1 = "cmd+1"
     # Focus zoom: the pane fills the viewport sharp (surface reflows +
     # re-renders, never a raster upscale). Toggle restores frame + camera.
     zoom-pane = "cmd+z"

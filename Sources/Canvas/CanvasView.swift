@@ -147,6 +147,9 @@ final class CanvasView: NSView {
     var session = LocalHost
     // The camera left behind in each session, restored on return.
     var sessionCameras = [String: Camera]()
+    // cmd+shift+N stores the selection, cmd+N brings it back. Slots span
+    // sessions; removePane empties them as their windows die.
+    private var commandGroups = CommandGroups()
     // Hosts being dialed for an attach, and the one to show once it lands.
     var attaching = Set<String>()
     var showWhenAttached: String?
@@ -2623,6 +2626,50 @@ final class CanvasView: NSView {
         case .nextSession: nextSession()
         // The whole canvas, whatever is focused: the menu narrows, the key doesn't.
         case .relaxLayout: relaxCanvas(scope: .all)
+        case .commandGroupAssign1, .commandGroupRecall1,
+             .commandGroupAssign2, .commandGroupRecall2,
+             .commandGroupAssign3, .commandGroupRecall3,
+             .commandGroupAssign4, .commandGroupRecall4,
+             .commandGroupAssign5, .commandGroupRecall5,
+             .commandGroupAssign6, .commandGroupRecall6,
+             .commandGroupAssign7, .commandGroupRecall7,
+             .commandGroupAssign8, .commandGroupRecall8,
+             .commandGroupAssign9, .commandGroupRecall9:
+            runCommandGroup(action)
+        }
+    }
+
+    // Every pane's titlebar shows the slots it is in. All sessions, not just
+    // the viewed one: reassigning a slot also un-badges a parked session's panes.
+    private func badgeCommandGroups() {
+        for canvas in canvases.values {
+            for (id, pane) in canvas.panes {
+                pane.commandSlots = commandGroups.slots(holding: id)
+            }
+        }
+    }
+
+    // Assign: remember the selection (this session's only: selection is
+    // per session). Recall: show that session, select the members, fit them.
+    private func runCommandGroup(_ action: GCTAction) {
+        guard let (op, slot) = action.commandGroup else {
+            return
+        }
+
+        switch op {
+        case .assign:
+            commandGroups.assign(slot, owner: session, ids: Set(liveSelected()))
+            badgeCommandGroups()
+        case .recall:
+            guard let held = commandGroups.recall(slot) else {
+                return
+            }
+
+            _ = exitZoomRestore()
+            switchSession(to: held.owner) { [weak self] in
+                self?.setSelected(held.ids)
+                self?.fitAll(only: held.ids)
+            }
         }
     }
 
@@ -3179,6 +3226,7 @@ final class CanvasView: NSView {
         paneRecency.forget(id)
         zOrder.removeAll { $0 == id }
         selectedIDs.remove(id)
+        commandGroups.forget(id)
         // A dead pane never reports .arrow: drop its hover and hand here.
         if hoverID == id {
             hoverID = nil
@@ -3640,10 +3688,13 @@ final class CanvasView: NSView {
         fitAll()
     }
 
-    func fitAll(duration: Double? = nil) {
+    // `only` narrows the fit to those panes (a command group); nil = all.
+    func fitAll(duration: Double? = nil, only ids: Set<PaneID>? = nil) {
         guard !zOrder.isEmpty else { return }
+        let fitted = panes.filter { ids?.contains($0.key) ?? true }.map { $0.value.frame }
+        guard !fitted.isEmpty else { return }
         var bbox = CGRect.null
-        for pane in panes.values { bbox = bbox.union(pane.frame) }
+        for frame in fitted { bbox = bbox.union(frame) }
         let target = fitRect(for: CGSize(width: bbox.width * camera.scale,
                                          height: bbox.height * camera.scale))
         let fit = max(min(target.width / bbox.width,
@@ -3655,7 +3706,7 @@ final class CanvasView: NSView {
                             y: target.midY - bbox.midY * fit),
             scale: fit)
 
-        if let packed = packedFit(), packed.scale > cam.scale {
+        if let packed = packedFit(of: fitted), packed.scale > cam.scale {
             cam = packed
         }
         animateCamera(to: cam, duration: duration)
@@ -3663,7 +3714,7 @@ final class CanvasView: NSView {
 
     // Fit-all that lets panes use the bbox's empty corners next to a PiP
     // window, not just the strip beside it. Nil without a PiP.
-    private func packedFit() -> Camera? {
+    private func packedFit(of frames: [CGRect]) -> Camera? {
         guard let pip = PictureInPicture.rect(in: self) else { return nil }
 
         let view = fitViewport
@@ -3672,7 +3723,7 @@ final class CanvasView: NSView {
         let padY = view.height * slack
         let gap = min(padX, padY)
 
-        return FitSolver.fit(panes.values.map { $0.frame },
+        return FitSolver.fit(frames,
                              in: view.insetBy(dx: padX, dy: padY),
                              keepOut: pip.insetBy(dx: -gap, dy: -gap),
                              scales: Camera.minScale...Camera.maxScale)

@@ -40,6 +40,8 @@ final class PaneView: NSView {
     // Something happened here while you were elsewhere (notification, bell);
     // cleared once you look or type. Marks the title and keeps it undimmed.
     var hasNotice = false { didSet { if hasNotice != oldValue { applyChrome() } } }
+    // Command groups this pane is in (⌘1, ⌘3...), badged first in the title.
+    var commandSlots = [Int]() { didSet { if commandSlots != oldValue { applyChrome() } } }
     var displayName: String { meta.name ?? autoName ?? "Terminal" }
 
     var isFocused = false { didSet { applyChrome() } }
@@ -402,6 +404,7 @@ final class PaneView: NSView {
         // panes keep the existing "host – name – cwd" shape ("local"
         // elided: it was always "local – Terminal – …" before).
         let kind = displayName
+        let command = commandSlots.map { "⌘\($0) " }.joined()
         let pin = meta.floating ? "⬆ " : ""
         let zoom = isZoomed ? "⤢ " : ""
         let notice = hasNotice ? "● " : ""
@@ -410,9 +413,9 @@ final class PaneView: NSView {
         let ended = meta.exited ? "✕ " : ""
         let cwd = Self.tilde(meta.cwd, local: meta.host == "local" || meta.host.isEmpty)
         if meta.host == "local" || meta.host.isEmpty {
-            return "\(notice)\(ended)\(zoom)\(pin)\(kind) – \(cwd)"
+            return "\(command)\(notice)\(ended)\(zoom)\(pin)\(kind) – \(cwd)"
         }
-        return "\(notice)\(offline)\(ended)\(zoom)\(pin)[\(meta.host)] \(kind) – \(cwd)"
+        return "\(command)\(notice)\(offline)\(ended)\(zoom)\(pin)[\(meta.host)] \(kind) – \(cwd)"
     }
 
     // The cwd tail is what truncation eats first; "~" buys it back.

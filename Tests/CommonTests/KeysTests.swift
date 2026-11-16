@@ -12,6 +12,8 @@ final class KeysTests: XCTestCase {
         XCTAssertEqual(KeyStroke("cmd++")?.description, "cmd++")
         XCTAssertEqual(KeyStroke("+")?.description, "+")
         XCTAssertEqual(KeyStroke("cmd+/")?.description, "cmd+/")
+        XCTAssertEqual(KeyStroke("cmd+shift+1")?.description, "cmd+shift+1")
+        XCTAssertEqual(KeyStroke("cmd+1")?.description, "cmd+1")
         XCTAssertNil(KeyStroke("cmd+"))
         XCTAssertNil(KeyStroke("hyper+a"))
         XCTAssertNil(KeyStroke("cmd+nonsense"))
