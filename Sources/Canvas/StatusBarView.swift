@@ -25,7 +25,7 @@ enum StatusBarLibrary {
         let path = dir.path
         guard !fm.fileExists(atPath: path) else { return }
         try? fm.createDirectory(atPath: path, withIntermediateDirectories: true)
-        let sampleURL = dir.appendingPathComponent("clock.10s.sh")
+        let sampleURL = dir.appendingPathComponent("clock.1s.sh")
         try? sample.write(to: sampleURL, atomically: true, encoding: .utf8)
         try? fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: sampleURL.path)
     }
@@ -52,8 +52,8 @@ enum StatusBarLibrary {
         # <xbar.title>Clock</xbar.title>
         # <xbar.version>v1.0</xbar.version>
         # <xbar.author>GCT</xbar.author>
-        # <xbar.desc>Sample status bar clock. Copy this file to make your own components.</xbar.desc>
-        date +"%a %d %b  %H:%M"
+        # <xbar.desc>Sample status bar clock, macOS style. Copy this file to make your own components.</xbar.desc>
+        date +"%a %b %-d  %-I:%M:%S %p"
         """
 }
 
@@ -302,22 +302,56 @@ final class StatusBarView: NSView {
     }
     private var cells = [NSView]()
     private var watcher: Timer?
+    private var changes: NSObjectProtocol?
+    private var syncPending = false
+    /// Where sessions and windows come from (set by the canvas).
+    weak var source: StatusBarSource? {
+        didSet { sync() }
+    }
     private var signature = [String]()
-    var barHeight: CGFloat { max(16, min(64, GCTConfig.current.statusbarHeight)) }
+    /// The canvas's top fade, in points (0 = none). While it fades into the
+    /// menubar, the bar paints nothing unless `background` is set: the canvas
+    /// is already its backdrop, and a band of its own would stack on it as a
+    /// stripe.
+    var fadeHeight: CGFloat = 0 {
+        didSet {
+            guard fadeHeight != oldValue else { return }
+
+            applyTheme()
+        }
+    }
+    // The configured height, else the menubar's own: the bar reads as its
+    // second row. Capped at a plain menubar's height, so a notched display
+    // (whose menubar is taller) doesn't make it fat.
+    private static let maxAutoHeight: CGFloat = 24
+
+    var barHeight: CGFloat {
+        if let h = GCTConfig.current.statusbarHeight { return max(16, min(64, h)) }
+
+        return min(Self.maxAutoHeight, Self.menubarHeight(window?.screen))
+    }
+
+    // What sits above the visible frame. An autohidden menubar leaves
+    // nothing there, so ask the system for its thickness instead.
+    private static func menubarHeight(_ screen: NSScreen?) -> CGFloat {
+        guard let s = screen ?? NSScreen.main else { return NSStatusBar.system.thickness }
+
+        let h = s.frame.maxY - s.visibleFrame.maxY
+        return h > 0 ? h : NSStatusBar.system.thickness
+    }
 
     init() {
         super.init(frame: .zero)
         wantsLayer = true
-        // Opaque gold must actually paint: layer-backed NSViews with
-        // only backgroundColor sometimes never commit without a
-        // needsDisplay + explicit opacity hint.
-        layer?.isOpaque = true
-        layer?.needsDisplayOnBoundsChange = true
         autoresizingMask = [.width, .minYMargin]
         rebuild()
         // No recompile, no restart: pick up added/removed plugins live.
         watcher = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
             self?.maybeRescan()
+        }
+        changes = NotificationCenter.default.addObserver(
+            forName: .gctBarChanged, object: nil, queue: .main) { [weak self] _ in
+            self?.syncSoon()
         }
     }
 
@@ -327,9 +361,14 @@ final class StatusBarView: NSView {
         let cfg = GCTConfig.current
         let base = GCTTheme.current.statusbarBackground
         let rgb = base.usingColorSpace(.sRGB) ?? base
-        layer?.backgroundColor = rgb.withAlphaComponent(
-            rgb.alphaComponent * CGFloat(cfg.statusbarOpacity)).cgColor
-        for cell in cells { (cell as? StatusBarCellView)?.applyTheme() }
+        let color = rgb.withAlphaComponent(
+            rgb.alphaComponent * CGFloat(cfg.statusbarOpacity))
+        let chosen = cfg.statusbarBackground.spec(dark: GCTTheme.isDark()) != nil
+        layer?.backgroundColor = fadeHeight > 0 && !chosen ? nil : color.cgColor
+        for cell in cells {
+            (cell as? StatusBarCellView)?.applyTheme()
+            (cell as? StatusBarChipsCell)?.applyTheme()
+        }
         positionCells()
     }
 
@@ -343,6 +382,8 @@ final class StatusBarView: NSView {
     func tearDown() {
         watcher?.invalidate()
         watcher = nil
+        changes.map(NotificationCenter.default.removeObserver)
+        changes = nil
         for cell in cells { (cell as? StatusBarCellView)?.invalidate() }
     }
 
@@ -370,6 +411,12 @@ final class StatusBarView: NSView {
                 cells.append(StatusBarGapView(frame: .zero))
                 continue
             }
+            if let native = BarToken(rawValue: token.lowercased()) {
+                let cell = StatusBarChipsCell(token: native)
+                cell.onPick = { [weak self] in self?.pick($0) }
+                cells.append(cell)
+                continue
+            }
             // Unknown tokens are skipped, not fatal: a typo must never
             // take down the bar.
             guard let url = StatusBarCatalog.match(token: token, files: files) else { continue }
@@ -381,16 +428,56 @@ final class StatusBarView: NSView {
         }
         for cell in cells { addSubview(cell) }
         applyTheme()
+        sync()
+    }
+
+    // Many changes land in one runloop turn (every pane restyles on a
+    // theme change): one refresh covers them.
+    private func syncSoon() {
+        guard !syncPending else { return }
+
+        syncPending = true
+        DispatchQueue.main.async { [weak self] in
+            self?.syncPending = false
+            self?.sync()
+        }
+    }
+
+    /// Re-read sessions and windows into the native cells.
+    func sync() {
+        let native = cells.compactMap { $0 as? StatusBarChipsCell }
+        guard let source, !native.isEmpty else { return }
+
+        let sessions = source.barSessions()
+        let windows = source.barWindows()
+        for cell in native {
+            cell.chips = BarChips.make(cell.token, sessions: sessions, windows: windows)
+        }
+        positionCells()
+    }
+
+    private func pick(_ target: BarTarget) {
+        switch target {
+        case .session(let name): source?.barOpen(session: name)
+        case .window(let id): source?.barFocus(window: id)
+        }
     }
 
     private func positionCells() {
         let spacing = GCTConfig.current.statusbarSpacing
         let inset: CGFloat = 8
-        let widths = cells.map { ($0 as? StatusBarCellView)?.measuredWidth() ?? 0 }
+        var widths = cells.map { ($0 as? StatusBarMeasured)?.measuredWidth() ?? 0 }
         let gapCount = cells.filter { $0 is StatusBarGapView }.count
         let fixed = widths.reduce(0, +) + spacing * CGFloat(max(0, cells.count - 1))
         let avail = max(0, bounds.width - inset * 2)
-        let gapW: CGFloat = gapCount > 0 ? max(0, (avail - fixed) / CGFloat(gapCount)) : 0
+        // Too crowded: the window strip gives way, it is the elastic one.
+        let squeeze = fixed - avail
+        if squeeze > 0,
+           let i = cells.firstIndex(where: { ($0 as? StatusBarChipsCell)?.token == .windows }) {
+            widths[i] = max(0, widths[i] - squeeze)
+        }
+        let fixedFit = widths.reduce(0, +) + spacing * CGFloat(max(0, cells.count - 1))
+        let gapW: CGFloat = gapCount > 0 ? max(0, (avail - fixedFit) / CGFloat(gapCount)) : 0
         var x = inset
         for (i, cell) in cells.enumerated() {
             let w = cell is StatusBarGapView ? gapW : widths[i]

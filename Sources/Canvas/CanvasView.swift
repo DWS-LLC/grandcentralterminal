@@ -450,6 +450,7 @@ final class CanvasView: NSView {
         bar.onTerminal = { [weak self] exe, args in
             self?.openCommandInPane(exe, args: args)
         }
+        bar.source = self
         statusBar = bar
         addSubview(bar)
         layoutStatusBar()
@@ -487,6 +488,8 @@ final class CanvasView: NSView {
         case .bottom: y = 0
         }
         bar.frame = NSRect(x: 0, y: y, width: bounds.width, height: h)
+        // On top it sits in the strip the canvas fades in: the canvas is its backdrop.
+        bar.fadeHeight = GCTConfig.current.statusbarPosition == .top ? topFadeHeight : 0
         bar.refresh()
     }
 
@@ -3224,6 +3227,7 @@ final class CanvasView: NSView {
         pane.removeFromSuperview()
         panes.removeValue(forKey: id)
         paneRecency.forget(id)
+        NotificationCenter.default.post(name: .gctBarChanged, object: nil)
         zOrder.removeAll { $0 == id }
         selectedIDs.remove(id)
         commandGroups.forget(id)

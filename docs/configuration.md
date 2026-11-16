@@ -29,10 +29,10 @@ appearance = "system"
 # Window placement. Panes are kept from overlapping unless you allow it:
 # new panes, moves, and resizes all resolve collisions.
 allow-window-overlap = false
-# Forced padding between windows in world points (0-256, default 0 = flush).
+# Forced padding between windows in world points (0-256, default 8; 0 = flush).
 # Raising it re-spreads existing panes on reload-config (and next launch);
 # lowering it only affects future moves.
-window-gap = 0
+window-gap = 8
 # A half-typed key sequence (ctrl+b of ctrl+b>c) is dropped after this many
 # seconds (0-600, default 2; 0 waits for ever).
 sequence-timeout = 2
@@ -43,7 +43,7 @@ sequence-timeout = 2
 # siblings; whole-group drags snap the group border to ungrouped panes and
 # foreign group borders; ungrouped panes snap to ungrouped panes and group
 # borders, never into grouped members.
-snapping = true
+snapping = false
 snapping-type = "edges"  # edges | center | all
 snap-radius = 16         # screen points, constant feel at any zoom
 show-snap-guides = true
@@ -73,9 +73,10 @@ move-focus-on-new-window = true
 # (zoom to fit). Runs on release, only for a click, never a drag.
 camera-on-focus-click = "center"
 # Directional focus moves (cmd+h/j/k/l): center the new pane and/or zoom to
-# fit it. Independent; both true just zooms to fit.
-camera-follows-focus-move = true
-camera-fits-focus-move = true
+# fit it. Independent; both true just zooms to fit, both false (default)
+# leaves the camera alone.
+camera-follows-focus-move = false
+camera-fits-focus-move = false
 # cmd+h/j/k/l remember where you came from: the opposite key goes back to
 # that pane, even when staggered panes make another one nearer.
 focus-move-memory = true
@@ -96,7 +97,7 @@ dim-delay = 4
 notifications = true
 # Cables from a pane to the panes it spawned, with slidable ties
 # (drag across cables to add one, double-click a tie to remove it).
-cables = true
+cables = false
 # "auto": each cable gets a palette color hashed from its start -> end window
 # names when it first appears. Or one hex or "palette:N" for every cable.
 cable-color = "auto"
@@ -180,8 +181,8 @@ text-light = "default"
 border = "default"        # side/bottom border fill
 accent = "default"        # selected / zoomed pane chrome (default: ghostty blue)
 shadow-color = "default"  # default: black
-font = "default"        # family name, e.g. "SF Mono"
-font-size = 12
+font = "default"        # family name, e.g. "SF Mono"; default = macOS window title font
+font-size = 13          # titlebar is 35pt tall at 13pt and scales with the font
 # Border on the left/right/bottom edges in points. Wider is easier to grab
 # for resizing, even zoomed out.
 border-width = 4
@@ -196,23 +197,35 @@ cleared when you type into the pane.
 
 ## `[statusbar]`
 
-Overlay bar of xbar-compatible plugins. Any executable in
+Overlay bar, on by default along the top. Any executable in
 `~/.config/gct/statusbar/` named `{name}.{interval}.{ext}` (e.g.
-`clock.10s.sh`) is picked up live, no restart.
+`clock.10s.sh`) is an xbar-compatible component, picked up live, no restart.
+Three native tokens need no plugin: `session` (the session on screen),
+`sessions` (the other attached ones, orange with a count when one has news;
+both wear the session's host color, as its panes do),
+and `windows` (this session's panes as chips, left to right as laid out, with
+the titlebar's markers: `◌` working, `▲` blocked, `✓` done, `✕` error or
+ended, `○` offline, `●` news, then `⤢` zoomed and `⬆` floating). Click a session to switch to it, a window to go
+there. Too many windows squeeze evenly, then the last drop off.
+On top, while the canvas fades into the menubar (`top-fade`), the bar paints no
+background of its own: the canvas is its backdrop, so there's no stripe. Set
+`background` (a hex, or `palette:N` for a color of your Ghostty theme) and it
+paints; so it does at the bottom, or with `top-fade = 0`.
 
 ```toml
 [statusbar]
-enabled = false
-position = "bottom"          # top | bottom
-# Ordered cells: plugin basenames plus `gap` spacers that absorb leftover
-# width. component-gap-component-gap-component = left/center/right.
-components = "clock, gap"
-height = 26
+enabled = true
+position = "top"             # top | bottom
+# Ordered cells: plugin basenames, native tokens (session, sessions, windows)
+# and `gap` spacers that absorb leftover width.
+# component-gap-component-gap-component = left/center/right.
+components = "session, sessions, gap, windows, gap, clock"
+height = "auto"           # "auto" = the menubar's height, 24pt at most; or 16-64 points
 spacing = 8
 background = "default"       # background-dark / -light, text-dark / -light too
 text = "default"
-font = "default"
-font-size = 12
+font = "default"          # default = the menubar font
+font-size = 13
 opacity = 1                  # 0-1
 ```
 
@@ -249,7 +262,7 @@ toggle = "ctrl+space"    # global; named keys work (space, f1-f12...)
 animation = "fade"       # fade | slide
 animation-duration = 0.2
 screen = "mouse"         # mouse | main | menubar
-start-hidden = true      # launch ordered-out; hotkey summons
+start-hidden = false     # true = launch ordered-out; hotkey summons
 launch-at-login = false  # login item (also in system Settings)
 ```
 

@@ -270,7 +270,7 @@ struct GCTDoom {
     var animation = DoomAnimation.fade
     var animationDuration = 0.2
     var screen = DoomScreen.mouse
-    var startHidden = true
+    var startHidden = false
     var launchAtLogin = false
 }
 
@@ -382,7 +382,7 @@ struct GCTConfig {
     var accent = GCTModeColor()
     var shadowColor = GCTModeColor()
     var titlebarFont: String?
-    var titlebarFontSize: CGFloat = 12
+    var titlebarFontSize: CGFloat = 13
     // Pane chrome: border on the left/right/bottom edges in points (the
     // top edge hides behind the titlebar itself; same color as the
     // titlebar), plus the drop shadow. shadow-opacity 0 turns it off.
@@ -397,20 +397,20 @@ struct GCTConfig {
     // slide around or hold instead). Keyboard grow always shoves.
     var allowMouseDragToPush = false
     // Minimum padding between windows in world points (0-256, default
-    // 0 = flush). Collision resolves (create/move/resize, keyboard
+    // 8; 0 = flush). Collision resolves (create/move/resize, keyboard
     // grow, group shoves) keep at least this much air; snapping still
     // lands flush, then the gap resolve pushes back out to the gap.
     // Raising it re-spreads existing panes on reload-config (and on
     // next launch); lowering it only affects future moves.
-    var windowGap: CGFloat = 0
+    var windowGap: CGFloat = 8
     // A half-typed key sequence ("ctrl+b" of "ctrl+b>c") is dropped after
     // this long. 0 waits for ever.
     var sequenceTimeout: TimeInterval = 2
     // Magnetic window snapping: dragging or resizing a pane within
     // snap-radius pulls it flush with nearby panes and lights
-    // full-canvas guide lines. On by default; the toggle-snapping
+    // full-canvas guide lines. Off by default; the toggle-snapping
     // keybind flips it at runtime (never re-lays-out existing panes).
-    var snapping = true
+    var snapping = false
     // Which anchors lock: edges (min/max, default), center (mid), or
     // all. Resize always uses the moving edge; this picks the foreign
     // anchors it (and moves) can land on.
@@ -439,9 +439,10 @@ struct GCTConfig {
     // never moves the camera under the cursor).
     var cameraOnFocusClick = GCTClickCamera.center
     // Directional focus moves (cmd+h/j/k/l): center the newly focused
-    // pane, and/or zoom to fit it. Independent; both default true (fit
-    var cameraFollowsFocusMove = true
-    var cameraFitsFocusMove = true
+    // pane, and/or zoom to fit it. Independent; both default false (the
+    // camera stays put); fit implies centered.
+    var cameraFollowsFocusMove = false
+    var cameraFitsFocusMove = false
     // cmd+h/j/k/l remember where you came from: the opposite key goes
     // back, staggered layouts included.
     var focusMoveMemory = true
@@ -460,7 +461,7 @@ struct GCTConfig {
     // and `gctd notify`, from panes you are not looking at.
     var notifications = true
     // Cables between a pane and the panes it spawned, with slidable ties.
-    var cables = true
+    var cables = false
     // nil = a palette color per cable, hashed from its window names; else
     // one hex or palette:N for every cable.
     var cableColor: String?
@@ -481,12 +482,14 @@ struct GCTConfig {
     // Camera glide length (focus moves, fit-all, gctd camera default).
     var cameraAnimDuration: Double = 0.28
     // Screen-space overlay bar of xbar-compatible plugin components.
-    // Off by default; top/bottom edge; components lists plugin
-    // basenames with `gap` spacers absorbing leftover width.
-    var statusbarEnabled = false
-    var statusbarPosition = GCTStatusbarPosition.bottom
-    var statusbarComponents: [String] = ["clock", "gap"]
-    var statusbarHeight: CGFloat = 26
+    // On by default, along the top; components lists plugin basenames
+    // and native tokens (session, sessions, windows) with `gap` spacers
+    // absorbing leftover width.
+    var statusbarEnabled = true
+    var statusbarPosition = GCTStatusbarPosition.top
+    var statusbarComponents: [String] = ["session", "sessions", "gap", "windows", "gap", "clock"]
+    // nil = the menubar's own height.
+    var statusbarHeight: CGFloat?
     var statusbarSpacing: CGFloat = 8
     var statusbarBackground = GCTModeColor()
     var statusbarText = GCTModeColor()
@@ -497,7 +500,7 @@ struct GCTConfig {
     var switcherText = GCTModeColor()
     var switcherTextActive = GCTModeColor()
     var statusbarFont: String?
-    var statusbarFontSize: CGFloat = 12
+    var statusbarFontSize: CGFloat = 13
     var statusbarOpacity: CGFloat = 1
     var doom = GCTDoom()
     // Remote daemons: one [host.<name>] table each (name = canvas label).
@@ -867,18 +870,18 @@ struct GCTConfig {
     # Window placement. Panes are kept from overlapping unless you allow
     # it: new panes, moves, and resizes all resolve collisions.
     allow-window-overlap = false
-    # Minimum padding between windows in world points (0-256, default 0
-    # = flush). Every collision resolve keeps at least this much air.
+    # Minimum padding between windows in world points (0-256, default 8;
+    # 0 = flush). Every collision resolve keeps at least this much air.
     # Raising it re-spreads existing panes on reload-config (and next
     # launch); lowering it only affects future moves.
-    window-gap = 0
+    window-gap = 8
     # A half-typed key sequence (ctrl+b of ctrl+b>c) is dropped after this
     # many seconds (0-600, default 2; 0 waits for ever).
     sequence-timeout = 2
     # How long a `gctd open --keep-open` pane lingers after its program
     # ends (s, m, h, d; 0 = until closed). gctd reads this one, not the app.
     keep-open-ttl = "7d"
-    # Magnetic window snapping (on by default): dragging or resizing a
+    # Magnetic window snapping (off by default): dragging or resizing a
     # pane within snap-radius pulls it flush with nearby panes and
     # lights full-canvas guide lines (fast fade in/out). Toggling only
     # affects future drags — already-placed panes never jump.
@@ -886,7 +889,7 @@ struct GCTConfig {
     # group — never outside; whole-group drags snap the group border to
     # ungrouped panes and foreign group borders; ungrouped panes snap to
     # ungrouped panes and group borders (never into grouped members).
-    snapping = true
+    snapping = false
     # Which anchors lock: edges (default), center, or all. Resize always
     # uses the moving edge; this picks the foreign anchors it (and
     # moves) can land on.
@@ -917,11 +920,11 @@ struct GCTConfig {
     move-focus-on-new-window = true
     # Keyboard focus moves (cmd+h/j/k/l, switcher, gctd focus) and new
     # windows: center the newly focused pane, and/or zoom to fit it. Fit
-    # implies centered, so the default (both true) zooms to fit; set
-    # follows = true, fits = false to only recenter, both false to keep
-    # the camera still.
-    camera-follows-focus-move = true
-    camera-fits-focus-move = true
+    # implies centered, so both true zooms to fit; follows = true,
+    # fits = false only recenters. The default (both false) keeps the
+    # camera still.
+    camera-follows-focus-move = false
+    camera-fits-focus-move = false
     # cmd+h/j/k/l remember where you came from: the opposite key goes
     # back to that pane, even when staggered panes make another one
     # nearer. Set false for pure nearest-edge geometry.
@@ -947,7 +950,7 @@ struct GCTConfig {
     # Cables from a pane to the panes it spawned (gctd open, cmd+t from it).
     # Press on a cable and drag across strands to tie them together; drag a
     # tie to slide it, double-click it to remove.
-    cables = true
+    cables = false
     # "auto": each cable gets a palette color hashed from its start -> end
     # window names when it first appears. Or one hex ("#ff8800") or
     # "palette:N" (ghostty ANSI color N) for every cable.
@@ -1026,8 +1029,10 @@ struct GCTConfig {
     # Drop shadow color ("default" = black).
     shadow-color = "default"
     # Title text font: family name (e.g. "SF Mono") and size in points.
+    # "default" is macOS's own window title font, 13pt; the titlebar is
+    # 35pt tall at that size and grows with the font.
     font = "default"
-    font-size = 12
+    font-size = 13
     # Border on the left/right/bottom edges in points (the top edge is the
     # titlebar itself). Wider borders grab edges/corners for resizing more
     # easily, even zoomed out.
@@ -1042,25 +1047,30 @@ struct GCTConfig {
     # ~/.config/gct/statusbar/ named {name}.{interval}.{ext} (e.g.
     # clock.10s.sh). New plugins are picked up live — no recompile, no
     # restart. Flip `enabled` (or any key here) then reload-config.
-    enabled = false
+    enabled = true
     # Bar edge: "top" or "bottom". Always above panes on its own layer;
     # panes slide under it, never collide with it.
-    position = "bottom"
-    # Ordered cells: plugin basenames (clock matches clock.10s.sh) plus
-    # `gap` spacers that absorb leftover width, so
+    position = "top"
+    # Ordered cells: plugin basenames (clock matches clock.10s.sh), native
+    # tokens, and `gap` spacers that absorb leftover width, so
     # component-gap-component-gap-component aligns left/center/right.
-    components = "clock, gap"
-    # Bar height (16-64pt) and spacing between cells.
-    height = 26
+    # Native: session (the one on screen), sessions (the other attached
+    # ones, orange when one has news), windows (this session's panes,
+    # click to go there).
+    components = "session, sessions, gap, windows, gap, clock"
+    # Bar height (16-64pt) and spacing between cells. "auto" is the
+    # menubar's own height, 24pt at most (a notch doesn't fatten it).
+    height = "auto"
     spacing = 8
     # Colors: RGBA hex like "#1a1b26" or "#1a1b2680", or "default" for
     # the usual greys.
     # background-dark / -light and text-dark / -light override per mode.
     background = "default"
     text = "default"
-    # Font: family name (e.g. "SF Mono") and size in points.
+    # Font: family name (e.g. "SF Mono") and size in points. "default" is
+    # the menubar's own font, 13pt.
     font = "default"
-    font-size = 12
+    font-size = 13
 
     [switcher]
     # Pane switcher overlay colors, same hex / -dark / -light rules.
@@ -1095,7 +1105,7 @@ struct GCTConfig {
     # under the cursor), main, or menubar (the screen holding the menubar).
     screen = "mouse"  # mouse | main | menubar
     # Launch ordered-out (hotkey summons); false = visible on launch.
-    start-hidden = true
+    start-hidden = false
     # Register as a login item (also visible in system Settings).
     launch-at-login = false
 
@@ -1347,7 +1357,7 @@ struct GCTTheme {
         if let name = cfg.titlebarFont, let f = NSFont(name: name, size: size) {
             titleFont = f
         } else {
-            titleFont = .monospacedSystemFont(ofSize: size, weight: .medium)
+            titleFont = .titleBarFont(ofSize: size)
         }
         // Status bar: explicit colors or the usual dark/light greys.
         // Opacity stays in the view (it multiplies background alpha).
@@ -1381,7 +1391,7 @@ struct GCTTheme {
         if let name = cfg.statusbarFont, let f = NSFont(name: name, size: sbSize) {
             statusbarFont = f
         } else {
-            statusbarFont = .monospacedSystemFont(ofSize: sbSize, weight: .regular)
+            statusbarFont = .menuBarFont(ofSize: sbSize)
         }
     }
 

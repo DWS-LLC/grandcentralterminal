@@ -33,15 +33,19 @@ extension CanvasView {
         var byHost = [String: [AutoName.Pane]]()
 
         for pane in panes.values {
-            guard pane.meta.name == nil else {
+            let m = pane.meta
+            let auto = AutoName.Pane(
+                id: m.id, cwd: m.cwd, proc: m.proc, title: pane.reportedTitle,
+                repoRoot: m.repoRoot, worktree: m.worktree)
+            // The titlebar reads these even when the pane is named.
+            pane.titleParts = AutoName.parts(auto, home: m.host == "local" ? NSHomeDirectory() : "")
+
+            guard m.name == nil else {
                 pane.autoName = nil
                 continue
             }
 
-            let m = pane.meta
-            byHost[m.host, default: []].append(AutoName.Pane(
-                id: m.id, cwd: m.cwd, proc: m.proc, title: pane.reportedTitle,
-                repoRoot: m.repoRoot, worktree: m.worktree))
+            byHost[m.host, default: []].append(auto)
         }
 
         for (host, group) in byHost {

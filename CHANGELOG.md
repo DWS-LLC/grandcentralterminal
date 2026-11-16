@@ -3,6 +3,7 @@
 ## Unreleased
 
 ### Added
+- Status bar tokens `session`, `sessions` and `windows`: the session on screen, the other attached ones (orange with a count when one has news), and this session's panes as chips with the titlebar's markers. Click a session to switch, a window to focus it and center the camera on it.
 - Command groups, StarCraft style: select windows or groups, `⌘⇧1-9` stores them in a slot, `⌘1-9` brings them back: the session switches, they are selected and the camera fits them. A slot holds one session's windows and goes when they are all gone or that session detaches. Config names `command-group-assign-N` / `command-group-recall-N`.
 - A session with no windows says which one it is, in the middle of the canvas, with the key that opens a pane.
 - Plugins: a folder in `~/.config/gct/plugins/` with an `init.lua` that returns `{ setup = function(opts) end }`, started with the daemon like an autoload script and given its `[plugin.<name>]` table from `config.toml` (`enabled = false` keeps it off). `gctd plugin install owner/repo` (or a git URL, `--ref` for a branch, tag or commit), `list`, `update` and `remove` manage them, and `plugins.lock` pins each commit so another machine gets the same code. See docs/scripting.md.
@@ -29,6 +30,10 @@
 - Panes get `GCT_BIN_DIR`, the `gctd` matching their daemon, first on `PATH`. Startup files that rewrite `PATH` can bury it; see docs/agents.md.
 
 ### Changed
+- A status bar on top paints no background while the canvas fades into the menubar (`top-fade`): the canvas is its backdrop, so a translucent bar never shows as a stripe. Set `background`, or use a bottom bar or `top-fade = 0`, and it paints.
+- Titlebars read left to right like a sentence, a weight or shade per column: `claude  Spotter procedural weather  › ~/code/spotter`, the program in bold, what it is doing, then where it runs, dimmed, with the program's status on the right. A pane with nothing running is just its path, and a name you gave it stands for the task. Markers (`⌘1 ● ⤢ ⬆`) lead. The folder label (`claude · gct · …`) is gone from the title; switcher and window chips keep it, with an idle pane named by its full path.
+- Chrome at macOS's own size, measured off a Tahoe window: the status bar is the menubar's height, at most 24pt so a notch doesn't fatten it (`height = "auto"`) in the menubar font at 13pt; titlebars are 35pt under the macOS window title font at 13pt (they still grow with `font-size`); panes get 16pt outer corners and an 8pt rounded content area inside the 4pt border. Both used to be monospaced at 12pt (26pt bar, 22pt titlebar, 6pt corners).
+- New defaults: `snapping = false`, `window-gap = 8`, `cables = false`, `camera-follows-focus-move = false`, `camera-fits-focus-move = false`, `[doom] start-hidden = false`, and the status bar on, along the top: `session, sessions, gap, windows, gap, clock`. A config that sets them keeps its values.
 - The `⌘P` pane switcher and `⌘⇧P` palette are redrawn: a search pill (the palette's names the session it acts on), sections, a folder-first path under each pane, key hints along the bottom.
 - `⌘P` browses the panes of every attached session, a section each, and a pick in another session switches to it. The session rows are pickable too, and list every configured host: picking one that isn't attached attaches it. Panes are in the order you used them, like alt-tab: the one you were on before is already picked, so `⌘P ⏎` flips back.
 - The palette puts GCT's own actions before your scripts' and, inside each category, what you ran last first (kept across launches).

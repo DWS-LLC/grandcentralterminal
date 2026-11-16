@@ -2,12 +2,12 @@
 //
 //   proc / cwd / title / repo ──► label ──► unique across the canvas
 //
-//   idle shell        gct            repo, or the shortest dir that
-//                     gct/Canvas     tells it apart from every other
-//   editor, pager     nvim · gct     pane (tmux-window-name's trick)
-//   other program     make -j8 · gct
-//   coding agent      claude · gct · pip fit      task = program's title
-//   linked worktree   gct@feat-x
+//   idle shell        ~/code/gct     the cwd itself, home as ~
+//   editor, pager     nvim · gct     a program adds a dir label: the repo,
+//   other program     make -j8 · gct or the shortest dir that tells it apart
+//   coding agent      claude · gct · pip fit   from every other pane
+//   linked worktree   gct@feat-x     (tmux-window-name's trick); an agent's
+//                                    task = the program's title
 //
 // Pure and deterministic: same panes in, same names out. Stability over
 // time (a `ls` blip must not rename anything) is the caller's job; the
@@ -57,6 +57,7 @@ public enum AutoName {
     ]
 
     private static let separator = " · "
+    private static let maxTitleChars = 120
     private static let ellipsis = "…"
     private static let maxArgs = 2
     private static let maxArgChars = 24
@@ -68,16 +69,46 @@ public enum AutoName {
 
         for p in panes {
             let dir = dirs[p.cwd] ?? p.cwd
-            out[p.id] = compose(p, dir: dir)
+            out[p.id] = compose(p, dir: dir, path: path(p.cwd, home: home))
         }
         return out
     }
 
+    // MARK: Parts
+
+    /// A pane's title as columns, read left to right like a sentence:
+    /// "claude  Spotter procedural weather  › ~/code/spotter" is the program,
+    /// what it is doing, where it runs.
+    public struct Parts: Sendable, Equatable {
+        public var program: String?  // nil = an idle shell
+        public var task: String?     // an agent's own title for the work
+        public var path: String?     // nil when the cwd means nothing (ssh)
+        public init(program: String? = nil, task: String? = nil, path: String? = nil) {
+            self.program = program; self.task = task; self.path = path
+        }
+    }
+
+    public static func parts(_ p: Pane, home: String) -> Parts {
+        let where_ = path(p.cwd, home: home)
+        guard let cmd = Command(p.proc), !shells.contains(cmd.name) else {
+            return Parts(path: where_)
+        }
+
+        if agents.contains(cmd.name) {
+            return Parts(program: cmd.name, task: task(p.title, limit: maxTitleChars), path: where_)
+        }
+        if dirPrograms.contains(cmd.name) { return Parts(program: cmd.name, path: where_) }
+
+        let shown = ([cmd.name] + cmd.args.prefix(maxArgs).map(shortArg)).joined(separator: " ")
+        return Parts(program: shown, path: dirless.contains(cmd.name) ? nil : where_)
+    }
+
     // MARK: Compose
 
-    private static func compose(_ p: Pane, dir: String) -> String {
-        guard let cmd = Command(p.proc) else { return dir }
-        if shells.contains(cmd.name) { return dir }
+    // Nothing running: the pane is named for where it sits, in full.
+    private static func compose(_ p: Pane, dir: String, path: String) -> String {
+        guard let cmd = Command(p.proc) else { return path }
+        if shells.contains(cmd.name) { return path }
 
         if agents.contains(cmd.name) {
             return ([cmd.name, dir, task(p.title)].compactMap { $0 }).joined(separator: separator)
@@ -94,13 +125,13 @@ public enum AutoName {
 
     // "⠂ Fix pip bug" -> "Fix pip bug"; spinner glyphs and the agent's own
     // name carry no task.
-    private static func task(_ title: String?) -> String? {
+    private static func task(_ title: String?, limit: Int = maxTaskChars) -> String? {
         guard let title else { return nil }
 
         let text = title.drop { !$0.isLetter && !$0.isNumber }
             .trimmingCharacters(in: .whitespaces)
         guard !text.isEmpty, !genericTitles.contains(text.lowercased()) else { return nil }
-        return clip(text, maxTaskChars)
+        return clip(text, limit)
     }
 
     private static func shortArg(_ arg: String) -> String {
@@ -143,6 +174,14 @@ public enum AutoName {
             let trimmed = word.drop { $0 == "-" }
             return (String(trimmed) as NSString).lastPathComponent
         }
+    }
+
+    // "/Users/me/p/gct" under home "/Users/me" -> "~/p/gct".
+    private static func path(_ cwd: String, home: String) -> String {
+        if cwd == home { return "~" }
+        guard !home.isEmpty, cwd.hasPrefix(home + "/") else { return cwd }
+
+        return "~" + cwd.dropFirst(home.count)
     }
 
     // MARK: Directories

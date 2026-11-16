@@ -103,6 +103,7 @@ extension CanvasView {
             title += " · \(canvases.count) attached"
         }
         window?.title = title
+        NotificationCenter.default.post(name: .gctBarChanged, object: nil)
     }
 
     /// The new session's welcome landed (or we gave up waiting): show it,

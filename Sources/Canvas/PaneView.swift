@@ -5,10 +5,14 @@ import AppKit
 import Common
 
 final class PaneView: NSView {
-    private static let baseTitleBarHeight: CGFloat = 22
-    private static let baseTitleFontSize: CGFloat = 12
+    // Measured off a macOS window: a 35pt toolbar under 13pt text, 16pt
+    // outer corners, an 8pt rounded content area inside a 4pt border.
+    private static let baseTitleBarHeight: CGFloat = 35
+    private static let baseTitleFontSize: CGFloat = 13
+    private static let cornerRadius: CGFloat = 16
+    private static let innerRadius: CGFloat = 8
 
-    // Scales with the title font (22pt at 12pt, 44pt at 24pt); never
+    // Scales with the title font (35pt at 13pt, 70pt at 26pt); never
     // shrinks below the base so small fonts keep the old bar.
     static var titleBarHeight: CGFloat {
         let size = GCTTheme.current.titleFont.pointSize
@@ -43,6 +47,8 @@ final class PaneView: NSView {
     // Command groups this pane is in (⌘1, ⌘3...), badged first in the title.
     var commandSlots = [Int]() { didSet { if commandSlots != oldValue { applyChrome() } } }
     var displayName: String { meta.name ?? autoName ?? "Terminal" }
+    // The title as columns (program, task, path), set by the canvas.
+    var titleParts: AutoName.Parts? { didSet { if titleParts != oldValue { applyChrome() } } }
 
     var isFocused = false { didSet { applyChrome() } }
     // Multi-select: staged by right-drag/shift+click, acts as a unit for
@@ -65,14 +71,14 @@ final class PaneView: NSView {
         super.init(frame: NSRect(x: meta.rect.x, y: meta.rect.y,
                                  width: meta.rect.w, height: meta.rect.h))
         wantsLayer = true
-        layer?.cornerRadius = 6
+        layer?.cornerRadius = Self.cornerRadius
         layer?.masksToBounds = false
 
         titlebar.wantsLayer = true
         titlebar.autoresizingMask = [.width]
         // Square titlebar corners would poke past the pane's rounded
         // corners; round just the top pair to match.
-        titlebar.layer?.cornerRadius = 6
+        titlebar.layer?.cornerRadius = Self.cornerRadius
         titlebar.layer?.maskedCorners = [.layerMinXMaxYCorner, .layerMaxXMaxYCorner]
         titlebar.layer?.masksToBounds = true
         addSubview(titlebar)
@@ -90,12 +96,12 @@ final class PaneView: NSView {
         surfaceHostView.autoresizingMask = []
         addSubview(surfaceHostView)
 
-        dimLayer.cornerRadius = 6
+        dimLayer.cornerRadius = Self.cornerRadius
         dimLayer.opacity = 0
         dimLayer.zPosition = 1
         layer?.addSublayer(dimLayer)
 
-        endedLayer.cornerRadius = 6
+        endedLayer.cornerRadius = Self.cornerRadius
         endedLayer.opacity = 0
         endedLayer.zPosition = 1
         endedLayer.backgroundColor = NSColor.black.cgColor
@@ -140,7 +146,6 @@ final class PaneView: NSView {
     func markEnded() {
         meta.exited = true
         applyChrome()
-        titleLabel.string = titleText
     }
 
     // Daemon truth (name/color/group) without touching the frame: the
@@ -250,11 +255,10 @@ final class PaneView: NSView {
         surfaceHostView.frame = NSRect(x: bw, y: bw,
                                        width: max(0, w - bw * 2),
                                        height: max(0, h - PaneView.titleBarHeight - bw))
-        // Concentric rounding: square terminal corners would poke past
-        // the pane's rounded border at wide border widths.
-        let inner: CGFloat = max(0, 6 - bw)
+        // A rounded content area, like a macOS window's. Never rounder than
+        // concentric with the pane's corners, or it would poke past a thin border.
+        let inner = max(0, min(Self.innerRadius, Self.cornerRadius - bw))
         surfaceHostView.layer?.cornerRadius = inner
-        surfaceHostView.layer?.maskedCorners = [.layerMinXMinYCorner, .layerMaxXMinYCorner]
         surfaceHostView.layer?.masksToBounds = inner > 0
 
         CATransaction.begin()
@@ -362,15 +366,16 @@ final class PaneView: NSView {
         layer?.shadowColor = t.shadowColor.cgColor
         titlebar.layer?.backgroundColor =
             (accent ? t.accent : isFocused ? t.titlebarBackgroundFocused : t.titlebarBackgroundUnfocused).cgColor
-        titleLabel.string = titleText
         // Remote host tint on the title text (keeps titlebar grey, adds
         // the color where the eye lands). Local panes keep theme text.
+        let titleColor: NSColor
         if !accent, let hc = hostColor {
-            titleLabel.foregroundColor = hc.cgColor
+            titleColor = hc
         } else {
-            titleLabel.foregroundColor =
-                ((isFocused || isZoomed) ? t.titlebarTextFocused : t.titlebarTextUnfocused).cgColor
+            titleColor = (isFocused || isZoomed) ? t.titlebarTextFocused : t.titlebarTextUnfocused
         }
+        titleLabel.foregroundColor = titleColor.cgColor
+        titleLabel.string = titleString(titleColor)
         titleLabel.font = t.titleFont
         titleLabel.fontSize = t.titleFont.pointSize
         // Program status: same font, theme text color. blocked/error
@@ -394,28 +399,58 @@ final class PaneView: NSView {
         statusLabel.font = t.titleFont
         statusLabel.fontSize = t.titleFont.pointSize
         layoutChrome()
+        NotificationCenter.default.post(name: .gctBarChanged, object: nil)
     }
 
     private static let offlineAlpha: CGFloat = 0.5
+    // The "where" column sits back from the program and task.
+    private static let whereAlpha: CGFloat = 0.6
 
-    private var titleText: String {
-        // Remote panes lead with [host] so the owner reads in the
-        // switcher, screenshots, and anywhere the title goes. Local
-        // panes keep the existing "host – name – cwd" shape ("local"
-        // elided: it was always "local – Terminal – …" before).
-        let kind = displayName
-        let command = commandSlots.map { "⌘\($0) " }.joined()
-        let pin = meta.floating ? "⬆ " : ""
-        let zoom = isZoomed ? "⤢ " : ""
-        let notice = hasNotice ? "● " : ""
-        // Its host's link is down: kept in the layout, input goes nowhere.
-        let offline = meta.offline ? "○ " : ""
-        let ended = meta.exited ? "✕ " : ""
-        let cwd = Self.tilde(meta.cwd, local: meta.host == "local" || meta.host.isEmpty)
-        if meta.host == "local" || meta.host.isEmpty {
-            return "\(command)\(notice)\(ended)\(zoom)\(pin)\(kind) – \(cwd)"
+    // The title reads left to right like a sentence, one weight or shade a
+    // column, so the eye lands on the program first:
+    //
+    //   ⌘1 ⤢  claude  Spotter procedural weather  › ~/code/spotter
+    //   markers program   what it is doing          where it runs
+    //
+    // A pane with nothing running is just its path. A name you gave it
+    // stands for the task. Remote panes put [host] before the path. The
+    // path goes last, so a narrow pane truncates it first.
+    private func titleString(_ color: NSColor) -> NSAttributedString {
+        let t = GCTTheme.current
+        let fonts = NSFontManager.shared
+        let strong = fonts.convert(t.titleFont, toHaveTrait: .boldFontMask)
+        let plain = fonts.convert(t.titleFont, toNotHaveTrait: .boldFontMask)
+        let local = meta.host == "local" || meta.host.isEmpty
+        let parts = titleParts ?? AutoName.Parts(path: Self.tilde(meta.cwd, local: local))
+
+        let markers = [
+            commandSlots.map { "⌘\($0)" }.joined(separator: " "),
+            hasNotice ? "●" : "", local || !meta.offline ? "" : "○",
+            meta.exited ? "✕" : "", isZoomed ? "⤢" : "", meta.floating ? "⬆" : "",
+        ].filter { !$0.isEmpty }.joined(separator: " ")
+
+        let out = NSMutableAttributedString()
+        func add(_ text: String, _ font: NSFont, _ shade: NSColor) {
+            out.append(NSAttributedString(string: text, attributes: [
+                .font: font, .foregroundColor: shade]))
         }
-        return "\(command)\(notice)\(offline)\(ended)\(zoom)\(pin)[\(meta.host)] \(kind) – \(cwd)"
+
+        if !markers.isEmpty { add(markers + "  ", plain, color) }
+
+        var lead = [(String, NSFont)]()
+        if let program = parts.program { lead.append((program, strong)) }
+        if let what = meta.name ?? parts.task { lead.append((what, plain)) }
+        for (i, word) in lead.enumerated() {
+            add((i > 0 ? "  " : "") + word.0, word.1, color)
+        }
+
+        let place = [local ? nil : "[\(meta.host)]", parts.path]
+            .compactMap { $0 }.joined(separator: " ")
+        guard !place.isEmpty else { return out }
+
+        let dim = color.withAlphaComponent(Self.whereAlpha)
+        add((lead.isEmpty ? "" : "  › ") + place, plain, dim)
+        return out
     }
 
     // The cwd tail is what truncation eats first; "~" buys it back.
