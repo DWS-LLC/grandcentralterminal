@@ -21,6 +21,8 @@ final class SessionCanvas {
     var groupViews = [GroupID: GroupView]()
     // The session daemon's own peer hosts: the "New remote pane" rows.
     var peers = [PeerInfo]()
+    // Its daemon has told us what it holds; before that, empty means unknown.
+    var welcomed = false
 
     /// Panes wearing the "●" that nobody has looked at yet.
     var unread: Int { panes.values.filter(\.hasNotice).count }

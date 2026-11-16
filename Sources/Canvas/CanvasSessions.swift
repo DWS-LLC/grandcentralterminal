@@ -117,6 +117,7 @@ extension CanvasView {
 
             self.sessionFadePending = false
             self.fadeWorld(to: 1, seconds: Self.fadeInSecs)
+            self.refreshEmptyHint()
         }
     }
 
@@ -218,6 +219,27 @@ extension CanvasView {
             title += "  ● \(canvas.unread)"
         }
         return title
+    }
+
+    // Where a session stands, for the pane browser's session rows.
+    private func sessionNote(_ name: String) -> String {
+        guard let canvas = canvases[name] else {
+            return attaching.contains(name) ? "attaching…" : "select to attach"
+        }
+
+        if name != LocalHost, hub.conn(forOwner: name) == nil {
+            return "reconnecting…"
+        }
+        guard name != session, canvas.unread > 0 else { return "" }
+
+        return "● \(canvas.unread)"
+    }
+
+    /// Every configured session, attached or not: the pane browser's rows.
+    func switcherSessions() -> [SwitcherSession] {
+        ([LocalHost] + GCTConfig.current.remotes.map(\.name)).map {
+            SwitcherSession(name: $0, note: sessionNote($0))
+        }
     }
 
     /// "Session": every configured host, attached or not. Picking one

@@ -22,8 +22,9 @@ extension CanvasView: CanvasConnDelegate {
             refreshGroupViews()
             // A parked session just fills in; camera and fade are the viewed one's.
             let viewed = owner == session
+            let seeding = owner == "local" && mappedPanes.isEmpty && !firstRunHandled
             if owner == "local" {
-                if mappedPanes.isEmpty && !firstRunHandled {
+                if seeding {
                     // Empty canvas: seed one pane at the origin.
                     firstRunHandled = true
                     let r = newPaneRect()
@@ -41,6 +42,11 @@ extension CanvasView: CanvasConnDelegate {
             } else if !mappedPanes.isEmpty && viewed {
                 restoreSessionCamera()
             }
+            // A seeded canvas has its first pane on the way: empty isn't final.
+            if !seeding {
+                cur.welcomed = true
+            }
+            refreshEmptyHint()
             if viewed {
                 endSessionFade()
             }

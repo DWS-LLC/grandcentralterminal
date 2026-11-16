@@ -3,6 +3,7 @@
 ## Unreleased
 
 ### Added
+- A session with no windows says which one it is, in the middle of the canvas, with the key that opens a pane.
 - Plugins: a folder in `~/.config/gct/plugins/` with an `init.lua` that returns `{ setup = function(opts) end }`, started with the daemon like an autoload script and given its `[plugin.<name>]` table from `config.toml` (`enabled = false` keeps it off). `gctd plugin install owner/repo` (or a git URL, `--ref` for a branch, tag or commit), `list`, `update` and `remove` manage them, and `plugins.lock` pins each commit so another machine gets the same code. See docs/scripting.md.
 - Command palette, `⌘⇧P` (`command-palette`): GCT's own actions and every script action with a `title` (`gct.action{name=, title=, description=, category=, keywords=, args=, run=}`), filtered as you type. `args = { count = "integer", note = "string?" }` makes the palette ask for each first. A script's entries go when the script does. Protocol 11; an older daemon just shows none.
 - `gctd lua` runs a Lua script against the daemon, in the style of Rex's `rex do`: `gct.pane.*` to open, wait on, dump and arrange panes, `gct.on` handlers for events (`pane_created`, `terminal.child_exited`, `terminal.pwd_changed`, `view_changed`, host links...), `gct.wait`, timers, `gct.exec`, `gct.json`, and Rex's layout builders. The script runs in the `gctd lua` process, never inside the daemon. See docs/scripting.md.
@@ -27,6 +28,10 @@
 - Panes get `GCT_BIN_DIR`, the `gctd` matching their daemon, first on `PATH`. Startup files that rewrite `PATH` can bury it; see docs/agents.md.
 
 ### Changed
+- The `⌘P` pane switcher and `⌘⇧P` palette are redrawn: a search pill (the palette's names the session it acts on), sections, a folder-first path under each pane, key hints along the bottom.
+- `⌘P` browses the panes of every attached session, a section each, and a pick in another session switches to it. The session rows are pickable too, and list every configured host: picking one that isn't attached attaches it. Panes are in the order you used them, like alt-tab: the one you were on before is already picked, so `⌘P ⏎` flips back.
+- The palette puts GCT's own actions before your scripts' and, inside each category, what you ran last first (kept across launches).
+- The palette lists the session on screen's script actions, not every attached daemon's, so a pick runs on the machine you are looking at.
 - Nothing dials a `[host.<name>]` until you attach it, and attachments don't survive a relaunch. Hosts in `config.toml` are only available. A dropped attached host redials every 60s until you detach it.
 - `gctd open` no longer orbits the calling pane: spawns land flush beside it and keep `window-gap` air, like any other placement. The cable to the caller stays.
 - `⌘⇧A` spaces panes by exactly `window-gap`. The tree used to keep at least 48 points and stretch parent-to-children gaps up to 640.

@@ -1,144 +1,164 @@
-// ⌘P pane switcher: type-to-filter, arrows/enter, jump with camera zoom.
+// ⌘P pane browser: every attached session's panes, a section per session, in
+// the order you used them, like alt-tab. The look is PickerCard's.
+//
+//   most recent first            ┌ local ───────┐   a session sits where its
+//   [ a(local) b(serenity)       │ a   c        │   freshest pane does; the pane
+//     c(local) d(serenity)  ─►   ├ serenity ────┤   you were on before is picked
+//     enterprise: not attached ] │ b   d        │
+//                                └ enterprise ──┘   a session row is pickable too:
+//                                                   it switches there, attaching first
 
 import AppKit
 import Common
 
-final class SwitcherView: NSView, NSTextFieldDelegate, NSTableViewDataSource, NSTableViewDelegate {
-    var onSelect: ((PaneID) -> Void)?
+private let filterPlaceholder = "jump to pane or session…"
+private let paneSymbol = "terminal"
+private let localSymbol = "laptopcomputer"
+private let remoteSymbol = "server.rack"
+private let currentMark = "current"
+
+private let jumpHints = [
+    PickerHint(key: "⏎", what: "jump"), PickerHint(key: "↑↓", what: "select"),
+    PickerHint(key: "esc", what: "close"),
+]
+
+// A pane and the session it lives in.
+struct SwitcherPane {
+    let session: String
+    let meta: PaneMeta
+}
+
+// A session you can go to, and where it stands ("● 2", "select to attach").
+struct SwitcherSession {
+    let name: String
+    let note: String
+}
+
+// What a row does when picked.
+private enum Pick {
+    case session(String)
+    case pane(SwitcherPane)
+}
+
+final class SwitcherView: NSView {
+    var onSelect: ((String, PaneID) -> Void)?
+    var onSession: ((String) -> Void)?
     var onDismiss: (() -> Void)?
 
-    private let field = NSTextField(frame: .zero)
-    private let table = NSTableView(frame: .zero)
-    private let scroll = NSScrollView(frame: .zero)
-    private var all = [PaneMeta]()
-    private var order = [PaneID]()
-    private var filtered = [PaneMeta]()
+    private let card = PickerCard(frame: .zero)
+    // Most recently used first, the pane you are on leading.
+    private var all = [SwitcherPane]()
+    private var current: PaneID?
+    // Every configured session, attached or not, in config order.
+    private var sessions = [SwitcherSession]()
+    // What the rows do, in the order they show them.
+    private var picks = [Pick]()
 
     override init(frame: NSRect) {
         super.init(frame: frame)
-        wantsLayer = true
-        layer?.backgroundColor = GCTTheme.current.switcherBackground.cgColor
-        layer?.cornerRadius = 10
-        layer?.borderWidth = 1
-        layer?.borderColor = GCTTheme.current.switcherBorder.cgColor
-        layer?.shadowOpacity = 0.6
-        layer?.shadowRadius = 30
-
-        field.isBordered = false
-        field.backgroundColor = .clear
-        field.focusRingType = .none
-        field.font = .monospacedSystemFont(ofSize: 14, weight: .regular)
-        field.textColor = .white
-        field.placeholderString = "jump to pane…"
-        field.delegate = self
-        field.frame = NSRect(x: 16, y: frame.height - 44, width: frame.width - 32, height: 28)
-        field.autoresizingMask = [.maxXMargin, .minYMargin]
-        addSubview(field)
-
-        table.dataSource = self
-        table.delegate = self
-        table.headerView = nil
-        table.backgroundColor = .clear
-        table.rowHeight = 26
-        table.intercellSpacing = NSSize(width: 0, height: 0)
-        let col = NSTableColumn(identifier: .init("p"))
-        table.addTableColumn(col)
-        table.doubleAction = #selector(activateRow)
-        table.target = self
-
-        scroll.documentView = table
-        scroll.hasVerticalScroller = false
-        scroll.backgroundColor = .clear
-        scroll.drawsBackground = false
-        scroll.frame = NSRect(x: 10, y: 10, width: frame.width - 20, height: frame.height - 64)
-        scroll.autoresizingMask = [.width, .height]
-        addSubview(scroll)
+        card.frame = bounds
+        card.autoresizingMask = [.width, .height]
+        card.placeholder = filterPlaceholder
+        card.hints = jumpHints
+        card.onType = { [weak self] in self?.applyFilter($0) }
+        card.onEnter = { [weak self] in self?.activate() }
+        card.onEscape = { [weak self] in self?.close() }
+        addSubview(card)
     }
 
     required init?(coder: NSCoder) { fatalError() }
 
     override var acceptsFirstResponder: Bool { true }
 
-    func present(_ panes: [PaneMeta], order: [PaneID]) {
-        all = panes
-        self.order = order
+    // `used` is every pane id, most recent first.
+    func present(sessions: [SwitcherSession], panes: [SwitcherPane],
+                 used: Recency<PaneID>, current: PaneID?) {
+        self.sessions = sessions
+        all = used.sorted(panes, by: { $0.meta.id })
+        self.current = current
         applyFilter("")
-        window?.makeFirstResponder(field)
+        card.focus()
     }
 
     func dismiss() {
         removeFromSuperview()
     }
 
-    private func applyFilter(_ q: String) {
-        let needle = q.lowercased()
-        let rows = order.compactMap { id -> PaneMeta? in
-            guard let m = all.first(where: { $0.id == id }) else { return nil }
-            let hay = ((m.name ?? "") + " " + m.cwd + " " + m.host).lowercased()
-            return needle.isEmpty || hay.contains(needle) ? m : nil
-        }
-        filtered = rows
-        table.reloadData()
-        if !filtered.isEmpty {
-            table.selectRowIndexes([0], byExtendingSelection: false)
-        }
-    }
-
-    // MARK: Field delegate
-
-    func controlTextDidChange(_ obj: Notification) {
-        applyFilter(field.stringValue)
-    }
-
-    func control(_ control: NSControl, textView: NSTextView,
-                 doCommandBy commandSelector: Selector) -> Bool {
-        switch commandSelector {
-        case #selector(NSResponder.insertNewline(_:)):
-            activateRow()
-            return true
-        case #selector(NSResponder.cancelOperation(_:)):
-            dismiss(); onDismiss?()
-            return true
-        case #selector(NSResponder.moveDown(_:)):
-            moveSelection(1); return true
-        case #selector(NSResponder.moveUp(_:)):
-            moveSelection(-1); return true
-        default:
-            return false
-        }
-    }
-
-    private func moveSelection(_ delta: Int) {
-        guard !filtered.isEmpty else { return }
-        let current = max(0, table.selectedRow)
-        let next = min(filtered.count - 1, max(0, current + delta))
-        table.selectRowIndexes([next], byExtendingSelection: false)
-        table.scrollRowToVisible(next)
-    }
-
-    @objc private func activateRow() {
-        let row = max(0, table.selectedRow)
-        guard row < filtered.count else { return }
-        let id = filtered[row].id
+    private func close() {
         dismiss()
         onDismiss?()
-        onSelect?(id)
     }
 
-    // MARK: Table
+    // MARK: List
 
-    func numberOfRows(in tableView: NSTableView) -> Int { filtered.count }
+    private func applyFilter(_ q: String) {
+        let needle = q.lowercased()
+        let matches = all.filter {
+            let hay = (($0.meta.name ?? "") + " " + $0.meta.cwd + " " + $0.meta.host + " " + $0.session).lowercased()
+            return needle.isEmpty || hay.contains(needle)
+        }
 
-    func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?,
-                   row: Int) -> NSView? {
-        let m = filtered[row]
-        let text = NSTextField(labelWithString:
-            "\(m.name ?? "Terminal")  ·  \(m.cwd)  ·  \(m.host)")
-        text.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
-        let theme = GCTTheme.current
-        text.textColor = (m.id == order.last) ? theme.switcherTextActive : theme.switcherText
-        return text
+        var items = [PickerItem]()
+        picks = []
+        for name in shown(for: matches, needle: needle) {
+            let symbol = name == LocalHost ? localSymbol : remoteSymbol
+            let note = sessions.first { $0.name == name }?.note ?? ""
+            items.append(.host(title: name, symbol: symbol, note: note))
+            picks.append(.session(name))
+
+            for p in matches where p.session == name {
+                items.append(.line(line(of: p)))
+                picks.append(.pane(p))
+            }
+        }
+
+        // Typing picks the best pane; an empty box picks the one you were on before.
+        let target = needle.isEmpty ? (matches.dropFirst().first ?? matches.first) : matches.first
+        let at = target.flatMap { t in
+            picks.firstIndex { if case .pane(let p) = $0 { return p.meta.id == t.meta.id } else { return false } }
+        }
+        card.setItems(items, select: at.map { .line($0) } ?? .first)
     }
 
-    func tableView(_ tableView: NSTableView, heightOfRow row: Int) -> CGFloat { 26 }
+    // Sessions with panes on show, by their freshest pane (`panes` is already by
+    // recency); then the others, in config order, if the box doesn't rule them out.
+    private func shown(for panes: [SwitcherPane], needle: String) -> [String] {
+        var out = [String]()
+        for p in panes where !out.contains(p.session) {
+            out.append(p.session)
+        }
+
+        let rest = sessions.map(\.name).filter {
+            !out.contains($0) && (needle.isEmpty || $0.lowercased().contains(needle))
+        }
+
+        return out + rest
+    }
+
+    // "~/projects/" dim and "gct" bright: the folder is what you know a pane by.
+    // A pane whose pty runs on a peer says which one, where "current" would go.
+    private func line(of p: SwitcherPane) -> PickerLine {
+        let local = p.session == LocalHost
+        let path = local ? (p.meta.cwd as NSString).abbreviatingWithTildeInPath : p.meta.cwd
+        let folder = (path as NSString).lastPathComponent
+        let onPeer = p.meta.host != LocalHost && p.meta.host != p.session
+        let trailing = p.meta.id == current ? currentMark : (onPeer ? p.meta.host : "")
+
+        return PickerLine(symbol: paneSymbol, title: p.meta.name ?? "Terminal",
+                          subtitle: String(path.dropLast(folder.count)), strong: folder,
+                          trailing: trailing)
+    }
+
+    private func activate() {
+        guard let at = card.picked, at < picks.count else { return }
+
+        let pick = picks[at]
+        close()
+        switch pick {
+        case .session(let name):
+            onSession?(name)
+        case .pane(let p):
+            onSelect?(p.session, p.meta.id)
+        }
+    }
 }

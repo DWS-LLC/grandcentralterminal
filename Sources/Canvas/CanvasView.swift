@@ -206,6 +206,10 @@ final class CanvasView: NSView {
     // property self-clears after dismissal.
     private weak var switcher: SwitcherView?
     private weak var palette: PaletteView?
+    // Panes by when you last used them, across every session: the pane browser's order.
+    private var paneRecency = Recency<PaneID>()
+    // Names the session when it has no panes to say so.
+    private var emptyHint: EmptySessionView?
     var firstRunHandled = false
     // Screen-space overlay status bar (nil when disabled in config).
     var statusBar: StatusBarView?
@@ -291,8 +295,10 @@ final class CanvasView: NSView {
         refreshDim()
         autoNameRefresh.schedule()
         scheduleRenderZoom()
+        refreshEmptyHint()
 
         guard let id = canvas.focusedID, let pane = canvas.panes[id] else { return }
+        paneRecency.touch(id)
         pane.host?.setFocus(true)
         window?.makeFirstResponder(self)
 
@@ -1135,6 +1141,8 @@ final class CanvasView: NSView {
         }
         focusedID = id
         arrange.noteFocus(id)
+        // Hover focus (raise: false) sweeps past panes you never used.
+        if live, raise { paneRecency.touch(id) }
         guard live else {
             panes[id]?.isFocused = true
             if raise { bringToFront(id) }
@@ -3168,6 +3176,7 @@ final class CanvasView: NSView {
         pane.host?.close()
         pane.removeFromSuperview()
         panes.removeValue(forKey: id)
+        paneRecency.forget(id)
         zOrder.removeAll { $0 == id }
         selectedIDs.remove(id)
         // A dead pane never reports .arrow: drop its hover and hand here.
@@ -3189,6 +3198,7 @@ final class CanvasView: NSView {
             }
         }
         refreshGroupViews()
+        refreshEmptyHint()
     }
 
     enum PaneFocus { case focus, keep }
@@ -3232,6 +3242,8 @@ final class CanvasView: NSView {
         }
         refreshGroupViews()
         autoNameRefresh.schedule()
+        cur.welcomed = true
+        refreshEmptyHint()
 
         // Attach after the surface exists; the daemon answers with the
         // scrollback ring, then live output.
@@ -3788,9 +3800,12 @@ final class CanvasView: NSView {
         }
         let s = SwitcherView(frame: NSRect(x: bounds.midX - 320, y: bounds.midY - 240,
                                            width: 640, height: 480))
-        s.onSelect = { [weak self] id in
-            self?.focusPane(id)
-            self?.followFocus(id)
+        s.onSelect = { [weak self] session, id in
+            self?.jump(to: id, in: session)
+        }
+        // Attaches the host first when it isn't yet.
+        s.onSession = { [weak self] name in
+            self?.openSession(name)
         }
         s.onDismiss = { [weak self] in
             self?.window?.makeFirstResponder(self)
@@ -3798,13 +3813,54 @@ final class CanvasView: NSView {
         addSubview(s)
         switcher = s
         // Auto names stand in for missing custom names (also what you filter on).
-        s.present(panes.values.map { pane in
-            var m = pane.meta
-            m.name = pane.displayName
-            return m
-        }, order: zOrder)
+        let everywhere = sessionNames.flatMap { name in
+            (canvases[name].map { Array($0.panes.values) } ?? []).map { pane -> SwitcherPane in
+                var m = pane.meta
+                m.name = pane.displayName
+                return SwitcherPane(session: name, meta: m)
+            }
+        }
+        s.present(sessions: switcherSessions(), panes: everywhere, used: paneRecency, current: focusedID)
         // Keep the bar on its own topmost layer, above the switcher.
         if let bar = statusBar, bar.superview != nil { addSubview(bar) }
+    }
+
+    // A pick from the browser: its session comes up first when it isn't the one on screen.
+    private func jump(to id: PaneID, in name: String) {
+        let land = { [weak self] in
+            self?.focusPane(id)
+            self?.followFocus(id)
+        }
+
+        guard name != session else {
+            land()
+            return
+        }
+
+        switchSession(to: name, then: land)
+    }
+
+    // MARK: Empty session
+
+    // The session on screen has no panes: say which one it is. Held back until
+    // its daemon has answered and any switch has settled, so a session that
+    // is about to fill in never flashes it.
+    func refreshEmptyHint() {
+        let c = viewedCanvas
+        guard c.welcomed, c.panes.isEmpty, !switchingSession, !sessionFadePending else {
+            emptyHint?.removeFromSuperview()
+            emptyHint = nil
+            return
+        }
+
+        let view = emptyHint ?? EmptySessionView(frame: bounds)
+        view.frame = bounds
+        view.autoresizingMask = [.width, .height]
+        view.show(session: session, keys: GCTConfig.current.keybinds[.newPane]?.description)
+        emptyHint = view
+
+        // Above the world, under the pickers and the bar.
+        addSubview(view, positioned: .above, relativeTo: worldView)
     }
 
     // MARK: Command palette
@@ -3836,7 +3892,7 @@ final class CanvasView: NSView {
         }
         addSubview(p)
         palette = p
-        p.present(paletteRows())
+        p.present(paletteRows(), session: session)
         // Keep the bar on its own topmost layer, above the palette.
         if let bar = statusBar, bar.superview != nil { addSubview(bar) }
     }

@@ -301,7 +301,9 @@ end)
 
 `⌘⇧P` opens a palette of GCT's own actions and every script action that has a
 `title`. Type to filter: each word has to fit the title, category, keywords or
-description. `↑`/`↓` move, `⏎` runs, `esc` closes.
+description. `↑`/`↓` move, `⏎` runs, `esc` closes. The badge in the search box
+is the session it acts on: a host session lists its own daemon's script actions,
+not `local`'s, and a pick runs there.
 
 ```lua
 gct.action{

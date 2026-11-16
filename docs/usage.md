@@ -12,7 +12,7 @@ by default; above 1.0 the texture magnifies, so use per-pane `⌘+/-` for sharp
 big text.
 
 `⌘0` fits all panes. Two-finger double-tap toggles actual size vs fit-all.
-`⌘P` opens a type-to-filter switcher and glides the camera to the pick.
+`⌘P` browses every attached session's panes, most recently used first (the one you were on before is picked, like alt-tab), and glides the camera to the pick. Pick a session's row instead to switch to it, attaching the host first if it isn't.
 `⌘⇧P` opens the command palette: every action, and the ones plugins add.
 `⌘H/J/K/L` focuses the nearest pane in that direction; the camera centers and
 zooms to fit it (both configurable).

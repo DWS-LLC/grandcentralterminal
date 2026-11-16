@@ -1,37 +1,48 @@
-// ⌘⇧P command palette: type-to-filter, arrows/enter to run. Built on the pane
-// switcher's bones; what is in the list is CanvasPalette's business.
+// ⌘⇧P command palette: type-to-filter, arrows/enter to run. The look is
+// PickerCard's; what is in the list is CanvasPalette's business, and it is the
+// list of the session on screen.
 //
 //   pick ── no args ───────────────────────────────► run
 //     └── args ──► ask 1 ──► ask 2 ──► ... ──► run(answers as a JSON object)
 //                  ⏎ answers (blank skips an optional one) · esc steps back to the list
 //
-// The list stage filters as you type. An ask stage reuses the field for the
-// answer and the table for what is being asked and what was said so far.
+// The list stage filters as you type; with nothing typed it reads as a menu,
+// one section per category. An ask stage reuses the field for the answer and
+// the table for what is being asked and what was said so far.
 
 import AppKit
 import Common
 
-private let rowHeight: CGFloat = 28
-private let detailAlpha: CGFloat = 0.55
-private let titleSize: CGFloat = 13
-private let detailSize: CGFloat = 11
 private let listPlaceholder = "run a command…"
+private let uncategorized = "Scripts"
+private let actionSymbol = "bolt.fill"
+private let saidSymbol = "checkmark"
+private let askSymbol = "chevron.right"
+private let problemSymbol = "exclamationmark.triangle"
+
+private let listHints = [
+    PickerHint(key: "⏎", what: "run"), PickerHint(key: "↑↓", what: "select"),
+    PickerHint(key: "esc", what: "close"),
+]
+private let askHints = [
+    PickerHint(key: "⏎", what: "answer"), PickerHint(key: "esc", what: "back"),
+]
 
 // One line of the palette: what it says, what it is matched on, what it does.
 struct PaletteRow {
     let title: String
-    // The description, or the key an action is on.
+    // The script's description; empty for GCT's own actions.
     let detail: String
+    // The key an action is on, if any.
+    let keys: String
+    let symbol: String
     // Asked for one by one before `run`; empty: it runs at once.
     let args: [PaletteArg]
     let text: PaletteText
     // Gets the answers as a JSON object, nil when nothing was asked.
     let run: (String?) -> Void
-}
-
-private struct Line {
-    let title: String
-    let detail: String
+    // What the history remembers it by.
+    let historyKey: String
 }
 
 // An action half-way through its questions.
@@ -48,70 +59,39 @@ private enum Typed {
     case clear, keep
 }
 
-final class PaletteView: NSView, NSTextFieldDelegate, NSTableViewDataSource, NSTableViewDelegate {
+final class PaletteView: NSView {
     var onDismiss: (() -> Void)?
 
-    private let field = NSTextField(frame: .zero)
-    private let table = NSTableView(frame: .zero)
-    private let scroll = NSScrollView(frame: .zero)
+    private let card = PickerCard(frame: .zero)
     private var rows = [PaletteRow]()
     private var shown = [PaletteRow]()
-    private var lines = [Line]()
     private var asking: Asking?
     // What was typed in the list, for when esc steps back to it.
     private var query = ""
 
     override init(frame: NSRect) {
         super.init(frame: frame)
-        wantsLayer = true
-        layer?.backgroundColor = GCTTheme.current.switcherBackground.cgColor
-        layer?.cornerRadius = 10
-        layer?.borderWidth = 1
-        layer?.borderColor = GCTTheme.current.switcherBorder.cgColor
-        layer?.shadowOpacity = 0.6
-        layer?.shadowRadius = 30
-
-        field.isBordered = false
-        field.backgroundColor = .clear
-        field.focusRingType = .none
-        field.font = .monospacedSystemFont(ofSize: 14, weight: .regular)
-        field.textColor = .white
-        field.placeholderString = listPlaceholder
-        field.delegate = self
-        field.frame = NSRect(x: 16, y: frame.height - 44, width: frame.width - 32, height: 28)
-        field.autoresizingMask = [.maxXMargin, .minYMargin]
-        addSubview(field)
-
-        table.dataSource = self
-        table.delegate = self
-        table.headerView = nil
-        table.backgroundColor = .clear
-        table.rowHeight = rowHeight
-        table.intercellSpacing = NSSize(width: 0, height: 0)
-        table.addTableColumn(NSTableColumn(identifier: .init("p")))
-        table.doubleAction = #selector(activateRow)
-        table.target = self
-        // A click picks a row; the text field keeps the keyboard.
-        table.refusesFirstResponder = true
-
-        scroll.documentView = table
-        scroll.hasVerticalScroller = false
-        scroll.backgroundColor = .clear
-        scroll.drawsBackground = false
-        scroll.frame = NSRect(x: 10, y: 10, width: frame.width - 20, height: frame.height - 64)
-        scroll.autoresizingMask = [.width, .height]
-        addSubview(scroll)
+        card.frame = bounds
+        card.autoresizingMask = [.width, .height]
+        card.placeholder = listPlaceholder
+        card.hints = listHints
+        card.onType = { [weak self] in self?.typed($0) }
+        card.onEnter = { [weak self] in self?.enter() }
+        card.onEscape = { [weak self] in self?.cancel() }
+        addSubview(card)
     }
 
     required init?(coder: NSCoder) { fatalError() }
 
     override var acceptsFirstResponder: Bool { true }
 
-    func present(_ rows: [PaletteRow]) {
+    // `session` is whose actions these are: the one on screen.
+    func present(_ rows: [PaletteRow], session: String) {
         self.rows = rows
         asking = nil
+        card.badge = session
         applyFilter("")
-        window?.makeFirstResponder(field)
+        card.focus()
     }
 
     func dismiss() {
@@ -122,34 +102,48 @@ final class PaletteView: NSView, NSTextFieldDelegate, NSTableViewDataSource, NST
 
     private func applyFilter(_ query: String) {
         shown = PaletteRank.order(rows.map(\.text), query: query).map { rows[$0] }
-        lines = shown.map { Line(title: $0.title, detail: $0.detail) }
-        table.reloadData()
-        if !shown.isEmpty {
-            table.selectRowIndexes([0], byExtendingSelection: false)
-        }
+        card.setItems(listItems(typed: query), select: .first)
     }
 
-    private func moveSelection(_ delta: Int) {
-        guard asking == nil, !shown.isEmpty else { return }
+    // Nothing typed: a menu, a section per category. Typed: the ranking, flat,
+    // each row saying its category where it would say its keys.
+    private func listItems(typed query: String) -> [PickerItem] {
+        guard query.trimmingCharacters(in: .whitespaces).isEmpty else {
+            return shown.map { .line(line(of: $0, trailing: $0.keys.isEmpty ? $0.text.category : $0.keys)) }
+        }
 
-        let next = min(shown.count - 1, max(0, max(0, table.selectedRow) + delta))
-        table.selectRowIndexes([next], byExtendingSelection: false)
-        table.scrollRowToVisible(next)
+        var out = [PickerItem]()
+        var last: String?
+        for row in shown {
+            if row.text.category != last {
+                let title = row.text.category.isEmpty ? uncategorized : row.text.category
+                out.append(.section(title: title, symbol: row.symbol))
+                last = row.text.category
+            }
+            out.append(.line(line(of: row, trailing: row.keys)))
+        }
+
+        return out
+    }
+
+    private func line(of row: PaletteRow, trailing: String) -> PickerLine {
+        PickerLine(symbol: row.symbol, title: row.title, subtitle: row.detail, trailing: trailing)
     }
 
     // The picked row runs, or starts asking for what it needs.
     private func choose() {
-        let row = max(0, table.selectedRow)
-        guard row < shown.count else { return }
+        let at = card.picked ?? 0
+        guard at < shown.count else { return }
 
-        let chosen = shown[row]
+        let chosen = shown[at]
         guard !chosen.args.isEmpty else {
             finish(chosen, answers: nil)
             return
         }
 
-        query = field.stringValue
+        query = card.text
         asking = Asking(row: chosen, left: chosen.args)
+        card.hints = askHints
         showQuestion(.clear)
     }
 
@@ -166,25 +160,26 @@ final class PaletteView: NSView, NSTextFieldDelegate, NSTableViewDataSource, NST
         guard let a = asking, let arg = a.left.first else { return }
 
         if typed == .clear {
-            field.stringValue = ""
+            card.text = ""
         }
 
         let skip = arg.optional ? ", ⏎ skips" : ""
-        field.placeholderString = "\(arg.name) (\(arg.hint)\(skip))…"
+        card.placeholder = "\(arg.name) (\(arg.hint)\(skip))…"
 
-        var out = [Line(title: a.row.title, detail: a.row.detail)]
-        out += a.said.map { Line(title: "   \($0.arg.name) = \($0.shown)", detail: "") }
-        out.append(Line(title: "▸ \(arg.name)", detail: a.problem ?? arg.hint + (arg.optional ? ", optional" : "")))
-        lines = out
-        table.reloadData()
-        table.deselectAll(nil)
+        var out = [PickerItem.line(PickerLine(symbol: actionSymbol, title: a.row.title, subtitle: a.row.detail))]
+        out += a.said.map { .line(PickerLine(symbol: saidSymbol, title: "\($0.arg.name) = \($0.shown)")) }
+
+        let hint = arg.hint + (arg.optional ? ", optional" : "")
+        out.append(.line(PickerLine(symbol: a.problem == nil ? askSymbol : problemSymbol,
+                                    title: arg.name, subtitle: a.problem ?? hint)))
+        card.setItems(out, select: .none)
     }
 
     // ⏎ in a question: take the answer, or say what is wrong with it.
     private func answer() {
         guard var a = asking, let arg = a.left.first else { return }
 
-        let input = field.stringValue
+        let input = card.text
         guard !input.isEmpty else {
             guard arg.optional else {
                 complain("needs an answer")
@@ -239,66 +234,25 @@ final class PaletteView: NSView, NSTextFieldDelegate, NSTableViewDataSource, NST
         }
 
         asking = nil
-        field.stringValue = query
-        field.placeholderString = listPlaceholder
+        card.text = query
+        card.placeholder = listPlaceholder
+        card.hints = listHints
         applyFilter(query)
     }
 
-    @objc private func activateRow() {
+    // MARK: Card events
+
+    private func typed(_ text: String) {
         guard asking == nil else { return }
 
-        choose()
+        applyFilter(text)
     }
 
-    // MARK: Field delegate
-
-    func controlTextDidChange(_ obj: Notification) {
-        guard asking == nil else { return }
-
-        applyFilter(field.stringValue)
-    }
-
-    func control(_ control: NSControl, textView: NSTextView,
-                 doCommandBy commandSelector: Selector) -> Bool {
-        switch commandSelector {
-        case #selector(NSResponder.insertNewline(_:)):
-            if asking == nil { choose() } else { answer() }
-            return true
-        case #selector(NSResponder.cancelOperation(_:)):
-            cancel()
-            return true
-        case #selector(NSResponder.moveDown(_:)):
-            moveSelection(1); return true
-        case #selector(NSResponder.moveUp(_:)):
-            moveSelection(-1); return true
-        default:
-            return false
+    private func enter() {
+        if asking == nil {
+            choose()
+        } else {
+            answer()
         }
     }
-
-    // MARK: Table
-
-    func numberOfRows(in tableView: NSTableView) -> Int { lines.count }
-
-    func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?,
-                   row: Int) -> NSView? {
-        let r = lines[row]
-        let color = GCTTheme.current.switcherText
-        let line = NSMutableAttributedString(string: r.title, attributes: [
-            .font: NSFont.monospacedSystemFont(ofSize: titleSize, weight: .regular),
-            .foregroundColor: color,
-        ])
-        if !r.detail.isEmpty {
-            line.append(NSAttributedString(string: "   " + r.detail, attributes: [
-                .font: NSFont.monospacedSystemFont(ofSize: detailSize, weight: .regular),
-                .foregroundColor: color.withAlphaComponent(detailAlpha),
-            ]))
-        }
-
-        let text = NSTextField(labelWithAttributedString: line)
-        text.lineBreakMode = .byTruncatingTail
-        return text
-    }
-
-    func tableView(_ tableView: NSTableView, heightOfRow row: Int) -> CGFloat { rowHeight }
 }
