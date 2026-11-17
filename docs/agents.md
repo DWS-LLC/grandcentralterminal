@@ -10,19 +10,19 @@ can still read it back. The full agent guide is `gctd agent show`.
 ## CLI
 
 ```sh
-gctd open name=build cmd="make -j8"   # pane around the working one, prints id
+gctd open name=build size=640,360 cmd="make -j8"   # pane around the working one, prints id
 gctd open name=log size=900,640 cmd="tail -f x.log"   # sized for the job
 gctd list [--json]                    # panes + groups; --json is the stable form
 gctd inspect [$ID] [--json]           # one pane in full (default: the caller)
 gctd hosts                            # peers this daemon dials, up or down
-gctd open --wait cmd="make test"      # block, exit with the command's status
+gctd open --wait size=640,360 cmd="make test"      # block, exit with the command's status
 gctd wait $ID                         # same, for a pane already running
 gctd dump $ID limit=4000 --strip-ansi # scrollback tail as readable text
 gctd send $ID "make test"             # type into the pane (+ newline)
 gctd send $ID --no-newline '\x03'     # \xHH, \e, \n, \t, \r escapes: ^C is \x03
 gctd dump $A --strip-ansi | gctd send $B --paste   # no text reads stdin
 gctd notify $ID "build failed"        # desktop notification; click focuses the pane
-gctd open parent=$ID name=tests       # wired (cable) to $ID, whoever calls
+gctd open parent=$ID name=tests size=50%,100%     # wired (cable) to $ID, whoever calls
 gctd tie $ID $A $B at=0.4             # bundle the cables from $ID to $A, $B
 gctd untie $TIE                       # tie ids are in `gctd list`
 gctd move $ID rect=x,y,w,h            # place a pane (overlap rules still apply)
@@ -56,7 +56,7 @@ pane but keeps it around the caller: `480,240` for builds and servers,
 
 ```sh
 gctd list --json | jq -r '.panes[] | select(.exited | not) | .name'
-gctd open --wait name=t cmd="pytest -q" || echo "tests failed: $?"
+gctd open --wait name=t size=640,360 cmd="pytest -q" || echo "tests failed: $?"
 ```
 
 `wait` and `open --wait` leave with the program's own status (`n` for

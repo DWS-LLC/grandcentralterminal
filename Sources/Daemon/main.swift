@@ -549,6 +549,10 @@ case "open":
     }
     if side != nil, caller == nil { bad("side= needs a calling pane or parent=") }
     if side != nil, f["rect"] != nil { bad("side= and rect= both place the pane; pick one") }
+    // A caller's own size is the wrong size for the job; make it say one.
+    if caller != nil, f["size"] == nil, f["rect"] == nil {
+        bad("open needs size=w,h or w%,h% (or rect=); size it for the job, not the caller")
+    }
     var extent = Extent(w: anchor.w, h: anchor.h)
     if let me = caller { extent = Extent(w: me.rect.w, h: me.rect.h) }
     if let s = f["size"] {

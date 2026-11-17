@@ -68,7 +68,7 @@ canvas ─► local gctd ─ your session ─┬─ local pty
 - **Your session** is the local canvas. Right-click empty canvas → "New remote
   pane" → host runs the pty on that machine, but the pane sits in *your*
   layout: it groups, ties and arranges like any other, and wears the host's
-  color. `gctd open host=enterprise` does the same from the CLI.
+  color. `gctd open host=enterprise size=640,360` does the same from the CLI.
 - **Their session** is what's on that machine's own canvas. Right-click →
   "Session" attaches the host (nothing attaches on its own, and a relaunch
   starts local-only) and shows it; `⌘⇧E` cycles the attached ones. The sets of

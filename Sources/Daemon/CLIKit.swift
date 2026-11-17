@@ -3,7 +3,7 @@
 // stable surface: full ids, fixed keys, a status that says what went wrong.
 //
 //   gctd list --json | jq -r '.panes[] | select(.exited) | .id'
-//   gctd open --wait cmd="make test" || echo "tests failed: $?"
+//   gctd open --wait size=640,360 cmd="make test" || echo "tests failed: $?"
 
 import Foundation
 import Common

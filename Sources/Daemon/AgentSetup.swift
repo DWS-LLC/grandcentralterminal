@@ -521,7 +521,7 @@ private func agentContext() -> Never {
         who += " on host \(p.host)"
     }
 
-    print("\(who). Run background tasks in panes, not run_in_background: `gctd open name=<task> cmd=...`. Guide: `gctd agent show`")
+    print("\(who). Run background tasks in panes, not run_in_background: `gctd open name=<task> size=w,h cmd=...`. Guide: `gctd agent show`")
     exit(0)
 }
 

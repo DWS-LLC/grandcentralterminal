@@ -65,7 +65,7 @@ pick the pane, and ask if it isn't obvious.
 |---|---|
 | start the dev server, tell me when it's up | `ID=$(gctd open name=dev size=480,240 cmd="npm run dev")`, then `gctd dump $ID --strip-ansi limit=2000` until it says ready |
 | run the tests, fix what fails | `ID=$(gctd open --keep-open name=tests side=right size=50%,100% cmd="pytest -q")`, `gctd wait $ID for=10m`, then `gctd dump $ID --strip-ansi limit=2000` for the failures, fix, `gctd close $ID` |
-| only need pass or fail | `gctd open --wait name=build cmd="make"`. Exit status is the command's |
+| only need pass or fail | `gctd open --wait name=build size=640,360 cmd="make"`. Exit status is the command's |
 | type into a REPL (psql) | `gctd send psql "select count(*) from users;"`, then `gctd dump psql --strip-ansi limit=2000` |
 | tail a log | `gctd open name=api-log size=900,640 cmd="tail -f api.log"` |
 | run it on another machine | add `host=<peer>`; `gctd hosts` lists them |
@@ -120,7 +120,7 @@ gctd close "$id"
 ## Rules
 
 1. `gctd open`, never `run_in_background`, for anything that outlives one command.
-2. Always `name=`, named for the task. Tell the user the name so they can look.
+2. Always `name=` (named for the task) and `size=` (fit to the output: wide for logs, narrow for `top`). `open` refuses without it. Tell the user the name so they can look.
 3. One group per task: `gctd group $A $B name=<task>`. Panes opened from a
    grouped pane join its group.
 4. `dump --strip-ansi` before you claim what a pane printed. Raw VT lies.

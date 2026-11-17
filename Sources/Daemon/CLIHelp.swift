@@ -26,7 +26,8 @@ let commandHelp: [CommandHelp] = [
                 notes: """
                 side= the caller's edge it lands on (default right).
                 size= world points, or a share of the caller: size=33%,100% beside
-                a 900x560 caller is 297x560. Needs a calling pane or parent=.
+                a 900x560 caller is 297x560. Required from a pane (or parent=);
+                the caller's own size is never the default. Or pin it with rect=.
                 The pane never takes focus (unless nothing is focused); `gctd focus` does.
                 parent= wires it to that pane, whoever calls.
                 host= runs it on a [host.<peer>] machine.

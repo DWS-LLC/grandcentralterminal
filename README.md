@@ -49,7 +49,7 @@ you, or doesn't. In GCT the agent opens a pane, the pane shows up on your
 canvas, and you can see what the job is doing without asking.
 
 ```sh
-gctd open name=build cmd="make -j8"      # a new pane on your canvas
+gctd open name=build size=640,360 cmd="make -j8"  # a new pane on your canvas
 gctd dump build --strip-ansi             # the agent reads it back
 ```
 
