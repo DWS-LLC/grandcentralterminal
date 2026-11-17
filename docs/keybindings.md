@@ -76,6 +76,7 @@ hotkey is the one exception, a system-wide key that can't be a sequence.
 | click-drag inside terminal | select text |
 | drag titlebar | move pane (the whole band grabs; corners and side/bottom edges resize) |
 | drag edges / corners | resize pane (moving edges snap, guides light) |
+| click titlebar dots | red closes, yellow floats / re-tiles, green zooms (option-click: camera zoom); `⋯` opens the right-click menu |
 | shift+click titlebar | toggle pane in multi-select |
 | drag selected titlebar | move the whole selection as a rigid block |
 | drag group background | move every member together |

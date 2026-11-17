@@ -27,6 +27,11 @@ final class PaneView: NSView {
     private let titlebar = NSView(frame: .zero)
     private let titleLabel = CATextLayer()
     private let statusLabel = CATextLayer()
+    // Close / float / zoom / menu dots, then the program's icon, left of the title.
+    private let controls = TitleControls()
+    private let icon = TitleIcon()
+    private static let edgeInset: CGFloat = 8
+    private static let iconGap: CGFloat = 6
     // Veil over the whole pane: dims quiet unfocused panes (see CanvasDim).
     private let dimLayer = CALayer()
     // keep-open pane whose program ended: a veil, not alpha. The pane stays
@@ -49,6 +54,8 @@ final class PaneView: NSView {
     var displayName: String { meta.name ?? autoName ?? "Terminal" }
     // The title as columns (program, task, path), set by the canvas.
     var titleParts: AutoName.Parts? { didSet { if titleParts != oldValue { applyChrome() } } }
+    // What runs here, for the icon beside the title (nil = a plain >_).
+    var iconLookup: PaneIcons.Lookup? { didSet { if iconLookup != oldValue { loadIcon() } } }
 
     var isFocused = false { didSet { applyChrome() } }
     // Multi-select: staged by right-drag/shift+click, acts as a unit for
@@ -91,6 +98,8 @@ final class PaneView: NSView {
         statusLabel.alignmentMode = .right
         statusLabel.truncationMode = .end
         titlebar.layer?.addSublayer(statusLabel)
+        titlebar.layer?.addSublayer(controls.layer)
+        titlebar.layer?.addSublayer(icon.layer)
 
         surfaceHostView.wantsLayer = true
         surfaceHostView.autoresizingMask = []
@@ -223,6 +232,8 @@ final class PaneView: NSView {
         for label in [titleLabel, statusLabel, linkLabel] {
             Self.setTextScale(label, camera: camera, window: window)
         }
+        icon.syncZoom(camera: camera, window: window)
+        controls.reach = camera >= TitleControls.minScale ? .near : .far
     }
 
     static func setTextScale(_ label: CATextLayer, camera: CGFloat, window: NSWindow?) {
@@ -270,6 +281,7 @@ final class PaneView: NSView {
         // Title text vertically centered, 8pt inset. Sublayer frames are
         // in points, not pixels — no backing-scale multiplication.
         let textH = min(PaneView.titleBarHeight - 6, GCTTheme.current.titleFont.pointSize + 3)
+        let lead = layoutLead()
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         if programStatus != nil {
@@ -280,15 +292,50 @@ final class PaneView: NSView {
             statusLabel.frame = CGRect(x: w - 8 - statusW,
                                        y: (PaneView.titleBarHeight - textH) / 2,
                                        width: statusW, height: textH)
-            titleLabel.frame = CGRect(x: 8, y: (PaneView.titleBarHeight - textH) / 2,
-                                      width: max(0, w - 16 - statusW - 8), height: textH)
+            titleLabel.frame = CGRect(x: lead, y: (PaneView.titleBarHeight - textH) / 2,
+                                      width: max(0, w - lead - 8 - statusW - 8), height: textH)
         } else {
-            titleLabel.frame = CGRect(x: 8, y: (PaneView.titleBarHeight - textH) / 2,
-                                      width: max(0, w - 16), height: textH)
+            titleLabel.frame = CGRect(x: lead, y: (PaneView.titleBarHeight - textH) / 2,
+                                      width: max(0, w - lead - 8), height: textH)
             statusLabel.frame = .zero
         }
         CATransaction.commit()
         layoutLink()
+    }
+
+    // The titlebar reads  [controls] [icon] title ... status. Places the
+    // first two and returns where the title starts.
+    private func layoutLead() -> CGFloat {
+        let bar = PaneView.titleBarHeight
+        let withControls = GCTConfig.current.titlebarControls
+        var x = Self.edgeInset
+
+        controls.layer.isHidden = !withControls
+        if withControls {
+            controls.fit(barHeight: bar)
+            x = controls.width
+        }
+
+        let edge = icon.fit(font: GCTTheme.current.titleFont)
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        icon.layer.frame = CGRect(x: x, y: (bar - edge) / 2, width: edge, height: edge)
+        CATransaction.commit()
+        return x + edge + Self.iconGap
+    }
+
+    private func loadIcon() {
+        guard let look = iconLookup else {
+            icon.show(nil)
+            return
+        }
+
+        PaneIcons.shared.fetch(look) { [weak self] image in
+            guard let self, self.iconLookup == look else {
+                return
+            }
+            self.icon.show(image)
+        }
     }
 
     private func applyLink() {
@@ -375,6 +422,9 @@ final class PaneView: NSView {
             titleColor = (isFocused || isZoomed) ? t.titlebarTextFocused : t.titlebarTextUnfocused
         }
         titleLabel.foregroundColor = titleColor.cgColor
+        icon.tint(titleColor)
+        controls.look = TitleControls.Look(lit: isFocused || accent, floating: meta.floating,
+                                           zoomed: isZoomed, text: titleColor)
         titleLabel.string = titleString(titleColor)
         titleLabel.font = t.titleFont
         titleLabel.fontSize = t.titleFont.pointSize
@@ -535,6 +585,35 @@ extension PaneView {
     func isInTitlebar(_ worldPoint: CGPoint) -> Bool {
         worldPoint.y >= frame.maxY - PaneView.titleBarHeight
             && frame.contains(worldPoint)
+    }
+
+    // Window controls. Out of reach (too far zoomed out, or switched off in
+    // config) they hear nothing: a dot a few pixels wide must not be clickable.
+    func controlHover(at worldPoint: CGPoint, camera: CGFloat) -> TitleControls.Hover {
+        guard GCTConfig.current.titlebarControls,
+              camera >= TitleControls.minScale,
+              isInTitlebar(worldPoint) else {
+            return .away
+        }
+
+        let local = CGPoint(x: worldPoint.x - frame.minX,
+                            y: worldPoint.y - frame.minY - titlebar.frame.minY)
+        return controls.hover(at: local)
+    }
+
+    func control(at worldPoint: CGPoint, camera: CGFloat) -> TitleControl? {
+        guard case .control(let control) = controlHover(at: worldPoint, camera: camera) else {
+            return nil
+        }
+        return control
+    }
+
+    func setControlHover(_ hover: TitleControls.Hover) {
+        controls.hover = hover
+    }
+
+    func setControlPressed(_ control: TitleControl?) {
+        controls.pressed = control
     }
 
     func containsWorld(_ worldPoint: CGPoint, grab: CGFloat = 0) -> Bool {

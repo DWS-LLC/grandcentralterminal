@@ -189,6 +189,9 @@ final class CanvasView: NSView {
         // Drag-to-create (opt-drag on empty space): the anchor stays put,
         // the free corner snaps; release opens a pane at the drawn rect.
         case create(anchor: CGPoint)
+        // A titlebar dot is held down; it fires on release if the pointer
+        // is still on it.
+        case control(id: PaneID, control: TitleControl)
     }
     private var drag = Drag.none
     // Who owns the current trackpad scroll gesture, momentum tail
@@ -1190,6 +1193,14 @@ final class CanvasView: NSView {
             return
         }
         if let pane = topPane(at: world, grab: camera.screenToWorldDistance(5)) {
+            // A titlebar dot: focus the pane so the action lands on it, then
+            // hold the dot until release. Beats the shift and resize paths.
+            if let control = pane.control(at: world, camera: camera.scale) {
+                focusPane(pane.id)
+                pane.setControlPressed(control)
+                drag = .control(id: pane.id, control: control)
+                return
+            }
             // Shift+click on chrome (titlebar/border, NOT the terminal
             // surface) toggles multi-select; terminal-area shift+click
             // keeps extending text selection. Resize zones still resize.
@@ -1321,6 +1332,11 @@ final class CanvasView: NSView {
             showSelectionBand()
         case .create:
             showCreateBand(at: worldPoint(event))
+        case .control(let id, let control):
+            // Held dot: lit while the pointer is on it, released when it slides off.
+            guard let pane = panes[id] else { return }
+            let over = pane.control(at: worldPoint(event), camera: camera.scale) == control
+            pane.setControlPressed(over ? control : nil)
         case .groupMove(let id, let grabDelta, let members, let rects0):
             let world = worldPoint(event)
             guard let b0 = groupBoundsFrom(rects0) else { return }
@@ -1731,6 +1747,10 @@ final class CanvasView: NSView {
     override func mouseUp(with event: NSEvent) {
         if cableMouseUp() { return }
         defer { pendingClickFocus = nil }
+        if case .control(let id, let control) = drag {
+            releaseControl(id, control, event)
+            return
+        }
         // Opt-click (armed, never dragged): clear the arm, no pane.
         if pendingCreate != nil, isIdleDrag {
             pendingCreate = nil
@@ -1797,6 +1817,27 @@ final class CanvasView: NSView {
         drag = .none
         hideSelectionBand()
         hideSnapGuides()
+    }
+
+    // A titlebar dot let go: it fires only if the pointer is still on it.
+    // Each one is an action the keyboard already has, run on this pane.
+    //
+    //   close  ⌘W   float  ⌘F   zoom  ⌘Z  (⌥ = camera zoom, ⌘⇧Z)   ⋯  the right-click menu
+    private func releaseControl(_ id: PaneID, _ control: TitleControl, _ event: NSEvent) {
+        drag = .none
+        panes[id]?.setControlPressed(nil)
+
+        guard let pane = panes[id],
+              pane.control(at: worldPoint(event), camera: camera.scale) == control else {
+            return
+        }
+
+        switch control {
+        case .close: perform(.closePane)
+        case .float: perform(.toggleFloating)
+        case .zoom: perform(event.modifierFlags.contains(.option) ? .cameraZoomPane : .zoomPane)
+        case .menu: showTitlebarMenu(id, at: event)
+        }
     }
 
     // MARK: Right button — selection + groups live here
@@ -2362,6 +2403,12 @@ final class CanvasView: NSView {
         // (else its underline and the hand cursor linger).
         if let id = hoverID, id != hovered?.id, id != focusedID, let pane = panes[id] {
             pane.host?.mousePos(x: -1, y: -1, mods: mods)
+        }
+        if let id = hoverID, id != hovered?.id {
+            panes[id]?.setControlHover(.away)
+        }
+        if let h = hovered {
+            h.setControlHover(h.controlHover(at: world, camera: camera.scale))
         }
         hoverID = hovered?.id
     }

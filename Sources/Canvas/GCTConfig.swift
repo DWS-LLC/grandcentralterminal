@@ -383,6 +383,8 @@ struct GCTConfig {
     var shadowColor = GCTModeColor()
     var titlebarFont: String?
     var titlebarFontSize: CGFloat = 13
+    // Close / float / zoom / menu dots at the titlebar's left.
+    var titlebarControls = true
     // Pane chrome: border on the left/right/bottom edges in points (the
     // top edge hides behind the titlebar itself; same color as the
     // titlebar), plus the drop shadow. shadow-opacity 0 turns it off.
@@ -712,6 +714,9 @@ struct GCTConfig {
         if let s = tb["font-size"], let n = Double(s), (6.0...48.0).contains(n) {
             cfg.titlebarFontSize = CGFloat(n)
         }
+        if let v = tb["controls"] {
+            cfg.titlebarControls = flag(v, cfg.titlebarControls)
+        }
         if let s = tb["border-width"], let n = Double(s), (0.0...32.0).contains(n) {
             cfg.titlebarBorderWidth = CGFloat(n)
         }
@@ -1033,6 +1038,10 @@ struct GCTConfig {
     # 35pt tall at that size and grows with the font.
     font = "default"
     font-size = 13
+    # Window controls at the left of the titlebar, like a macOS window's:
+    # close (red), float (yellow), zoom (green, option-click zooms the
+    # camera instead) and a menu. false hides them.
+    controls = true
     # Border on the left/right/bottom edges in points (the top edge is the
     # titlebar itself). Wider borders grab edges/corners for resizing more
     # easily, even zoomed out.

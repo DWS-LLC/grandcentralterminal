@@ -106,6 +106,7 @@ struct PaneJSON: Encodable {
     var rect: RectJSON
     var title: String?
     var proc: String?
+    var exe: String?
     var repoRoot: String?
     var worktree: String?
     var parent: String?
@@ -161,7 +162,7 @@ func paneJSON(_ w: Welcome, _ p: PaneMeta, names: [PaneID: String]) -> PaneJSON 
         cwd: p.cwd, host: p.host, exited: p.exited, offline: p.offline,
         floating: p.floating,
         rect: RectJSON(x: p.rect.x, y: p.rect.y, w: p.rect.w, h: p.rect.h),
-        title: p.title, proc: p.proc, repoRoot: p.repoRoot, worktree: p.worktree,
+        title: p.title, proc: p.proc, exe: p.exe, repoRoot: p.repoRoot, worktree: p.worktree,
         parent: p.parent?.uuid.uuidString,
         group: group?.id.uuid.uuidString, groupName: group?.name,
         guestOf: p.guestOf)
@@ -206,7 +207,7 @@ func inspectLines(_ p: PaneJSON) -> [String] {
     let state = p.exited ? "exited" : (p.offline ? "offline" : "running")
     var rows: [(String, String?)] = [
         ("id", p.id), ("name", p.name), ("state", state), ("host", p.host),
-        ("cwd", p.cwd), ("proc", p.proc), ("title", p.title),
+        ("cwd", p.cwd), ("proc", p.proc), ("exe", p.exe), ("title", p.title),
         ("repo", p.repoRoot), ("worktree", p.worktree),
         ("group", p.group.map { "\(p.groupName ?? "") (\($0))" }),
         ("parent", p.parent), ("guest-of", p.guestOf),

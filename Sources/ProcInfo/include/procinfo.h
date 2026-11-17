@@ -12,4 +12,8 @@ size_t proc_cwd(pid_t pid, char* buf, size_t len);
 // joined by single spaces. Returns the string length, or 0 on failure.
 size_t proc_cmdline(pid_t pid, char* buf, size_t len);
 
+// Copies the path of the executable `pid` runs into `buf` (NUL-terminated).
+// Returns the string length, or 0 on failure.
+size_t proc_exe(pid_t pid, char* buf, size_t len);
+
 #endif

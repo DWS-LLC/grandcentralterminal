@@ -38,7 +38,7 @@ class Pane {
 
     // A foreground command is reported once two polls in a row agree: a
     // one-second `ls` must not rename the pane.
-    private struct ProcSample { var line: String? }
+    private struct ProcSample { var line: String?; var exe: String? }
     private var pendingProc: ProcSample?
     private var probedCwd: String?
 
@@ -447,7 +447,10 @@ class Pane {
 
         var buf = [CChar](repeating: 0, count: 1024)
         guard proc_cmdline(fg, &buf, 1024) > 0 else { return false }
-        let sample = ProcSample(line: String(cString: buf))
+        var exeBuf = [CChar](repeating: 0, count: 1024)
+        let hasExe = proc_exe(fg, &exeBuf, 1024) > 0
+        let sample = ProcSample(line: String(cString: buf),
+                                exe: hasExe ? String(cString: exeBuf) : nil)
 
         if sample.line == meta.proc {
             pendingProc = nil
@@ -461,6 +464,7 @@ class Pane {
 
         pendingProc = nil
         meta.proc = sample.line
+        meta.exe = sample.exe
         return true
     }
 

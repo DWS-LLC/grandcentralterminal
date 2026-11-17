@@ -30,6 +30,15 @@ size_t proc_cmdline(pid_t pid, char* buf, size_t len) {
     buf[n] = '\0';
     return n;
 }
+
+size_t proc_exe(pid_t pid, char* buf, size_t len) {
+    char path[64];
+    snprintf(path, sizeof(path), "/proc/%d/exe", (int)pid);
+    ssize_t n = readlink(path, buf, len - 1);
+    if (n <= 0) return 0;
+    buf[n] = '\0';
+    return (size_t)n;
+}
 #else
 // macOS: libproc PIDVNODEPATHINFO.
 #include <libproc.h>
@@ -83,5 +92,11 @@ size_t proc_cmdline(pid_t pid, char* buf, size_t len) {
     buf[out] = '\0';
     free(raw);
     return out;
+}
+
+size_t proc_exe(pid_t pid, char* buf, size_t len) {
+    int n = proc_pidpath(pid, buf, (uint32_t)len);
+    if (n <= 0) return 0;
+    return (size_t)n;
 }
 #endif

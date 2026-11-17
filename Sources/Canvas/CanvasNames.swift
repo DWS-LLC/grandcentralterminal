@@ -38,7 +38,9 @@ extension CanvasView {
                 id: m.id, cwd: m.cwd, proc: m.proc, title: pane.reportedTitle,
                 repoRoot: m.repoRoot, worktree: m.worktree)
             // The titlebar reads these even when the pane is named.
-            pane.titleParts = AutoName.parts(auto, home: m.host == "local" ? NSHomeDirectory() : "")
+            let parts = AutoName.parts(auto, home: m.host == "local" ? NSHomeDirectory() : "")
+            pane.titleParts = parts
+            pane.iconLookup = Self.iconLookup(m, parts)
 
             guard m.name == nil else {
                 pane.autoName = nil
@@ -54,5 +56,17 @@ extension CanvasView {
                 panes[id]?.autoName = name
             }
         }
+    }
+
+    // A program's icon comes from where it runs, which only this machine's
+    // disk knows: remote panes and idle shells wear the plain >_.
+    private static func iconLookup(_ meta: PaneMeta, _ parts: AutoName.Parts) -> PaneIcons.Lookup? {
+        let local = meta.host == "local" || meta.host.isEmpty
+        guard local, let program = parts.program else {
+            return nil
+        }
+
+        let command = program.split(separator: " ").first.map(String.init)
+        return PaneIcons.Lookup(exe: meta.exe, program: command)
     }
 }

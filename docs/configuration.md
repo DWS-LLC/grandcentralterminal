@@ -183,12 +183,23 @@ accent = "default"        # selected / zoomed pane chrome (default: ghostty blue
 shadow-color = "default"  # default: black
 font = "default"        # family name, e.g. "SF Mono"; default = macOS window title font
 font-size = 13          # titlebar is 35pt tall at 13pt and scales with the font
+controls = true         # close / float / zoom dots and a menu, left of the title
 # Border on the left/right/bottom edges in points. Wider is easier to grab
 # for resizing, even zoomed out.
 border-width = 4
 shadow-opacity = 0.55   # 0 turns it off
 shadow-radius = 12
 ```
+
+The titlebar reads `●●● ⋯  icon  title  status`: the window controls, the icon
+of the program running in the pane, its name, and the program's status. The
+icon is the app the program ships in (`docker`, `code`), else the Homebrew
+cask of the same name (`ghostty`), else `>_`. Remote panes and idle shells
+show `>_`. The controls are a macOS window's: red closes (`⌘W`), yellow floats
+(`⌘F`), green zooms (`⌘Z`; option-click zooms the camera, `⌘⇧Z`), and `⋯` opens
+the right-click menu. Their glyphs show while the pointer is over them. They
+don't answer clicks when the canvas is zoomed out past 0.6x, where a dot is a
+few pixels wide. `controls = false` hides them.
 
 Programs speaking [OSC 7501 program status](https://www.superlogical.com/rex/docs/build/program-status)
 show their state right-aligned in the titlebar: `◌ 40%` working, `▲` blocked,

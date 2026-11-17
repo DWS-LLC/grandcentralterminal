@@ -3,6 +3,8 @@
 ## Unreleased
 
 ### Added
+- Window controls in every titlebar, like a macOS window's: red closes (`⌘W`), yellow floats (`⌘F`), green zooms (`⌘Z`, option-click for the camera zoom) and `⋯` opens the right-click menu. Glyphs show on hover, the dots grey out on an unfocused pane, and they stand down below 0.6x camera zoom so a few-pixel dot can't close a pane. `[titlebar] controls = false` hides them.
+- A program icon before the title: the app the running program ships in, else the Homebrew cask of the same name, else `>_`. The daemon reports the foreground executable's path as `exe` (`gctd inspect`, `gctd list --json`); an older daemon just shows `>_`.
 - Status bar tokens `session`, `sessions` and `windows`: the session on screen, the other attached ones (orange with a count when one has news), and this session's panes as chips with the titlebar's markers. Click a session to switch, a window to focus it and center the camera on it.
 - Command groups, StarCraft style: select windows or groups, `⌘⇧1-9` stores them in a slot, `⌘1-9` brings them back: the session switches, they are selected and the camera fits them. A slot holds one session's windows and goes when they are all gone or that session detaches. Config names `command-group-assign-N` / `command-group-recall-N`.
 - A session with no windows says which one it is, in the middle of the canvas, with the key that opens a pane.

@@ -353,6 +353,7 @@ public struct PaneMeta: Codable, Sendable {
     // Daemon-observed context that feeds auto names and the spring layout.
     // All decode missing (old daemons) as nil.
     public var proc: String?      // foreground command line ("nvim a.swift"); nil = idle shell
+    public var exe: String?       // path of that command's executable; feeds the titlebar icon
     public var repoRoot: String?  // git work tree containing cwd
     public var worktree: String?  // branch, only for a linked worktree
     public var parent: PaneID?    // pane that spawned this one (gctd open)
@@ -370,7 +371,7 @@ public struct PaneMeta: Codable, Sendable {
     }
     enum CodingKeys: String, CodingKey {
         case id, rect, name, cwd, host, title, exited, floating
-        case proc, repoRoot, worktree, parent, guestOf, offline
+        case proc, exe, repoRoot, worktree, parent, guestOf, offline
     }
     public init(from decoder: any Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -383,6 +384,7 @@ public struct PaneMeta: Codable, Sendable {
         exited = try c.decodeIfPresent(Bool.self, forKey: .exited) ?? false
         floating = try c.decodeIfPresent(Bool.self, forKey: .floating) ?? false
         proc = try c.decodeIfPresent(String.self, forKey: .proc)
+        exe = try c.decodeIfPresent(String.self, forKey: .exe)
         repoRoot = try c.decodeIfPresent(String.self, forKey: .repoRoot)
         worktree = try c.decodeIfPresent(String.self, forKey: .worktree)
         parent = try c.decodeIfPresent(PaneID.self, forKey: .parent)
