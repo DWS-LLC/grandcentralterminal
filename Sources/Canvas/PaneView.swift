@@ -2,6 +2,7 @@
 // Frames are in WORLD coordinates (the world layer is camera-transformed).
 
 import AppKit
+import CoreText
 import Common
 
 final class PaneView: NSView {
@@ -480,9 +481,12 @@ final class PaneView: NSView {
         ].filter { !$0.isEmpty }.joined(separator: " ")
 
         let out = NSMutableAttributedString()
+        // CATextLayer ignores NSColor runs (all text goes black); it
+        // wants CoreText's key with a CGColor.
+        let colorKey = NSAttributedString.Key(kCTForegroundColorAttributeName as String)
         func add(_ text: String, _ font: NSFont, _ shade: NSColor) {
             out.append(NSAttributedString(string: text, attributes: [
-                .font: font, .foregroundColor: shade]))
+                .font: font, colorKey: shade.cgColor]))
         }
 
         if !markers.isEmpty { add(markers + "  ", plain, color) }
