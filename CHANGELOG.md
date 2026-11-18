@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.20.0
 
 ### Added
 - Window controls in every titlebar, like a macOS window's: red closes (`⌘W`), yellow floats (`⌘F`), green zooms (`⌘Z`, option-click for the camera zoom) and `⋯` opens the right-click menu. Glyphs show on hover, the dots grey out on an unfocused pane, and they stand down below 0.6x camera zoom so a few-pixel dot can't close a pane. `[titlebar] controls = false` hides them.
@@ -41,6 +41,7 @@
 - The palette puts GCT's own actions before your scripts' and, inside each category, what you ran last first (kept across launches).
 - The palette lists the session on screen's script actions, not every attached daemon's, so a pick runs on the machine you are looking at.
 - Nothing dials a `[host.<name>]` until you attach it, and attachments don't survive a relaunch. Hosts in `config.toml` are only available. A dropped attached host redials every 60s until you detach it.
+- `gctd open` from a pane now requires `size=` (`w,h` or `w%,h%`) or `rect=`; the caller's own size is never the default, so size it for the job. Scripts that omit it will get an error.
 - `gctd open` no longer orbits the calling pane: spawns land flush beside it and keep `window-gap` air, like any other placement. The cable to the caller stays.
 - `⌘⇧A` spaces panes by exactly `window-gap`. The tree used to keep at least 48 points and stretch parent-to-children gaps up to 640.
 - `gctd agent-setup` is now `gctd agent`: `setup`, `status`, `remove`, `show`, `context`. Setup finds agents (Claude Code, Codex, opencode, pi), is safe to rerun, and takes `--agent`, `--project`, `--dry-run`, `--force` and `--json`. It always installs every hook the agent supports, including Claude's `Notification` and `Stop`, and `remove` takes them back out.
