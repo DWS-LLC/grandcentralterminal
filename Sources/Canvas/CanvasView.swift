@@ -3328,6 +3328,10 @@ final class CanvasView: NSView {
             self.panes[id]?.programStatus = self.programStatus.summary(for: id)
         }
         pane.install(host: host)
+        // Born at ghostty's default pixel size (~49 cols), which the resize
+        // callback would send to the pty before the real size lands: btop
+        // starts on that. Size it now, so the first report is the real grid.
+        pane.syncSurfaceSize()
         // Reports may have landed before this view existed (attach/restore).
         pane.programStatus = programStatus.summary(for: meta.id)
         refreshCellMetrics(host)
